@@ -6,5 +6,13 @@
     "ai_device-0.2.2-py3-none-any.whl": "e7cfc0c216da186b95ef91f40ed239778439ee0de6e3ba0d77bb3f772c5da3a6",
     "ai_device_fs-0.2.0-py3-none-any.whl": "20a3781fadb824d8626ad82d169de260455b9ed6ad59f0c470db79768f3bc102"
   },
+  "input_artifacts": {
+    "ai_device_bash-0.2.0-py3-none-any.whl": "ed677f1a99ae5e36b0faf2265cc76cea8fe35fe2af10d84d7c88a29254d8f9ff",
+    "ai_device-0.2.2-py3-none-any.whl": "e7cfc0c216da186b95ef91f40ed239778439ee0de6e3ba0d77bb3f772c5da3a6",
+    "ai_device_fs-0.2.0-py3-none-any.whl": "20a3781fadb824d8626ad82d169de260455b9ed6ad59f0c470db79768f3bc102",
+    "ai_device-0.2.2.tar.gz": "d3bcdfca2f27220a9b3d4436e58429b9b20e882067444e0b8b5e633eee6aa13a",
+    "ai_device_fs-0.2.0.tar.gz": "118fab8554bb86a4d6253037de06e63e8c07eb03dadf2199813ea99af1d09f20",
+    "ai_device_bash-0.2.0.tar.gz": "1b33c653d41a2f9ae70d90cd5a5f6073e1f1ca04b6c8f79496cc6a45a546f316"
+  },
   "scope": "sdist rebuild, isolated base/MCP imports, installed-wheel Device full tests; no real deployment"
 }

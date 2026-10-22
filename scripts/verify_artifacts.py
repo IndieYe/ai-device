@@ -5,16 +5,17 @@ import hashlib
 import json
 import os
 import shutil
-import subprocess
 import tarfile
 import tempfile
 from pathlib import Path
+
+from verify_delivery import execute
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def run(args, cwd, env):
-    subprocess.run(args, cwd=cwd, env=env, check=True)
+    print(execute(args, cwd, env, timeout=240), flush=True)
 
 
 def main():
@@ -87,6 +88,36 @@ assert pathlib.Path(module.__file__).resolve().is_relative_to(pathlib.Path(sys.p
                     env,
                 )
                 run([str(executable), "-I", "-c", probe], work, env)
+                if extras:
+                    # Protocol initialization exercises the actual installed entrypoints.
+                    probe_script = work / f"{package}_entrypoints.py"
+                    probe_script.write_text("""import asyncio, os, sys
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+async def main():
+    commands = [(sys.argv[1], []) , (sys.executable, ['-I', '-m', sys.argv[2]])]
+    if sys.argv[2] == 'mcp_server_fs':
+        commands.append((sys.executable, ['-I', '-m', 'main']))
+    for command, args in commands:
+        async with stdio_client(StdioServerParameters(command=command, args=args, env=dict(os.environ))) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                tools = await session.list_tools()
+                assert tools.tools
+    print('installed entrypoints protocol passed', len(commands))
+asyncio.run(main())
+""")
+                    run(
+                        [
+                            str(executable),
+                            "-I",
+                            str(probe_script),
+                            str(isolated / f"bin/mcp-server-{package}"),
+                            f"mcp_server_{package}",
+                        ],
+                        work,
+                        env,
+                    )
                 if package == "fs":
                     run(
                         ["uv", "pip", "install", "--python", str(executable), "pytest"],
@@ -134,6 +165,30 @@ assert pathlib.Path(module.__file__).resolve().is_relative_to(pathlib.Path(sys.p
                         work,
                         env,
                     )
+        base = work / "device-base"
+        run(["uv", "venv", "--python", args.python, str(base)], work, env)
+        run(
+            [
+                "uv",
+                "pip",
+                "install",
+                "--python",
+                str(base / "bin/python"),
+                str(next(wheels.glob("ai_device-*.whl"))),
+            ],
+            work,
+            env,
+        )
+        run(
+            [
+                str(base / "bin/python"),
+                "-I",
+                "-c",
+                "import importlib.util,importlib.metadata as m,pathlib,sys; import device_runtime,device_runtime.protocol; assert pathlib.Path(device_runtime.__file__).resolve().is_relative_to(pathlib.Path(sys.prefix).resolve()); assert m.version('ai-device'); assert all(importlib.util.find_spec(n) is None for n in ('fastapi','httpx','mcp','mcp_server_bash','mcp_server_fs')); print('Device base installed independently')",
+            ],
+            work,
+            env,
+        )
         venv = work / "venv"
         run(["uv", "venv", "--python", args.python, str(venv)], work, env)
         python = venv / "bin/python"
@@ -187,6 +242,11 @@ assert pathlib.Path(module.__file__).resolve().is_relative_to(pathlib.Path(sys.p
             "python": args.python,
             "fs_python": args.fs_python,
             "rebuilt_wheels": artifacts,
+            "input_artifacts": {
+                p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                for p in (ROOT / "dist").iterdir()
+                if p.suffix in (".whl", ".gz")
+            },
             "scope": "sdist rebuild, isolated base/MCP imports, installed-wheel Device full tests; no real deployment",
         }
         (ROOT / "artifacts").mkdir(exist_ok=True)

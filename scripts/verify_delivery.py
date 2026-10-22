@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import platform
+import signal
 import subprocess
 import tempfile
 from importlib import metadata
@@ -18,15 +19,49 @@ ROOT = Path(__file__).resolve().parents[1]
 PROJECTS = {"ai-device", "ai-device-bash", "ai-device-fs"}
 
 
-def execute(argv, cwd, env):
-    result = subprocess.run(
-        argv, cwd=cwd, env=env, capture_output=True, text=True, check=False
+def cleanup_process(process, grace=5):
+    """Reap only our start_new_session process group, including descendants."""
+    for signum in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(process.pid, signum)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=grace)
+        except subprocess.TimeoutExpired:
+            continue
+        # Parent may exit before its children; still sweep this owned group.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        return
+    process.wait(timeout=grace)
+
+
+def execute(argv, cwd, env, timeout=180):
+    process = subprocess.Popen(
+        argv,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
     )
-    if result.returncode:
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except BaseException as original:
+        try:
+            cleanup_process(process)
+        except (OSError, subprocess.SubprocessError) as cleanup_error:
+            original.add_note(f"Owned process cleanup failed: {cleanup_error!r}")
+        raise
+    if process.returncode:
         raise RuntimeError(
-            f"Command failed ({result.returncode}): {argv[:4]}\n{result.stderr[-3000:]}"
+            f"Command failed ({process.returncode}): {argv[:4]}\n{stderr[-3000:]}"
         )
-    return result.stdout
+    return stdout
 
 
 def child(work, wheels, pins):
@@ -180,11 +215,7 @@ asyncio.run(main())
             assert "stable-mcp-device-list-ok" in output
             report["lifecycle"]["stable_runner_client_and_mcp"] = True
         finally:
-            import signal
-
-            if client.poll() is None:
-                os.killpg(client.pid, signal.SIGTERM)
-            client.wait(timeout=15)
+            cleanup_process(client)
         before = (root / "active.json").read_bytes()
         try:
             prepare_upgrade(root, bundle, stopped=True)
@@ -195,11 +226,7 @@ asyncio.run(main())
         assert (root / "active.json").read_bytes() == before
         report["lifecycle"]["running_lease_rejected"] = True
     finally:
-        # Only the process group created above, not an existing or real service.
-        import signal
-
-        os.killpg(process.pid, signal.SIGTERM)
-        process.wait(timeout=15)
+        cleanup_process(process)
     before = (root / "active.json").read_bytes()
     candidate = prepare_upgrade(root, bundle, stopped=True)
     assert (root / "active.json").read_bytes() == before

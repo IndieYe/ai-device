@@ -97,7 +97,7 @@
   },
   "third_party": [],
   "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
-  "source_commit": "71bf0aa9b117d58ad226ac96583245ead87fdc67",
+  "source_commit": "79588740bb831e5bfd6283e1fa5ab269f6c758b1",
   "note": "Working tree and artifact hashes must also be captured; commit alone is not full identity.",
   "artifacts": {
     "ai_device_bash-0.2.0-py3-none-any.whl": "ed677f1a99ae5e36b0faf2265cc76cea8fe35fe2af10d84d7c88a29254d8f9ff",

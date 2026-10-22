@@ -17,9 +17,74 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def validate_candidate(root):
+    import ast
+    import tomllib
+
+    expected = set()
+    for package in ("bash", "fs", "device-runtime"):
+        project = tomllib.loads(
+            (root / "packages" / package / "pyproject.toml").read_text()
+        )["project"]
+        name = project["name"].replace("-", "_")
+        version = project.get("version")
+        if version is None:
+            tree = ast.parse(
+                (
+                    root / "packages/device-runtime/src/device_runtime/__init__.py"
+                ).read_text()
+            )
+            version = next(
+                ast.literal_eval(n.value)
+                for n in tree.body
+                if isinstance(n, ast.Assign)
+                and any(
+                    isinstance(t, ast.Name) and t.id == "__version__" for t in n.targets
+                )
+            )
+        expected.update(
+            (f"{name}-{version}.tar.gz", f"{name}-{version}-py3-none-any.whl")
+        )
+    actual = {p.name for p in (root / "dist").iterdir() if p.suffix in (".whl", ".gz")}
+    if actual != expected:
+        raise ValueError("candidate requires exactly three sdist/wheel pairs")
+    hashes = {name: digest(root / "dist" / name) for name in expected}
+    delivery = json.loads((root / "artifacts/delivery-verification.json").read_text())
+    artifact = json.loads((root / "artifacts/artifact-verification.json").read_text())
+    if delivery["artifacts"] != hashes:
+        raise ValueError("delivery report does not match candidate")
+    if artifact["input_artifacts"] != hashes:
+        raise ValueError("artifact report does not match candidate")
+    if artifact["rebuilt_wheels"] != {
+        n: h for n, h in hashes.items() if n.endswith(".whl")
+    }:
+        raise ValueError("rebuilt wheels differ from candidate")
+    if (
+        set(delivery["minimal_roles"]) != {"client", "center", "mcp", "ops"}
+        or set(delivery["lifecycle"])
+        != {
+            "install_and_inspect",
+            "stable_runner_center_http",
+            "stable_runner_client_and_mcp",
+            "running_lease_rejected",
+            "prepare_activate_rebuild",
+            "rollback_backup_restore",
+            "invalid_release_keeps_active",
+            "linux_target_role_rejected",
+            "tampered_wheel_keeps_active",
+        }
+        or not all(v is True for v in delivery["lifecycle"].values())
+    ):
+        raise ValueError("incomplete or failed delivery report")
+    if not artifact.get("scope") or not artifact.get("python"):
+        raise ValueError("incomplete artifact report")
+    return hashes
+
+
 def main():
     evidence = ROOT / "docs/evidence"
-    evidence.mkdir(exist_ok=True)
+    validate_candidate(ROOT)
+    pending = {}
     inventory = []
     notices = [
         "# Third-party dependency notices\n\nLocal development and verification environment inventory, not a universal dependency graph or legal opinion.\n"
@@ -65,10 +130,10 @@ def main():
         assert expression or classifiers or license_files, (
             f"Missing license evidence: {name}"
         )
-    (evidence / "third-party-inventory.json").write_text(
+    pending[evidence / "third-party-inventory.json"] = (
         json.dumps(inventory, indent=2) + "\n"
     )
-    (ROOT / "THIRD_PARTY_NOTICES.md").write_text("".join(notices))
+    pending[ROOT / "THIRD_PARTY_NOTICES.md"] = "".join(notices)
     wheel_sources = {}
     artifacts = []
     for path in sorted((ROOT / "dist").iterdir()):
@@ -132,15 +197,19 @@ def main():
             "Third-party inventory is not comprehensive provenance/legal audit",
         ],
     }
-    (evidence / "candidate-manifest.json").write_text(
-        json.dumps(result, indent=2) + "\n"
-    )
+    pending[evidence / "candidate-manifest.json"] = json.dumps(result, indent=2) + "\n"
     for name in [
         "delivery-verification.json",
         "artifact-verification.json",
         "collection-comparison.json",
     ]:
-        (evidence / name).write_bytes((ROOT / "artifacts" / name).read_bytes())
+        pending[evidence / name] = (ROOT / "artifacts" / name).read_text()
+    validate_candidate(ROOT)
+    evidence.mkdir(exist_ok=True)
+    for path, content in pending.items():
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(content)
+        temporary.replace(path)
     print(
         f"Captured {len(artifacts)} artifacts, source matching for {len(wheel_sources)} wheels, {len(inventory)} dependency licenses"
     )

@@ -1,6 +1,6 @@
 {
   "kind": "local_candidate_not_published",
-  "source_commit_before_evidence": "71bf0aa9b117d58ad226ac96583245ead87fdc67",
+  "source_commit_before_evidence": "79588740bb831e5bfd6283e1fa5ab269f6c758b1",
   "identity_note": "Source file hashes, lock and artifact hashes define this candidate; commit predates evidence and may have working-tree changes. Device build_id excludes Bash/FS.",
   "python": "3.13.12 (main, Mar  3 2026, 15:32:44) [Clang 21.1.4 ]",
   "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
