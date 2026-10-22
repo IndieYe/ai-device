@@ -1,0 +1,100 @@
+name: Prepare and manually publish PyPI release
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        description: 'Exact reviewed 40-character commit on main'
+        required: true
+        type: string
+      publish:
+        description: 'Upload to PyPI (requires separate authorization and environment approval)'
+        default: false
+        type: boolean
+permissions:
+  contents: read
+concurrency:
+  group: pypi-release
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: github.repository == 'IndieYe/ai-device' && github.ref == 'refs/heads/main'
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check reviewed commit
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: |
+          [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.10.9'
+      - run: uv sync --python 3.13 --locked --all-packages --all-extras --group dev
+      - name: Source and release tool tests
+        run: |
+          set -e
+          for package in bash fs device-runtime; do
+            (cd packages/$package && ../../.venv/bin/python -m pytest -q)
+          done
+          uv run --no-sync python -m pytest tests/test_stage_c_tools.py tests/test_release_artifacts.py -q
+      - run: uv build --all-packages
+      - run: uv run --isolated --no-project --with twine python -m twine check dist/*
+      - run: uv run --no-sync python scripts/verify_artifacts.py --fs-python 3.10
+      - run: uv run --no-sync python scripts/verify_delivery.py
+      - run: uv run --no-sync python scripts/release_artifacts.py stage
+      - name: Record source and review evidence
+        run: |
+          git rev-parse HEAD > release/source-commit.txt
+          cp artifacts/artifact-verification.json artifacts/delivery-verification.json release/
+          cat release/manifest.json >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pypi-release-${{ github.sha }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 14
+  publish:
+    if: inputs.publish
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment:
+      name: pypi
+      url: https://pypi.org/p/ai-device
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@v4
+        with:
+          name: pypi-release-${{ github.sha }}
+          path: release/
+      - name: Verify immutable candidate before upload
+        run: |
+          test "$(cat release/source-commit.txt)" = "$GITHUB_SHA"
+          python scripts/release_artifacts.py check
+      - name: Publish Bash (no automatic retry or skip-existing)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: release/bash/
+      - run: python scripts/release_artifacts.py public --group bash
+      - name: Publish FS
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: release/fs/
+      - run: python scripts/release_artifacts.py public --group fs
+      - name: Publish Device only after dependencies verified
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: release/device/
+      - run: python scripts/release_artifacts.py public --group device
