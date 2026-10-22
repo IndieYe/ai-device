@@ -13,6 +13,11 @@ dependencies = [
 [project.optional-dependencies]
 mcp = ["fastmcp>=3.4.2,<4", "pydantic>=2.12.5"]
 
+[project.urls]
+Homepage = "https://github.com/IndieYe/ai-device"
+Repository = "https://github.com/IndieYe/ai-device"
+Issues = "https://github.com/IndieYe/ai-device/issues"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

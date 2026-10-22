@@ -20,6 +20,11 @@ mcp = [
 [project.scripts]
 mcp-server-fs = "mcp_server_fs.cli:main"
 
+[project.urls]
+Homepage = "https://github.com/IndieYe/ai-device"
+Repository = "https://github.com/IndieYe/ai-device"
+Issues = "https://github.com/IndieYe/ai-device/issues"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

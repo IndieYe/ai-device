@@ -1,6 +1,6 @@
 {
   "kind": "local_candidate_not_published",
-  "source_commit_before_evidence": "79588740bb831e5bfd6283e1fa5ab269f6c758b1",
+  "source_commit_before_evidence": "ed60185ca815f7a997130bd3eee1702b696fb920",
   "identity_note": "Source file hashes, lock and artifact hashes define this candidate; commit predates evidence and may have working-tree changes. Device build_id excludes Bash/FS.",
   "python": "3.13.12 (main, Mar  3 2026, 15:32:44) [Clang 21.1.4 ]",
   "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
@@ -8,33 +8,33 @@
   "artifacts": [
     {
       "file": "ai_device-0.2.2-py3-none-any.whl",
-      "sha256": "e7cfc0c216da186b95ef91f40ed239778439ee0de6e3ba0d77bb3f772c5da3a6",
-      "size": 66863
+      "sha256": "c5e523318a13717e8988c0c740ff123f099ab1c3fadfd273d3205a8c45348bdc",
+      "size": 66935
     },
     {
       "file": "ai_device-0.2.2.tar.gz",
-      "sha256": "d3bcdfca2f27220a9b3d4436e58429b9b20e882067444e0b8b5e633eee6aa13a",
-      "size": 134489
+      "sha256": "15602cf3f1f5f84586b78ca96f15952fc054aeaac26d7ce32845b3b84194fa7a",
+      "size": 134644
     },
     {
       "file": "ai_device_bash-0.2.0-py3-none-any.whl",
-      "sha256": "ed677f1a99ae5e36b0faf2265cc76cea8fe35fe2af10d84d7c88a29254d8f9ff",
-      "size": 33034
+      "sha256": "d6b3d9fbd8856361c8be33c7d6cc6f533695be3afd959c2a768b0727f2d5596e",
+      "size": 33106
     },
     {
       "file": "ai_device_bash-0.2.0.tar.gz",
-      "sha256": "1b33c653d41a2f9ae70d90cd5a5f6073e1f1ca04b6c8f79496cc6a45a546f316",
-      "size": 71997
+      "sha256": "7dac60c6db4a7d6adea4bd6c0bc710726c2b081cf263085a19c92289853d2a05",
+      "size": 72084
     },
     {
       "file": "ai_device_fs-0.2.0-py3-none-any.whl",
-      "sha256": "20a3781fadb824d8626ad82d169de260455b9ed6ad59f0c470db79768f3bc102",
-      "size": 38007
+      "sha256": "b872aa775eaacc9836c0ec94a2abf1e41c8395ef725eecb37d05b521053ab626",
+      "size": 38080
     },
     {
       "file": "ai_device_fs-0.2.0.tar.gz",
-      "sha256": "118fab8554bb86a4d6253037de06e63e8c07eb03dadf2199813ea99af1d09f20",
-      "size": 61511
+      "sha256": "639df34658df64df1719c4b43caf4eb8fbe4519a77e1de5ee67e39ff845097f8",
+      "size": 61604
     }
   ],
   "wheel_python_source_matches": {
@@ -380,7 +380,7 @@
     "packages/bash/docs/core-test-evidence.md": "08789311469d619e3aefc6c37ab9e572558ced950ba12430076a48cae23bff3d",
     "packages/bash/docs/remote-host-design.md": "e1f25d1c3c8c5c9f1b711c3fc4305fad5cb8670853ad193c665e142cc7f227c2",
     "packages/bash/docs/usage-guide.md": "1b625dbc30b9f2e9a675ff4536fa85025e397c06cbead9c7620f089dc96ee1d9",
-    "packages/bash/pyproject.toml": "370fff7c41f810f479434a4d0b1dbea2ce614103e9e15f32e0d11dc4ecf0a4fd",
+    "packages/bash/pyproject.toml": "ac880a7646b88c3920d5ca8466f7541c27a9d81740f577436c0d3e769e5a62ab",
     "packages/bash/src/mcp_server_bash/__init__.py": "031efb1ab358ff100b8140533b890c0b25197d26ee6e2a74ff7f2e9c1d614066",
     "packages/bash/src/mcp_server_bash/__main__.py": "2cdd23d4f5cd6c3b3e4cb690ad16d560637767b9ca5b2a3cf129fcc0a5ebc82b",
     "packages/bash/src/mcp_server_bash/artifacts.py": "a080be5d93d9602f07d4d9be7f1eb60742cc81308737ec474d7df55b64fd6e2a",
@@ -420,7 +420,7 @@
     "packages/device-runtime/examples/linux-container/live-acceptance.py": "d277a840d6d6bf9a5019c536a23636f11bdb823ffd5446affa35d1475b162f4f",
     "packages/device-runtime/examples/linux-container/run-acceptance.py": "092e37a027d8eb4ffff83f82e458fe3e8d3b73ec8740cf0f7cea02707ddb70a3",
     "packages/device-runtime/examples/mcp-servers.json": "adf93ad2503f82e97b4c3b235bab52a435834d1fc211eee1850d17e4c443f6e0",
-    "packages/device-runtime/pyproject.toml": "7d1dfc7b3baeac22e85f22f04543f4c1edd5d709279a32a01788e214f4a39e86",
+    "packages/device-runtime/pyproject.toml": "4abead9dda79b1158ad6c430acadb7543c6cfb40d4a189a366248c3ef15ca6a5",
     "packages/device-runtime/scripts/accept-centos7.py": "9b4f753d6554bead8935dae1c68e6c9d2b24eb23b0816e84d12fb9e6ca7424b4",
     "packages/device-runtime/scripts/build-centos7-dependencies.sh": "27a6e9b31d07657e393121a16e319f89e76e61f666a4cfdea2c62f2100cac913",
     "packages/device-runtime/scripts/centos7-build-inside.sh": "2b6dc3dfc2e8cf179d140bfebdaa1d52ebbbaded64498344d1c44917034dd335",
@@ -510,7 +510,7 @@
     "packages/fs/mcp_server_fs/tools/read_image.py": "fdbbf190ebdab83614a9a7479121c379f274328efd2c0775e554f6af35a2ee41",
     "packages/fs/mcp_server_fs/tools/results.py": "764e8b123fbfdd4431f77c60d1943a11047585fb8c490ed607ceffc583086287",
     "packages/fs/mcp_server_fs/tools/write_file.py": "7b2a325cf1e9c46d4bb0d72535ac70f72cfc0a1dcd1ee656e1b4b42a5166ee5f",
-    "packages/fs/pyproject.toml": "8846494ff105cc861b354697d9d5aff41b97f603c736610efe8e1611e155f6ee",
+    "packages/fs/pyproject.toml": "5982c3d4dfc7e9f1d5156ee0a9bc98e332f27b4c060507a666ae5c7662b7b18d",
     "packages/fs/scripts/inspector.sh": "a60f16cce78aa2dc39c2e2a1fa436c0a0e425e27c1519d956daca24246607726",
     "packages/fs/tests/__init__.py": "3e7ed72d917590c5b2f457b9d9f5d014c48fa455e9303862e1bf57849d522da1",
     "packages/fs/tests/core/test_edit_file_schema.py": "9d9c15dd268149c473ebf19c1791ee6a7462e37e175a9a2b564dd408f4a5aded",
