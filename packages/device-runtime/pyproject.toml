@@ -1,0 +1,45 @@
+[project]
+license = "MIT"
+license-files = ["LICENSE"]
+name = "ai-device"
+dynamic = ["version"]
+description = "Explicit-device operation service and reconnecting Python CLI client"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = ["pydantic>=2.12.5", "websockets>=15.0", "packaging>=24.2"]
+
+[project.optional-dependencies]
+client = ["ai-device-bash==0.2.0", "ai-device-fs==0.2.0"]
+server = ["fastapi>=0.115.0", "uvicorn>=0.35.0"]
+ops = ["httpx>=0.28"]
+mcp = ["mcp>=1.26.0,<2", "httpx>=0.28"]
+
+[project.scripts]
+device-runtime = "device_runtime.cli:main"
+device-mcp = "device_runtime.mcp_server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = ["pytest>=9.0", "pytest-asyncio>=1.0", "httpx>=0.28", "ruff>=0.15"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+
+[tool.hatch.version]
+path = "src/device_runtime/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/device_runtime"]
+
+[tool.uv.sources]
+ai-device-bash = { workspace = true }
+ai-device-fs = { workspace = true }

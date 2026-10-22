@@ -1,0 +1,5 @@
+[tool.uv.workspace]
+members = ["packages/bash", "packages/fs", "packages/device-runtime"]
+
+[dependency-groups]
+dev = ["pytest>=9", "pytest-asyncio>=1", "pytest-cov>=7", "ruff>=0.15"]

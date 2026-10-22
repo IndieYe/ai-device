@@ -1,0 +1,10 @@
+{
+  "mcp-servers": {
+    "device": {
+      "command": "device-mcp",
+      "args": [],
+      "env": {},
+      "description": "Explicit-device argv and file operations via center API; inherit DEVICE_RUNTIME_API_URL and DEVICE_RUNTIME_ADMIN_TOKEN from a safely supplied environment. Stable operation_id required; unknown is never permission to replay."
+    }
+  }
+}

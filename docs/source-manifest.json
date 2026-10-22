@@ -1,0 +1,1181 @@
+{
+  "note": "Source hashes before migration adaptations; old lockfiles intentionally excluded; new repository is sole modification source from import.",
+  "files": [
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": ".env.example",
+      "destination": "packages/bash/.env.example",
+      "source_sha256": "ad4762d6eda77923589b68612cc9a65d9c649cbeede4acd2ce2a4cb8dcf04d57"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": ".gitignore",
+      "destination": "packages/bash/.gitignore",
+      "source_sha256": "315b13c521280f8ab183e966eb8db81a18d79cf2fe585196759362bf01feac07"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": ".python-version",
+      "destination": "packages/bash/.python-version",
+      "source_sha256": "02e735b3dfe1c32833eb550b7ff8ffa17f5f2bc3fa1e7bae61a8f5a3883ce398"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "README.md",
+      "destination": "packages/bash/README.md",
+      "source_sha256": "94ba22131a8f630a81dc59630c2b246c50dce68ad11b0ba43ef5e4995afc0fcd"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "docs/bash-execution-modes-requirements-design.md",
+      "destination": "packages/bash/docs/bash-execution-modes-requirements-design.md",
+      "source_sha256": "3f6dc8ca020a09eb1822971293bc1c642a7732ea7056cf62b5f6d056c1f1e21a"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "docs/core-test-evidence.md",
+      "destination": "packages/bash/docs/core-test-evidence.md",
+      "source_sha256": "e93c748057b65cc07bde8a59bdc5ee4ec1ff7bb7ee63d54d22daebffbb205b7a"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "docs/remote-host-design.md",
+      "destination": "packages/bash/docs/remote-host-design.md",
+      "source_sha256": "1ee27b2c81834c4ee3025c78c07d1dfaae0747194044439c67886c7ac7fe5390"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "docs/usage-guide.md",
+      "destination": "packages/bash/docs/usage-guide.md",
+      "source_sha256": "1b625dbc30b9f2e9a675ff4536fa85025e397c06cbead9c7620f089dc96ee1d9"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "pyproject.toml",
+      "destination": "packages/bash/pyproject.toml",
+      "source_sha256": "2f2a04ddd62fabe8aeb72f5dbeb5833521fcc78d8ed782a6342dcdf4dbb295f7"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "src/mcp_server_bash/__init__.py",
+      "destination": "packages/bash/src/mcp_server_bash/__init__.py",
+      "source_sha256": "031efb1ab358ff100b8140533b890c0b25197d26ee6e2a74ff7f2e9c1d614066"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "src/mcp_server_bash/__main__.py",
+      "destination": "packages/bash/src/mcp_server_bash/__main__.py",
+      "source_sha256": "2cdd23d4f5cd6c3b3e4cb690ad16d560637767b9ca5b2a3cf129fcc0a5ebc82b"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "src/mcp_server_bash/artifacts.py",
+      "destination": "packages/bash/src/mcp_server_bash/artifacts.py",
+      "source_sha256": "a080be5d93d9602f07d4d9be7f1eb60742cc81308737ec474d7df55b64fd6e2a"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "src/mcp_server_bash/backends/__init__.py",
+      "destination": "packages/bash/src/mcp_server_bash/backends/__init__.py",
+      "source_sha256": "e3b9d2d9f0c6873ce4adb15fe530b4cf392ff01a927faaa25c195027f7d9c2f4"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "src/mcp_server_bash/backends/local.py",
+      "destination": "packages/bash/src/mcp_server_bash/backends/local.py",
+      "source_sha256": "0ad2b7d664de54c058700a5c5f79e8cbaa141c91940eeb84cb0ed21dbe0d037e"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "src/mcp_server_bash/cli.py",
+      "destination": "packages/bash/src/mcp_server_bash/cli.py",
+      "source_sha256": "73cca24bf4e2d0d4a5b524f34e91520adab75ba583c562c2a542a43ae8c2714f"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "src/mcp_server_bash/config.py",
+      "destination": "packages/bash/src/mcp_server_bash/config.py",
+      "source_sha256": "8d2efc99cd23d1c34efa9e1bbb4cd5224c7ad0c791dbcd8be22dc5680a2292e4"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "src/mcp_server_bash/core.py",
+      "destination": "packages/bash/src/mcp_server_bash/core.py",
+      "source_sha256": "6a4f06848a07224de1774b3762bc2dd9a468b7317783af1771dbb2c23603ae79"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "src/mcp_server_bash/models.py",
+      "destination": "packages/bash/src/mcp_server_bash/models.py",
+      "source_sha256": "23095fb2af83ead889d68cde01cfb675cbfe7060fa8ad3e307c17d05bb5b4848"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "src/mcp_server_bash/output_capture.py",
+      "destination": "packages/bash/src/mcp_server_bash/output_capture.py",
+      "source_sha256": "74aa2d57bb58f2dcc9b986798b96434ace46d1a1286aed97b906c17659accb93"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "src/mcp_server_bash/server.py",
+      "destination": "packages/bash/src/mcp_server_bash/server.py",
+      "source_sha256": "d14f792defc14a31ad139d00cea4b566c7db6ada49e0e1caa4f441c511cae72e"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "src/mcp_server_bash/shell.py",
+      "destination": "packages/bash/src/mcp_server_bash/shell.py",
+      "source_sha256": "ae54599064f20c1f3ac55d9e76b3e6f18e9d6f7b541ae9317c8fdb2147a04ee7"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "src/mcp_server_bash/tracking.py",
+      "destination": "packages/bash/src/mcp_server_bash/tracking.py",
+      "source_sha256": "bff4f6221599bdfe5eb1a4d3277232bdf213f2d8e6225e49ce23118be48ae99c"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "tests/conftest.py",
+      "destination": "packages/bash/tests/conftest.py",
+      "source_sha256": "65383d40565e27ac0ef01129f941d6dceae5b9ce6140ad14ea38330ed65bdcef"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "tests/core/test_background_output_limit.py",
+      "destination": "packages/bash/tests/core/test_background_output_limit.py",
+      "source_sha256": "fcb490c46bbb1cbaf930c3b9fc8bbc472a19da54b09073259fa37b62ea1649f0"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "tests/core/test_background_responsiveness.py",
+      "destination": "packages/bash/tests/core/test_background_responsiveness.py",
+      "source_sha256": "a1ca4aed1bae7645fced9710ad6dc75bed6725f837996900795a88ca8bb03f3f"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "tests/core/test_concurrent_close.py",
+      "destination": "packages/bash/tests/core/test_concurrent_close.py",
+      "source_sha256": "b9efd877794f4f94139c4ea88f8be5dd54632a9b560ac053697c4ce375aa148b"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "tests/core/test_no_mcp_install.py",
+      "destination": "packages/bash/tests/core/test_no_mcp_install.py",
+      "source_sha256": "bf03f0fd9726f4ad541a5e43a251bbda78ec9e58ada4046ea09850501b834b28"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "tests/core/test_prestart_cancellation.py",
+      "destination": "packages/bash/tests/core/test_prestart_cancellation.py",
+      "source_sha256": "fdc6b0ac9e6a6a543567cc72e25927330b1c2c14d9c8e3ee634ac22c4acdac39"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "tests/core/test_runtime.py",
+      "destination": "packages/bash/tests/core/test_runtime.py",
+      "source_sha256": "f609eba28dc7a6e01d75b3aefbccc615bb54428f5fee9f5a2923da884fe7c3ea"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "tests/integration/test_local_only_protocol.py",
+      "destination": "packages/bash/tests/integration/test_local_only_protocol.py",
+      "source_sha256": "f1ed81b5ff3803220293d74cfe4d4be3f3ff84df8fecf432a738483281ce7422"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "tests/unit/test_artifacts_and_stdin.py",
+      "destination": "packages/bash/tests/unit/test_artifacts_and_stdin.py",
+      "source_sha256": "e51d2beda54853e153d59c083727abb711bd871afe9e05e45e1f4866486f857f"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "tests/unit/test_caller_session_context.py",
+      "destination": "packages/bash/tests/unit/test_caller_session_context.py",
+      "source_sha256": "41af659d7042c0ea731986b82c991dc98bd14131546f81b6f6e8a474b54f817c"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "tests/unit/test_output_retention.py",
+      "destination": "packages/bash/tests/unit/test_output_retention.py",
+      "source_sha256": "122583f123f10ba5c4b7989795b08e4a9d3d083b4d8b3926cc27e4780b3677fe"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "tests/unit/test_purpose_summary.py",
+      "destination": "packages/bash/tests/unit/test_purpose_summary.py",
+      "source_sha256": "020ae93a1e0383f8c59df18e75d47e966925464e12a5c5db9906f9bc0afaa033"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "tests/unit/test_run_command_bytes.py",
+      "destination": "packages/bash/tests/unit/test_run_command_bytes.py",
+      "source_sha256": "cbad567e9cb5123f9d73168935f188d6bdbf14002388d12079d9e2b770d3daca"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "tests/unit/test_run_tool.py",
+      "destination": "packages/bash/tests/unit/test_run_tool.py",
+      "source_sha256": "46843186e8dd3d7e68313985d12e1bda90dbba7ac2d783a01de2c4020d66c7c0"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "tests/unit/test_script_tool.py",
+      "destination": "packages/bash/tests/unit/test_script_tool.py",
+      "source_sha256": "60555c74f317a5c8a6ada7cd9ed6416c2b26b3ae1d4f5d8be9df3e2acf27df17"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "tests/unit/test_startup_logging.py",
+      "destination": "packages/bash/tests/unit/test_startup_logging.py",
+      "source_sha256": "67e81d987b242278df510f37a30147d764aa70d73884df7a8ebc38e1d3ea8c21"
+    },
+    {
+      "package": "bash",
+      "source_repository": "mcp-server-bash",
+      "source_commit": "c95a13d050e67bac2f75c8c51f83b3d0e52e2a5a",
+      "source_path": "tests/unit/test_timeout_cancellation.py",
+      "destination": "packages/bash/tests/unit/test_timeout_cancellation.py",
+      "source_sha256": "1bb7526984f608dc0241de1f21dae3711c72315ad9faa2633357014db9fe5837"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": ".env.example",
+      "destination": "packages/fs/.env.example",
+      "source_sha256": "fe46d8f3c18a861e3645f431aee5e4c84b9e4ba4ab79a226c4d8ff2ae12ffc58"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": ".gitignore",
+      "destination": "packages/fs/.gitignore",
+      "source_sha256": "478f2169af764fa986cf53b3d5e5a5d0278a5da554f89887d3d703333a023bd8"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "README.md",
+      "destination": "packages/fs/README.md",
+      "source_sha256": "ae7088c1879d3a0efe47d851a2eeb8a85c5f4a174e5522c01e24407dc7403697"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "docs/READ_IMAGE_END_TO_END_WORK_PLAN.md",
+      "destination": "packages/fs/docs/READ_IMAGE_END_TO_END_WORK_PLAN.md",
+      "source_sha256": "351a1c0f8ffeb651b0d82281f4ed7f5fb55baf313d24b22a53b9f664903a210d"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "docs/REMOTE_HOST_DESIGN.md",
+      "destination": "packages/fs/docs/REMOTE_HOST_DESIGN.md",
+      "source_sha256": "8267863d286218d466fe2822a2f39755e39e1940b369a1aa5b2090edf0349227"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "docs/usage-guide.md",
+      "destination": "packages/fs/docs/usage-guide.md",
+      "source_sha256": "20d4cf47b4a9ff269243b94f9f5ad1a7948648cf41256dc3fdbc2380e0884968"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "main.py",
+      "destination": "packages/fs/main.py",
+      "source_sha256": "bdf4c3048cd78311415da7cefd1351cd1dd4df2259a534dfad2591ae195ae638"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/__init__.py",
+      "destination": "packages/fs/mcp_server_fs/__init__.py",
+      "source_sha256": "8737fa8bccfd7ab96dce0f40cfca151877671625497aa09b29350f62d5054a93"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/__main__.py",
+      "destination": "packages/fs/mcp_server_fs/__main__.py",
+      "source_sha256": "eedf03220492892e46a5b56906f0524c06e5907b1639d3717b787486a77a850b"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/cli.py",
+      "destination": "packages/fs/mcp_server_fs/cli.py",
+      "source_sha256": "f28a00a50ec161898fe8b4a5f3378b0bffadb4e0fec29dc04c4600f640674e13"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/common.py",
+      "destination": "packages/fs/mcp_server_fs/common.py",
+      "source_sha256": "e11632fd5db8ed560644fa849f0c785be0c03e6eee4224e52e6210e1bd41d122"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/config.py",
+      "destination": "packages/fs/mcp_server_fs/config.py",
+      "source_sha256": "d8f2039ebba5d0d5362e9945cd2effb1fd7675dd5ee707d117cff57d93d2d70a"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/core/__init__.py",
+      "destination": "packages/fs/mcp_server_fs/core/__init__.py",
+      "source_sha256": "a244aea0240fec80190d109be9baba4b6faab85e6d43b2964247c6ed6c69b157"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/core/apply_patch.py",
+      "destination": "packages/fs/mcp_server_fs/core/apply_patch.py",
+      "source_sha256": "73ff1536e383437410164ee42465034467a7cbe0ccd02dc5ff9b1af7e37594db"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/core/edit_file.py",
+      "destination": "packages/fs/mcp_server_fs/core/edit_file.py",
+      "source_sha256": "cbef3b9718a2495a808609ea2b9391233b53c9608d59a07f452e935f198861c8"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/core/insert_file.py",
+      "destination": "packages/fs/mcp_server_fs/core/insert_file.py",
+      "source_sha256": "75b4842d16f3279765e4794221ba12bc8d83877771db8840516262363cc00137"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/core/read_file.py",
+      "destination": "packages/fs/mcp_server_fs/core/read_file.py",
+      "source_sha256": "dd9f473312022ef18e6dc0e49a5fa3a84538a1e911341af13f491257b3892137"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/core/read_image.py",
+      "destination": "packages/fs/mcp_server_fs/core/read_image.py",
+      "source_sha256": "ec083551ec2b77f66725a018f565f568f69169566e26556f94a7401bef388b9e"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/core/results.py",
+      "destination": "packages/fs/mcp_server_fs/core/results.py",
+      "source_sha256": "73c05bb7949085294dc00231287ccc23add10fd8b18be8a31620822c4361578c"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/core/write_file.py",
+      "destination": "packages/fs/mcp_server_fs/core/write_file.py",
+      "source_sha256": "eb21f2bccaeeb5594f21cfda5d0f2f1bbe7828aae7b50d22d65c34e1a6a1d3ad"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/defaults.py",
+      "destination": "packages/fs/mcp_server_fs/defaults.py",
+      "source_sha256": "975340717ee2f8326971ceae0b52e08f571b2d9d1a79a0fe0f4f06067aea3792"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/formatting.py",
+      "destination": "packages/fs/mcp_server_fs/formatting.py",
+      "source_sha256": "6340259d2442baf4963d85ecc460c24d574f63bb395f6cda2fb678aa37522ed0"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/image_utils.py",
+      "destination": "packages/fs/mcp_server_fs/image_utils.py",
+      "source_sha256": "c22af810071084f6fa1ea6be27b2207cb97bf092bfd1518107873ffbafdfbc66"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/io_utils.py",
+      "destination": "packages/fs/mcp_server_fs/io_utils.py",
+      "source_sha256": "3c5880ba9c615589cfe339c6516fe501e94e978920c4157d8798afddb18586ec"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/patch/__init__.py",
+      "destination": "packages/fs/mcp_server_fs/patch/__init__.py",
+      "source_sha256": "14eae5f938c6a1e8f48273fc12ef3a4384ef7bc245370551c67a3b37577a69f8"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/patch/errors.py",
+      "destination": "packages/fs/mcp_server_fs/patch/errors.py",
+      "source_sha256": "90f2ef31b1e06ce8485ca310fe37954a9200d04263eaa2d33fcdd008ca1f7ce4"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/patch/executor.py",
+      "destination": "packages/fs/mcp_server_fs/patch/executor.py",
+      "source_sha256": "a111bc745cc6203fc600a14d91df17557b35aeb27ac87da5ceb90214a40b33c7"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/patch/models.py",
+      "destination": "packages/fs/mcp_server_fs/patch/models.py",
+      "source_sha256": "925675bf76ed8bbfb7e1db2d5eb356b0bbe6fbffde65f7e1bd8fc0578001d2ba"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/patch/parser.py",
+      "destination": "packages/fs/mcp_server_fs/patch/parser.py",
+      "source_sha256": "d6ff792a9945e464c737c6b4150968551c9d72cd04749304c5bdb06d54de7230"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/path_utils.py",
+      "destination": "packages/fs/mcp_server_fs/path_utils.py",
+      "source_sha256": "ac513d042642f4abf8a887b6aa3bebb01f486188731175d33d0bf053fbbd85c2"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/responses.py",
+      "destination": "packages/fs/mcp_server_fs/responses.py",
+      "source_sha256": "d108970167fc075d42fefb155d87c027934d96a637b05a97082d9afc435277f6"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/server.py",
+      "destination": "packages/fs/mcp_server_fs/server.py",
+      "source_sha256": "290f813b01e4cc5cd02220c79087808588d166842cc976606602add1d3c6df5e"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/tools/__init__.py",
+      "destination": "packages/fs/mcp_server_fs/tools/__init__.py",
+      "source_sha256": "60353cebb580da43071d191ea43be71639cd0cfe7e06347799d06e7a40682f31"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/tools/apply_patch.py",
+      "destination": "packages/fs/mcp_server_fs/tools/apply_patch.py",
+      "source_sha256": "bad1c75548329eb8f365d176aecd63f0f96b5dc29d664cad40024daf58e26f46"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/tools/edit_file.py",
+      "destination": "packages/fs/mcp_server_fs/tools/edit_file.py",
+      "source_sha256": "cc160875c3661c0c223626792d0fc09771e5cc0583d57a74170b5b3b6fa43317"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/tools/insert_file.py",
+      "destination": "packages/fs/mcp_server_fs/tools/insert_file.py",
+      "source_sha256": "47e1177c717d5dad50c3578a6dc4aec8b4d0283c611560885c50ed2e95b3aee7"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/tools/read_file.py",
+      "destination": "packages/fs/mcp_server_fs/tools/read_file.py",
+      "source_sha256": "60d21cc913fe91ef96b649a78e6fce5b096ab187e4f47a91fa951274ff609fc9"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/tools/read_image.py",
+      "destination": "packages/fs/mcp_server_fs/tools/read_image.py",
+      "source_sha256": "fdbbf190ebdab83614a9a7479121c379f274328efd2c0775e554f6af35a2ee41"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/tools/results.py",
+      "destination": "packages/fs/mcp_server_fs/tools/results.py",
+      "source_sha256": "764e8b123fbfdd4431f77c60d1943a11047585fb8c490ed607ceffc583086287"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "mcp_server_fs/tools/write_file.py",
+      "destination": "packages/fs/mcp_server_fs/tools/write_file.py",
+      "source_sha256": "7b2a325cf1e9c46d4bb0d72535ac70f72cfc0a1dcd1ee656e1b4b42a5166ee5f"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "pyproject.toml",
+      "destination": "packages/fs/pyproject.toml",
+      "source_sha256": "510c3c6936e3d6540cb88e9b1b30c6277f24aeefc5f8d03c7cd67a45c5b15e98"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "scripts/inspector.sh",
+      "destination": "packages/fs/scripts/inspector.sh",
+      "source_sha256": "a60f16cce78aa2dc39c2e2a1fa436c0a0e425e27c1519d956daca24246607726"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "tests/__init__.py",
+      "destination": "packages/fs/tests/__init__.py",
+      "source_sha256": "3e7ed72d917590c5b2f457b9d9f5d014c48fa455e9303862e1bf57849d522da1"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "tests/core/test_edit_file_schema.py",
+      "destination": "packages/fs/tests/core/test_edit_file_schema.py",
+      "source_sha256": "9d9c15dd268149c473ebf19c1791ee6a7462e37e175a9a2b564dd408f4a5aded"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "tests/core/test_local_only_contract.py",
+      "destination": "packages/fs/tests/core/test_local_only_contract.py",
+      "source_sha256": "dda5c3f929ace110f44e61c979a3d06f46bc270d23049ad99a3b289e0fbfadae"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "tests/core/test_read_image.py",
+      "destination": "packages/fs/tests/core/test_read_image.py",
+      "source_sha256": "4a2d25fb18e31d3dcecf85e294b5889009fb8af9abe02ac8be650921f0115595"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "tests/core/test_read_ranges.py",
+      "destination": "packages/fs/tests/core/test_read_ranges.py",
+      "source_sha256": "562efe8c286bcece3828dc147d96678b2c14591921c0dbb120915f6622cd8533"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "tests/core/test_server_core.py",
+      "destination": "packages/fs/tests/core/test_server_core.py",
+      "source_sha256": "736a4b7c6b0f2bc6f5f7617a37ebbd036c4a5717e543bf46dbab309aed19a01c"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "tests/core/test_standalone_core.py",
+      "destination": "packages/fs/tests/core/test_standalone_core.py",
+      "source_sha256": "9c912d4ac2f01daf486a9491dbe6cd8821a65acdf6bf6f19762c5fb68caa7658"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "tests/core/test_tool_behaviors.py",
+      "destination": "packages/fs/tests/core/test_tool_behaviors.py",
+      "source_sha256": "a778ebbe92551763952328f58d8a2a318a42270338127e819e202c6823463a0b"
+    },
+    {
+      "package": "fs",
+      "source_repository": "mcp-server-fs",
+      "source_commit": "e0f470e500d970e787e0a96062e403c45f757057",
+      "source_path": "tests/patch/test_apply_patch.py",
+      "destination": "packages/fs/tests/patch/test_apply_patch.py",
+      "source_sha256": "6dc62dedb96459e8dffffaa1cbb127f1d028e5cf82d6132f6b29e7cb2d4ea8e8"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/.gitignore",
+      "destination": "packages/device-runtime/.gitignore",
+      "source_sha256": "0777dcb691a7d05e9a1e86f79a74e7b08dafb600a18a756af443ad3a64b9f80d"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/README.md",
+      "destination": "packages/device-runtime/README.md",
+      "source_sha256": "6f024fb2e437797babc3214b01c645eee8e727f2f2f6a7b74a4ea8ff3fb9b1b7"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/examples/linux-container/Containerfile",
+      "destination": "packages/device-runtime/examples/linux-container/Containerfile",
+      "source_sha256": "896805ced9956364f7909cfdd1caa4908e6c8664c9d756863d4080cc212149fa"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/examples/linux-container/README.md",
+      "destination": "packages/device-runtime/examples/linux-container/README.md",
+      "source_sha256": "72c6741d1d9c563ec18537b9616b548a6be725f60e61a631c9ed73cdf6aa37b8"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/examples/linux-container/bootstrap.sh",
+      "destination": "packages/device-runtime/examples/linux-container/bootstrap.sh",
+      "source_sha256": "0bcf2ca13915b97223fd1e0152f43bc0c2e54c5262d999b332790228658b3fb4"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/examples/linux-container/live-acceptance.py",
+      "destination": "packages/device-runtime/examples/linux-container/live-acceptance.py",
+      "source_sha256": "d277a840d6d6bf9a5019c536a23636f11bdb823ffd5446affa35d1475b162f4f"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/examples/linux-container/run-acceptance.py",
+      "destination": "packages/device-runtime/examples/linux-container/run-acceptance.py",
+      "source_sha256": "092e37a027d8eb4ffff83f82e458fe3e8d3b73ec8740cf0f7cea02707ddb70a3"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/examples/mcp-servers.json",
+      "destination": "packages/device-runtime/examples/mcp-servers.json",
+      "source_sha256": "adf93ad2503f82e97b4c3b235bab52a435834d1fc211eee1850d17e4c443f6e0"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/pyproject.toml",
+      "destination": "packages/device-runtime/pyproject.toml",
+      "source_sha256": "a3e652dc41a7dd614d748d877704d13bfeed99d760949d548294ece0c60ae1ec"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/scripts/accept-centos7.py",
+      "destination": "packages/device-runtime/scripts/accept-centos7.py",
+      "source_sha256": "9b4f753d6554bead8935dae1c68e6c9d2b24eb23b0816e84d12fb9e6ca7424b4"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/scripts/build-centos7-dependencies.sh",
+      "destination": "packages/device-runtime/scripts/build-centos7-dependencies.sh",
+      "source_sha256": "27a6e9b31d07657e393121a16e319f89e76e61f666a4cfdea2c62f2100cac913"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/scripts/centos7-build-inside.sh",
+      "destination": "packages/device-runtime/scripts/centos7-build-inside.sh",
+      "source_sha256": "2b6dc3dfc2e8cf179d140bfebdaa1d52ebbbaded64498344d1c44917034dd335"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/scripts/manifest-dependencies.py",
+      "destination": "packages/device-runtime/scripts/manifest-dependencies.py",
+      "source_sha256": "e05f21a8b1d7450025f42a3edd4770281486b6e437881cc180233a1d113eb425"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/scripts/verify-pillow.py",
+      "destination": "packages/device-runtime/scripts/verify-pillow.py",
+      "source_sha256": "93703ffeee74b0283dd69f3b6d60fa9d70ebb96c93a4fc1840c213557da33139"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/src/device_runtime/__init__.py",
+      "destination": "packages/device-runtime/src/device_runtime/__init__.py",
+      "source_sha256": "d008d1a1775f67b8e674a0c0758213d4258e1104eae03d72e46b15dbfe415137"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/src/device_runtime/bundle.py",
+      "destination": "packages/device-runtime/src/device_runtime/bundle.py",
+      "source_sha256": "303ef28a7c8a170909aeda22e226d0c6ad63ec3d2942c01911d6838cc44d4836"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/src/device_runtime/cli.py",
+      "destination": "packages/device-runtime/src/device_runtime/cli.py",
+      "source_sha256": "34dddca44255ba490f0c9ae5e66795485a275e74a54423fe337ad9a68d4f508e"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/src/device_runtime/client.py",
+      "destination": "packages/device-runtime/src/device_runtime/client.py",
+      "source_sha256": "9e1413c7ee8de7350f8922fec527e29e521a9991df5234b1b85ac39295e7f174"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/src/device_runtime/dependencies.py",
+      "destination": "packages/device-runtime/src/device_runtime/dependencies.py",
+      "source_sha256": "318dd6af24784059df30a0ceb6ae9325d6428dd0f56d68cb00f17dd22405d6fc"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/src/device_runtime/executor.py",
+      "destination": "packages/device-runtime/src/device_runtime/executor.py",
+      "source_sha256": "5c5e8bb79217f6ba8accc279fd23f352aebf499a348f61fb13632180e365d595"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/src/device_runtime/http_client.py",
+      "destination": "packages/device-runtime/src/device_runtime/http_client.py",
+      "source_sha256": "59f9d01cf72a20d4b412eaf07eed2188d636b4b8eecf6d96495891575cf820b8"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/src/device_runtime/installation.py",
+      "destination": "packages/device-runtime/src/device_runtime/installation.py",
+      "source_sha256": "f7c15675e318d615e8303d73ee52ca990bb309940c4295fa52be5f43761156d7"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/src/device_runtime/journal.py",
+      "destination": "packages/device-runtime/src/device_runtime/journal.py",
+      "source_sha256": "b4cb9b25729a7cd601922a78ce07067b5783a59d18c71e72de2166fbaec209cf"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/src/device_runtime/lifecycle.py",
+      "destination": "packages/device-runtime/src/device_runtime/lifecycle.py",
+      "source_sha256": "baffc9519cdbe81a792ed6caa0234a84cb8d80076537ecaff62d3bbccb39a2f9"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/src/device_runtime/limits.py",
+      "destination": "packages/device-runtime/src/device_runtime/limits.py",
+      "source_sha256": "75ad4128ea21ee74b94b223ef106ac3008707c0f10aab7216c80339beaffb8bd"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/src/device_runtime/mcp_server.py",
+      "destination": "packages/device-runtime/src/device_runtime/mcp_server.py",
+      "source_sha256": "dae5b46179e1706b3ae2221a4b5642ea756f54369f1237fbf29499eac1a7e036"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/src/device_runtime/operations_cli.py",
+      "destination": "packages/device-runtime/src/device_runtime/operations_cli.py",
+      "source_sha256": "76715a11d6b5c8d1af423e3795826b7d754f1bdad5c14d7d5047ea402ae6bb89"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/src/device_runtime/protocol.py",
+      "destination": "packages/device-runtime/src/device_runtime/protocol.py",
+      "source_sha256": "0e7ece2bdf6657e9bb0d0abbee0ba4516e462e37acd4a4ad716853f52712a1d3"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/src/device_runtime/server.py",
+      "destination": "packages/device-runtime/src/device_runtime/server.py",
+      "source_sha256": "85eefe26a7e31d78f8e077fa025034c976a70623eb187b4f0a55fe227838bf50"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/src/device_runtime/service.py",
+      "destination": "packages/device-runtime/src/device_runtime/service.py",
+      "source_sha256": "b3f0a5eb77620ec52f74f8442a72c36bdb532741e33882ed6e40b95b2d5034c4"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/src/device_runtime/tasks.py",
+      "destination": "packages/device-runtime/src/device_runtime/tasks.py",
+      "source_sha256": "e26717e50105d6155494edd9e2e3295af88d4342af634a5fe94fd8f0ab470803"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/src/device_runtime/version.py",
+      "destination": "packages/device-runtime/src/device_runtime/version.py",
+      "source_sha256": "4d05e2dd4eded75e8cf589eccacfb31c17bccdb0b48be195f84544a65a1aabb5"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/tests/conftest.py",
+      "destination": "packages/device-runtime/tests/conftest.py",
+      "source_sha256": "a960e133ef3cb4c5fd3a60c3de3a71083eb6a9e4e408326d7913ee114210faee"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/tests/test_bundle.py",
+      "destination": "packages/device-runtime/tests/test_bundle.py",
+      "source_sha256": "9db3d129c6fc7f80bd2d191ba82db812f08db455ddc46de428cdab43a0b9f4be"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/tests/test_cli.py",
+      "destination": "packages/device-runtime/tests/test_cli.py",
+      "source_sha256": "d06c089a21eb8cdb08fddd3d3d9fb091e15021d698fb681343426e0833ce346d"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/tests/test_client_lifecycle.py",
+      "destination": "packages/device-runtime/tests/test_client_lifecycle.py",
+      "source_sha256": "65a0e400ebeea7ea0c94dbec9560b494a532e0b21791b5b25b0a543dd244b339"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/tests/test_client_races.py",
+      "destination": "packages/device-runtime/tests/test_client_races.py",
+      "source_sha256": "2f8a5eee9b822bd19c127199b5b1ca91582f3b10cc42ab6e9b0389cf35ad55fa"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/tests/test_concurrency_config.py",
+      "destination": "packages/device-runtime/tests/test_concurrency_config.py",
+      "source_sha256": "bc59f2faa27b4290cdebacfd923810a80ece7c6e7455b7de267b64a6b790700e"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/tests/test_dependencies.py",
+      "destination": "packages/device-runtime/tests/test_dependencies.py",
+      "source_sha256": "e9bccd2ecfd000c58ad231ff311beb623b5eefd18af7e25baf3ae87af2e3fb6e"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/tests/test_execution_review_regressions.py",
+      "destination": "packages/device-runtime/tests/test_execution_review_regressions.py",
+      "source_sha256": "ef6ae92aebd877e628a0a9447439186a3bb168369a4f514e65b81be4ec88c2f6"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/tests/test_get_deadline.py",
+      "destination": "packages/device-runtime/tests/test_get_deadline.py",
+      "source_sha256": "0f5de82e773de66bc622fbbd4431e3fe69bbce602e9c71fd594387fa9b43ba51"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/tests/test_get_deadline_integration.py",
+      "destination": "packages/device-runtime/tests/test_get_deadline_integration.py",
+      "source_sha256": "2a25e52923a4e9c91422bb372b867f299fdf4b5cf0e77670b89af0c9033b2564"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/tests/test_http_client.py",
+      "destination": "packages/device-runtime/tests/test_http_client.py",
+      "source_sha256": "a60cb60e80c3cd59c5608033835d2b07c2ba7032a005e1857349842b65377bef"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/tests/test_images.py",
+      "destination": "packages/device-runtime/tests/test_images.py",
+      "source_sha256": "55261ac7036533c79b8252dd75e1f87e0012e91d5e98c7b5a4312dc6b8451e3d"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/tests/test_installation.py",
+      "destination": "packages/device-runtime/tests/test_installation.py",
+      "source_sha256": "4fdf639723ee0fc517c6a25fc6ffaab518c995084ce595bd1f1e5b0b7dd3a2fe"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/tests/test_instance_lifecycle.py",
+      "destination": "packages/device-runtime/tests/test_instance_lifecycle.py",
+      "source_sha256": "278420fcdb23cc4ccd7397f45acd4acafd705ba46c356c6fa1e4bfc57f52ee74"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/tests/test_journal_protocol.py",
+      "destination": "packages/device-runtime/tests/test_journal_protocol.py",
+      "source_sha256": "34b71da8f16869d3694b7517dd1398c2ca83f29a0f16ae783fca389dce2b06ea"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/tests/test_linux_delivery.py",
+      "destination": "packages/device-runtime/tests/test_linux_delivery.py",
+      "source_sha256": "8edaef52dc07c1da5765270751d4ca502d3809793e76db1cbef8d224c86fb7f6"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/tests/test_mcp_stdio.py",
+      "destination": "packages/device-runtime/tests/test_mcp_stdio.py",
+      "source_sha256": "ac4a7673ec04fc178a30a47b0a72651cb58b926c122d1afcf2d3476bcc58f9de"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/tests/test_operations_cli.py",
+      "destination": "packages/device-runtime/tests/test_operations_cli.py",
+      "source_sha256": "0ced2a45c367f7b166f1cdac539cb6bce78df99e6cdd2fc5d22dd41399aefb9a"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/tests/test_phase1.py",
+      "destination": "packages/device-runtime/tests/test_phase1.py",
+      "source_sha256": "6976136451baed0af47a154d08cb887b377abf3153c8d4ebd456788fbef76f5d"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/tests/test_service.py",
+      "destination": "packages/device-runtime/tests/test_service.py",
+      "source_sha256": "2a12a37f099a59cf77015d9b8a68a2672e49afec06e8345ca543f74962937a0e"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/tests/test_tasks.py",
+      "destination": "packages/device-runtime/tests/test_tasks.py",
+      "source_sha256": "eb743c3cb8844100aa769d9c38ed57820de2d39a42dd6af84ee129939d02a059"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/tests/test_tasks_mcp.py",
+      "destination": "packages/device-runtime/tests/test_tasks_mcp.py",
+      "source_sha256": "9af955bf41557e20b14e4a38c7bcd08e162f0a386e6c85cc93d1ed5b22be1a60"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/tests/test_unified_execution.py",
+      "destination": "packages/device-runtime/tests/test_unified_execution.py",
+      "source_sha256": "8978658241d9b73822870933918209a369afbfd775487bc320dee5aec8d70bb7"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/tests/test_version.py",
+      "destination": "packages/device-runtime/tests/test_version.py",
+      "source_sha256": "a7729bf0fe8e9e44730dde8ec588b84806b129e9a7fbf7f97927ee94da734972"
+    },
+    {
+      "package": "device-runtime",
+      "source_repository": "ai-assistant",
+      "source_commit": "1cf2551f191312bf2a7d132bf8e678920e5e6705",
+      "source_path": "packages/device-runtime/tests/test_websocket.py",
+      "destination": "packages/device-runtime/tests/test_websocket.py",
+      "source_sha256": "b4edb65a4a1fd81971d0781ac3f0bac73d071d445e08f1020226d94385ce183d"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+[project]
+license = "MIT"
+license-files = ["LICENSE"]
+name = "ai-device-fs"
+version = "0.2.0"
+description = "MCP filesystem server using FastMCP"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pillow>=12.3.0",
+]
+
+[project.optional-dependencies]
+mcp = [
+    "fastmcp>=3.1.0,<4",
+    "pydantic>=2.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+mcp-server-fs = "mcp_server_fs.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["mcp_server_fs"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"main.py" = "main.py"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
+]

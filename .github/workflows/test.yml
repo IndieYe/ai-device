@@ -1,0 +1,33 @@
+name: Test and build
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.10.9'
+      - run: uv sync --python 3.13 --locked --all-packages --all-extras --group dev
+      - run: uv run --no-sync ruff check scripts/verify_artifacts.py
+      - name: Package tests (separate pytest configurations)
+        shell: bash
+        run: |
+          for package in bash fs device-runtime; do
+            (cd packages/$package && ../../.venv/bin/python -m pytest -q) || exit $?
+          done
+      - run: uv build --all-packages
+      - run: uv run --no-sync python scripts/verify_artifacts.py --fs-python 3.10
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verification-${{ matrix.os }}
+          path: |
+            dist/
+            artifacts/

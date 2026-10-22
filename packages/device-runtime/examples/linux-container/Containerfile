@@ -1,0 +1,10 @@
+FROM ghcr.io/astral-sh/uv:0.10.9 AS uv
+FROM docker.io/library/ubuntu:24.04
+COPY --from=uv /uv /usr/local/bin/uv
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+ENV UV_PYTHON_INSTALL_DIR=/opt/python
+ENV UV_CACHE_DIR=/home/device/.cache/uv
+RUN uv python install 3.13 && ln -s "$(uv python find 3.13)" /usr/local/bin/python3 && useradd --create-home --uid 10001 --shell /bin/bash device && mkdir /work && chown -R device:device /work /home/device && chmod -R a+rX /opt/python
+USER device
+WORKDIR /work
+CMD ["/bin/bash"]
