@@ -1,0 +1,10 @@
+{
+  "python": "3.13",
+  "fs_python": "3.10",
+  "rebuilt_wheels": {
+    "ai_device_bash-0.2.0-py3-none-any.whl": "ed677f1a99ae5e36b0faf2265cc76cea8fe35fe2af10d84d7c88a29254d8f9ff",
+    "ai_device-0.2.2-py3-none-any.whl": "e7cfc0c216da186b95ef91f40ed239778439ee0de6e3ba0d77bb3f772c5da3a6",
+    "ai_device_fs-0.2.0-py3-none-any.whl": "20a3781fadb824d8626ad82d169de260455b9ed6ad59f0c470db79768f3bc102"
+  },
+  "scope": "sdist rebuild, isolated base/MCP imports, installed-wheel Device full tests; no real deployment"
+}

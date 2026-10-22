@@ -17,7 +17,7 @@ container build --cpus 2 --memory 2G --platform linux/arm64 \
 
 ```text
 <delivery>/
-├── wheels/ai_device-0.2.0-py3-none-any.whl
+├── wheels/ai_device-0.2.2-py3-none-any.whl
 ├── linux-bundle/          # 原版本，target linux、仅client角色
 └── linux-upgrade-bundle/  # 独立release_version，已验证的同Device状态版本
 ```

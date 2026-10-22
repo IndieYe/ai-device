@@ -31,6 +31,7 @@ Bash/FS 的 MCP 服务使用各自的 `[mcp]` extra；Device extras 为 client�
 
 - [需求和验收](doc/requirements/ai-device-monorepo-migration.md)
 - [实施状态与验证边界](docs/implementation-status.md)
+- [阶段C验收矩阵](docs/stage-c-acceptance.md)
 - [来源文件清单](docs/source-manifest.json)
 - [Device 使用](packages/device-runtime/README.md)
 - [Bash 使用](packages/bash/README.md)

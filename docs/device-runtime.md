@@ -1,5 +1,7 @@
 # 设备执行 Runtime 与中心 Device MCP
 
+> 三包迁移说明：本文保留来源项目的历史交付与验收记录，不代表新仓本次已完成相同平台验收。新包名称和当前支持范围以 [阶段C验收](stage-c-acceptance.md) 为准；AI 助手专属配置留在宿主仓库。
+
 ## 运行版本查询（0.2.1 起）
 
 Device 中心、客户端、操作 CLI 与 MCP 使用同一个组件版本来源
@@ -82,7 +84,7 @@ MCP `run_argv` 参数与严格设备协议保持一致：`timeout` 为整数1–
 
 准确 Device 包的 `ops` extra 提供 `device-runtime ops`，直接访问中心 HTTP API，覆盖当前 12 个 MCP 工具对应的操作，不依赖 MCP SDK、不导入设备执行器。现有 `server/client/bundle/instance` 命令不变，部署实例角色与稳定启动入口不变；操作 CLI 可在已安装 MCP 依赖的环境直接使用，或单独安装准确 wheel 的 `[ops]`。
 
-通过环境 `DEVICE_RUNTIME_API_URL` / `DEVICE_RUNTIME_ADMIN_TOKEN` 连接；`--server-url` / `--token-env` 位于操作子命令之前，后者只指定环境变量名称，不传 Token 值。远程使用 HTTPS，loopback 可用 HTTP。操作列表、参数、JSON 契约、退出码及可复制示例见[包说明](../../packages/device-runtime/README.md#中心操作-cli可选)。
+通过环境 `DEVICE_RUNTIME_API_URL` / `DEVICE_RUNTIME_ADMIN_TOKEN` 连接；`--server-url` / `--token-env` 位于操作子命令之前，后者只指定环境变量名称，不传 Token 值。远程使用 HTTPS，loopback 可用 HTTP。操作列表、参数、JSON 契约、退出码及可复制示例见[包说明](../packages/device-runtime/README.md#中心操作-cli可选)。
 
 CLI stdout 默认单 JSON 对象 `ok/code/data`，所有动作保持稳定操作 ID 与设备归属，未完成返回退出码 5，结果未知返回 6，不自动重试或换 ID。执行结果以 `result.data.state` 与 `exit_code` 为准。图片默认保留 Base64，也可显式 `--save-image` 保存到不存在的本地目标；设备路径与本地输入/输出路径明确区分。CLI 调用中断或本地图片保存失败不会取消或重放远程操作。
 

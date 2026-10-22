@@ -1,0 +1,616 @@
+{
+  "kind": "local_candidate_not_published",
+  "source_commit_before_evidence": "71bf0aa9b117d58ad226ac96583245ead87fdc67",
+  "identity_note": "Source file hashes, lock and artifact hashes define this candidate; commit predates evidence and may have working-tree changes. Device build_id excludes Bash/FS.",
+  "python": "3.13.12 (main, Mar  3 2026, 15:32:44) [Clang 21.1.4 ]",
+  "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+  "uv_lock_sha256": "6808b14421213d5ca392535fc3a42b91c3c8152c537ff173321dc2d55a50db37",
+  "artifacts": [
+    {
+      "file": "ai_device-0.2.2-py3-none-any.whl",
+      "sha256": "e7cfc0c216da186b95ef91f40ed239778439ee0de6e3ba0d77bb3f772c5da3a6",
+      "size": 66863
+    },
+    {
+      "file": "ai_device-0.2.2.tar.gz",
+      "sha256": "d3bcdfca2f27220a9b3d4436e58429b9b20e882067444e0b8b5e633eee6aa13a",
+      "size": 134489
+    },
+    {
+      "file": "ai_device_bash-0.2.0-py3-none-any.whl",
+      "sha256": "ed677f1a99ae5e36b0faf2265cc76cea8fe35fe2af10d84d7c88a29254d8f9ff",
+      "size": 33034
+    },
+    {
+      "file": "ai_device_bash-0.2.0.tar.gz",
+      "sha256": "1b33c653d41a2f9ae70d90cd5a5f6073e1f1ca04b6c8f79496cc6a45a546f316",
+      "size": 71997
+    },
+    {
+      "file": "ai_device_fs-0.2.0-py3-none-any.whl",
+      "sha256": "20a3781fadb824d8626ad82d169de260455b9ed6ad59f0c470db79768f3bc102",
+      "size": 38007
+    },
+    {
+      "file": "ai_device_fs-0.2.0.tar.gz",
+      "sha256": "118fab8554bb86a4d6253037de06e63e8c07eb03dadf2199813ea99af1d09f20",
+      "size": 61511
+    }
+  ],
+  "wheel_python_source_matches": {
+    "ai_device-0.2.2-py3-none-any.whl": [
+      {
+        "wheel_path": "device_runtime/__init__.py",
+        "source_path": "packages/device-runtime/src/device_runtime/__init__.py",
+        "sha256": "d008d1a1775f67b8e674a0c0758213d4258e1104eae03d72e46b15dbfe415137"
+      },
+      {
+        "wheel_path": "device_runtime/bundle.py",
+        "source_path": "packages/device-runtime/src/device_runtime/bundle.py",
+        "sha256": "0e388bff1f22ac468f652ff66e3a037bbff2d942a2f986e3e7db3288c5f3247f"
+      },
+      {
+        "wheel_path": "device_runtime/cli.py",
+        "source_path": "packages/device-runtime/src/device_runtime/cli.py",
+        "sha256": "34dddca44255ba490f0c9ae5e66795485a275e74a54423fe337ad9a68d4f508e"
+      },
+      {
+        "wheel_path": "device_runtime/client.py",
+        "source_path": "packages/device-runtime/src/device_runtime/client.py",
+        "sha256": "9e1413c7ee8de7350f8922fec527e29e521a9991df5234b1b85ac39295e7f174"
+      },
+      {
+        "wheel_path": "device_runtime/dependencies.py",
+        "source_path": "packages/device-runtime/src/device_runtime/dependencies.py",
+        "sha256": "318dd6af24784059df30a0ceb6ae9325d6428dd0f56d68cb00f17dd22405d6fc"
+      },
+      {
+        "wheel_path": "device_runtime/executor.py",
+        "source_path": "packages/device-runtime/src/device_runtime/executor.py",
+        "sha256": "5c5e8bb79217f6ba8accc279fd23f352aebf499a348f61fb13632180e365d595"
+      },
+      {
+        "wheel_path": "device_runtime/http_client.py",
+        "source_path": "packages/device-runtime/src/device_runtime/http_client.py",
+        "sha256": "59f9d01cf72a20d4b412eaf07eed2188d636b4b8eecf6d96495891575cf820b8"
+      },
+      {
+        "wheel_path": "device_runtime/installation.py",
+        "source_path": "packages/device-runtime/src/device_runtime/installation.py",
+        "sha256": "4b64825107d9072c12ee9244af76efd491cdbd6c4393b7c27f484c858c2296d2"
+      },
+      {
+        "wheel_path": "device_runtime/journal.py",
+        "source_path": "packages/device-runtime/src/device_runtime/journal.py",
+        "sha256": "b4cb9b25729a7cd601922a78ce07067b5783a59d18c71e72de2166fbaec209cf"
+      },
+      {
+        "wheel_path": "device_runtime/lifecycle.py",
+        "source_path": "packages/device-runtime/src/device_runtime/lifecycle.py",
+        "sha256": "baffc9519cdbe81a792ed6caa0234a84cb8d80076537ecaff62d3bbccb39a2f9"
+      },
+      {
+        "wheel_path": "device_runtime/limits.py",
+        "source_path": "packages/device-runtime/src/device_runtime/limits.py",
+        "sha256": "75ad4128ea21ee74b94b223ef106ac3008707c0f10aab7216c80339beaffb8bd"
+      },
+      {
+        "wheel_path": "device_runtime/mcp_server.py",
+        "source_path": "packages/device-runtime/src/device_runtime/mcp_server.py",
+        "sha256": "dae5b46179e1706b3ae2221a4b5642ea756f54369f1237fbf29499eac1a7e036"
+      },
+      {
+        "wheel_path": "device_runtime/operations_cli.py",
+        "source_path": "packages/device-runtime/src/device_runtime/operations_cli.py",
+        "sha256": "76715a11d6b5c8d1af423e3795826b7d754f1bdad5c14d7d5047ea402ae6bb89"
+      },
+      {
+        "wheel_path": "device_runtime/protocol.py",
+        "source_path": "packages/device-runtime/src/device_runtime/protocol.py",
+        "sha256": "0e7ece2bdf6657e9bb0d0abbee0ba4516e462e37acd4a4ad716853f52712a1d3"
+      },
+      {
+        "wheel_path": "device_runtime/server.py",
+        "source_path": "packages/device-runtime/src/device_runtime/server.py",
+        "sha256": "85eefe26a7e31d78f8e077fa025034c976a70623eb187b4f0a55fe227838bf50"
+      },
+      {
+        "wheel_path": "device_runtime/service.py",
+        "source_path": "packages/device-runtime/src/device_runtime/service.py",
+        "sha256": "b3f0a5eb77620ec52f74f8442a72c36bdb532741e33882ed6e40b95b2d5034c4"
+      },
+      {
+        "wheel_path": "device_runtime/tasks.py",
+        "source_path": "packages/device-runtime/src/device_runtime/tasks.py",
+        "sha256": "e26717e50105d6155494edd9e2e3295af88d4342af634a5fe94fd8f0ab470803"
+      },
+      {
+        "wheel_path": "device_runtime/version.py",
+        "source_path": "packages/device-runtime/src/device_runtime/version.py",
+        "sha256": "4d05e2dd4eded75e8cf589eccacfb31c17bccdb0b48be195f84544a65a1aabb5"
+      }
+    ],
+    "ai_device_bash-0.2.0-py3-none-any.whl": [
+      {
+        "wheel_path": "mcp_server_bash/__init__.py",
+        "source_path": "packages/bash/src/mcp_server_bash/__init__.py",
+        "sha256": "031efb1ab358ff100b8140533b890c0b25197d26ee6e2a74ff7f2e9c1d614066"
+      },
+      {
+        "wheel_path": "mcp_server_bash/__main__.py",
+        "source_path": "packages/bash/src/mcp_server_bash/__main__.py",
+        "sha256": "2cdd23d4f5cd6c3b3e4cb690ad16d560637767b9ca5b2a3cf129fcc0a5ebc82b"
+      },
+      {
+        "wheel_path": "mcp_server_bash/artifacts.py",
+        "source_path": "packages/bash/src/mcp_server_bash/artifacts.py",
+        "sha256": "a080be5d93d9602f07d4d9be7f1eb60742cc81308737ec474d7df55b64fd6e2a"
+      },
+      {
+        "wheel_path": "mcp_server_bash/cli.py",
+        "source_path": "packages/bash/src/mcp_server_bash/cli.py",
+        "sha256": "73cca24bf4e2d0d4a5b524f34e91520adab75ba583c562c2a542a43ae8c2714f"
+      },
+      {
+        "wheel_path": "mcp_server_bash/config.py",
+        "source_path": "packages/bash/src/mcp_server_bash/config.py",
+        "sha256": "8d2efc99cd23d1c34efa9e1bbb4cd5224c7ad0c791dbcd8be22dc5680a2292e4"
+      },
+      {
+        "wheel_path": "mcp_server_bash/core.py",
+        "source_path": "packages/bash/src/mcp_server_bash/core.py",
+        "sha256": "6a4f06848a07224de1774b3762bc2dd9a468b7317783af1771dbb2c23603ae79"
+      },
+      {
+        "wheel_path": "mcp_server_bash/models.py",
+        "source_path": "packages/bash/src/mcp_server_bash/models.py",
+        "sha256": "23095fb2af83ead889d68cde01cfb675cbfe7060fa8ad3e307c17d05bb5b4848"
+      },
+      {
+        "wheel_path": "mcp_server_bash/output_capture.py",
+        "source_path": "packages/bash/src/mcp_server_bash/output_capture.py",
+        "sha256": "74aa2d57bb58f2dcc9b986798b96434ace46d1a1286aed97b906c17659accb93"
+      },
+      {
+        "wheel_path": "mcp_server_bash/server.py",
+        "source_path": "packages/bash/src/mcp_server_bash/server.py",
+        "sha256": "d14f792defc14a31ad139d00cea4b566c7db6ada49e0e1caa4f441c511cae72e"
+      },
+      {
+        "wheel_path": "mcp_server_bash/shell.py",
+        "source_path": "packages/bash/src/mcp_server_bash/shell.py",
+        "sha256": "ae54599064f20c1f3ac55d9e76b3e6f18e9d6f7b541ae9317c8fdb2147a04ee7"
+      },
+      {
+        "wheel_path": "mcp_server_bash/tracking.py",
+        "source_path": "packages/bash/src/mcp_server_bash/tracking.py",
+        "sha256": "bff4f6221599bdfe5eb1a4d3277232bdf213f2d8e6225e49ce23118be48ae99c"
+      },
+      {
+        "wheel_path": "mcp_server_bash/backends/__init__.py",
+        "source_path": "packages/bash/src/mcp_server_bash/backends/__init__.py",
+        "sha256": "e3b9d2d9f0c6873ce4adb15fe530b4cf392ff01a927faaa25c195027f7d9c2f4"
+      },
+      {
+        "wheel_path": "mcp_server_bash/backends/local.py",
+        "source_path": "packages/bash/src/mcp_server_bash/backends/local.py",
+        "sha256": "0ad2b7d664de54c058700a5c5f79e8cbaa141c91940eeb84cb0ed21dbe0d037e"
+      }
+    ],
+    "ai_device_fs-0.2.0-py3-none-any.whl": [
+      {
+        "wheel_path": "mcp_server_fs/__init__.py",
+        "source_path": "packages/fs/mcp_server_fs/__init__.py",
+        "sha256": "8737fa8bccfd7ab96dce0f40cfca151877671625497aa09b29350f62d5054a93"
+      },
+      {
+        "wheel_path": "mcp_server_fs/__main__.py",
+        "source_path": "packages/fs/mcp_server_fs/__main__.py",
+        "sha256": "eedf03220492892e46a5b56906f0524c06e5907b1639d3717b787486a77a850b"
+      },
+      {
+        "wheel_path": "mcp_server_fs/cli.py",
+        "source_path": "packages/fs/mcp_server_fs/cli.py",
+        "sha256": "f28a00a50ec161898fe8b4a5f3378b0bffadb4e0fec29dc04c4600f640674e13"
+      },
+      {
+        "wheel_path": "mcp_server_fs/common.py",
+        "source_path": "packages/fs/mcp_server_fs/common.py",
+        "sha256": "e11632fd5db8ed560644fa849f0c785be0c03e6eee4224e52e6210e1bd41d122"
+      },
+      {
+        "wheel_path": "mcp_server_fs/config.py",
+        "source_path": "packages/fs/mcp_server_fs/config.py",
+        "sha256": "d8f2039ebba5d0d5362e9945cd2effb1fd7675dd5ee707d117cff57d93d2d70a"
+      },
+      {
+        "wheel_path": "mcp_server_fs/defaults.py",
+        "source_path": "packages/fs/mcp_server_fs/defaults.py",
+        "sha256": "975340717ee2f8326971ceae0b52e08f571b2d9d1a79a0fe0f4f06067aea3792"
+      },
+      {
+        "wheel_path": "mcp_server_fs/formatting.py",
+        "source_path": "packages/fs/mcp_server_fs/formatting.py",
+        "sha256": "6340259d2442baf4963d85ecc460c24d574f63bb395f6cda2fb678aa37522ed0"
+      },
+      {
+        "wheel_path": "mcp_server_fs/image_utils.py",
+        "source_path": "packages/fs/mcp_server_fs/image_utils.py",
+        "sha256": "c22af810071084f6fa1ea6be27b2207cb97bf092bfd1518107873ffbafdfbc66"
+      },
+      {
+        "wheel_path": "mcp_server_fs/io_utils.py",
+        "source_path": "packages/fs/mcp_server_fs/io_utils.py",
+        "sha256": "3c5880ba9c615589cfe339c6516fe501e94e978920c4157d8798afddb18586ec"
+      },
+      {
+        "wheel_path": "mcp_server_fs/path_utils.py",
+        "source_path": "packages/fs/mcp_server_fs/path_utils.py",
+        "sha256": "ac513d042642f4abf8a887b6aa3bebb01f486188731175d33d0bf053fbbd85c2"
+      },
+      {
+        "wheel_path": "mcp_server_fs/responses.py",
+        "source_path": "packages/fs/mcp_server_fs/responses.py",
+        "sha256": "d108970167fc075d42fefb155d87c027934d96a637b05a97082d9afc435277f6"
+      },
+      {
+        "wheel_path": "mcp_server_fs/server.py",
+        "source_path": "packages/fs/mcp_server_fs/server.py",
+        "sha256": "290f813b01e4cc5cd02220c79087808588d166842cc976606602add1d3c6df5e"
+      },
+      {
+        "wheel_path": "mcp_server_fs/core/__init__.py",
+        "source_path": "packages/fs/mcp_server_fs/core/__init__.py",
+        "sha256": "a244aea0240fec80190d109be9baba4b6faab85e6d43b2964247c6ed6c69b157"
+      },
+      {
+        "wheel_path": "mcp_server_fs/core/apply_patch.py",
+        "source_path": "packages/fs/mcp_server_fs/core/apply_patch.py",
+        "sha256": "73ff1536e383437410164ee42465034467a7cbe0ccd02dc5ff9b1af7e37594db"
+      },
+      {
+        "wheel_path": "mcp_server_fs/core/edit_file.py",
+        "source_path": "packages/fs/mcp_server_fs/core/edit_file.py",
+        "sha256": "cbef3b9718a2495a808609ea2b9391233b53c9608d59a07f452e935f198861c8"
+      },
+      {
+        "wheel_path": "mcp_server_fs/core/insert_file.py",
+        "source_path": "packages/fs/mcp_server_fs/core/insert_file.py",
+        "sha256": "75b4842d16f3279765e4794221ba12bc8d83877771db8840516262363cc00137"
+      },
+      {
+        "wheel_path": "mcp_server_fs/core/read_file.py",
+        "source_path": "packages/fs/mcp_server_fs/core/read_file.py",
+        "sha256": "dd9f473312022ef18e6dc0e49a5fa3a84538a1e911341af13f491257b3892137"
+      },
+      {
+        "wheel_path": "mcp_server_fs/core/read_image.py",
+        "source_path": "packages/fs/mcp_server_fs/core/read_image.py",
+        "sha256": "ec083551ec2b77f66725a018f565f568f69169566e26556f94a7401bef388b9e"
+      },
+      {
+        "wheel_path": "mcp_server_fs/core/results.py",
+        "source_path": "packages/fs/mcp_server_fs/core/results.py",
+        "sha256": "73c05bb7949085294dc00231287ccc23add10fd8b18be8a31620822c4361578c"
+      },
+      {
+        "wheel_path": "mcp_server_fs/core/write_file.py",
+        "source_path": "packages/fs/mcp_server_fs/core/write_file.py",
+        "sha256": "eb21f2bccaeeb5594f21cfda5d0f2f1bbe7828aae7b50d22d65c34e1a6a1d3ad"
+      },
+      {
+        "wheel_path": "mcp_server_fs/patch/__init__.py",
+        "source_path": "packages/fs/mcp_server_fs/patch/__init__.py",
+        "sha256": "14eae5f938c6a1e8f48273fc12ef3a4384ef7bc245370551c67a3b37577a69f8"
+      },
+      {
+        "wheel_path": "mcp_server_fs/patch/errors.py",
+        "source_path": "packages/fs/mcp_server_fs/patch/errors.py",
+        "sha256": "90f2ef31b1e06ce8485ca310fe37954a9200d04263eaa2d33fcdd008ca1f7ce4"
+      },
+      {
+        "wheel_path": "mcp_server_fs/patch/executor.py",
+        "source_path": "packages/fs/mcp_server_fs/patch/executor.py",
+        "sha256": "a111bc745cc6203fc600a14d91df17557b35aeb27ac87da5ceb90214a40b33c7"
+      },
+      {
+        "wheel_path": "mcp_server_fs/patch/models.py",
+        "source_path": "packages/fs/mcp_server_fs/patch/models.py",
+        "sha256": "925675bf76ed8bbfb7e1db2d5eb356b0bbe6fbffde65f7e1bd8fc0578001d2ba"
+      },
+      {
+        "wheel_path": "mcp_server_fs/patch/parser.py",
+        "source_path": "packages/fs/mcp_server_fs/patch/parser.py",
+        "sha256": "d6ff792a9945e464c737c6b4150968551c9d72cd04749304c5bdb06d54de7230"
+      },
+      {
+        "wheel_path": "mcp_server_fs/tools/__init__.py",
+        "source_path": "packages/fs/mcp_server_fs/tools/__init__.py",
+        "sha256": "60353cebb580da43071d191ea43be71639cd0cfe7e06347799d06e7a40682f31"
+      },
+      {
+        "wheel_path": "mcp_server_fs/tools/apply_patch.py",
+        "source_path": "packages/fs/mcp_server_fs/tools/apply_patch.py",
+        "sha256": "bad1c75548329eb8f365d176aecd63f0f96b5dc29d664cad40024daf58e26f46"
+      },
+      {
+        "wheel_path": "mcp_server_fs/tools/edit_file.py",
+        "source_path": "packages/fs/mcp_server_fs/tools/edit_file.py",
+        "sha256": "cc160875c3661c0c223626792d0fc09771e5cc0583d57a74170b5b3b6fa43317"
+      },
+      {
+        "wheel_path": "mcp_server_fs/tools/insert_file.py",
+        "source_path": "packages/fs/mcp_server_fs/tools/insert_file.py",
+        "sha256": "47e1177c717d5dad50c3578a6dc4aec8b4d0283c611560885c50ed2e95b3aee7"
+      },
+      {
+        "wheel_path": "mcp_server_fs/tools/read_file.py",
+        "source_path": "packages/fs/mcp_server_fs/tools/read_file.py",
+        "sha256": "60d21cc913fe91ef96b649a78e6fce5b096ab187e4f47a91fa951274ff609fc9"
+      },
+      {
+        "wheel_path": "mcp_server_fs/tools/read_image.py",
+        "source_path": "packages/fs/mcp_server_fs/tools/read_image.py",
+        "sha256": "fdbbf190ebdab83614a9a7479121c379f274328efd2c0775e554f6af35a2ee41"
+      },
+      {
+        "wheel_path": "mcp_server_fs/tools/results.py",
+        "source_path": "packages/fs/mcp_server_fs/tools/results.py",
+        "sha256": "764e8b123fbfdd4431f77c60d1943a11047585fb8c490ed607ceffc583086287"
+      },
+      {
+        "wheel_path": "mcp_server_fs/tools/write_file.py",
+        "source_path": "packages/fs/mcp_server_fs/tools/write_file.py",
+        "sha256": "7b2a325cf1e9c46d4bb0d72535ac70f72cfc0a1dcd1ee656e1b4b42a5166ee5f"
+      },
+      {
+        "wheel_path": "main.py",
+        "source_path": "packages/fs/main.py",
+        "sha256": "bdf4c3048cd78311415da7cefd1351cd1dd4df2259a534dfad2591ae195ae638"
+      }
+    ]
+  },
+  "package_source_files": {
+    "packages/bash/.env.example": "ad4762d6eda77923589b68612cc9a65d9c649cbeede4acd2ce2a4cb8dcf04d57",
+    "packages/bash/.gitignore": "315b13c521280f8ab183e966eb8db81a18d79cf2fe585196759362bf01feac07",
+    "packages/bash/.python-version": "02e735b3dfe1c32833eb550b7ff8ffa17f5f2bc3fa1e7bae61a8f5a3883ce398",
+    "packages/bash/LICENSE": "ff5bceffcb6ace1a050eff8680c262095e84ba755eb2cf2b560e7ae94ab65e7e",
+    "packages/bash/README.md": "3ab950d61daa11a53587e05588b43ef982c595eb8308eb08d3887bb3b8e7410a",
+    "packages/bash/docs/bash-execution-modes-requirements-design.md": "57a4ded91500ea1d1d471ef0ef6e1fb0ba1347449e3486394dd47c975743db9c",
+    "packages/bash/docs/core-test-evidence.md": "08789311469d619e3aefc6c37ab9e572558ced950ba12430076a48cae23bff3d",
+    "packages/bash/docs/remote-host-design.md": "e1f25d1c3c8c5c9f1b711c3fc4305fad5cb8670853ad193c665e142cc7f227c2",
+    "packages/bash/docs/usage-guide.md": "1b625dbc30b9f2e9a675ff4536fa85025e397c06cbead9c7620f089dc96ee1d9",
+    "packages/bash/pyproject.toml": "370fff7c41f810f479434a4d0b1dbea2ce614103e9e15f32e0d11dc4ecf0a4fd",
+    "packages/bash/src/mcp_server_bash/__init__.py": "031efb1ab358ff100b8140533b890c0b25197d26ee6e2a74ff7f2e9c1d614066",
+    "packages/bash/src/mcp_server_bash/__main__.py": "2cdd23d4f5cd6c3b3e4cb690ad16d560637767b9ca5b2a3cf129fcc0a5ebc82b",
+    "packages/bash/src/mcp_server_bash/artifacts.py": "a080be5d93d9602f07d4d9be7f1eb60742cc81308737ec474d7df55b64fd6e2a",
+    "packages/bash/src/mcp_server_bash/backends/__init__.py": "e3b9d2d9f0c6873ce4adb15fe530b4cf392ff01a927faaa25c195027f7d9c2f4",
+    "packages/bash/src/mcp_server_bash/backends/local.py": "0ad2b7d664de54c058700a5c5f79e8cbaa141c91940eeb84cb0ed21dbe0d037e",
+    "packages/bash/src/mcp_server_bash/cli.py": "73cca24bf4e2d0d4a5b524f34e91520adab75ba583c562c2a542a43ae8c2714f",
+    "packages/bash/src/mcp_server_bash/config.py": "8d2efc99cd23d1c34efa9e1bbb4cd5224c7ad0c791dbcd8be22dc5680a2292e4",
+    "packages/bash/src/mcp_server_bash/core.py": "6a4f06848a07224de1774b3762bc2dd9a468b7317783af1771dbb2c23603ae79",
+    "packages/bash/src/mcp_server_bash/models.py": "23095fb2af83ead889d68cde01cfb675cbfe7060fa8ad3e307c17d05bb5b4848",
+    "packages/bash/src/mcp_server_bash/output_capture.py": "74aa2d57bb58f2dcc9b986798b96434ace46d1a1286aed97b906c17659accb93",
+    "packages/bash/src/mcp_server_bash/server.py": "d14f792defc14a31ad139d00cea4b566c7db6ada49e0e1caa4f441c511cae72e",
+    "packages/bash/src/mcp_server_bash/shell.py": "ae54599064f20c1f3ac55d9e76b3e6f18e9d6f7b541ae9317c8fdb2147a04ee7",
+    "packages/bash/src/mcp_server_bash/tracking.py": "bff4f6221599bdfe5eb1a4d3277232bdf213f2d8e6225e49ce23118be48ae99c",
+    "packages/bash/tests/conftest.py": "65383d40565e27ac0ef01129f941d6dceae5b9ce6140ad14ea38330ed65bdcef",
+    "packages/bash/tests/core/test_background_output_limit.py": "fcb490c46bbb1cbaf930c3b9fc8bbc472a19da54b09073259fa37b62ea1649f0",
+    "packages/bash/tests/core/test_background_responsiveness.py": "a1ca4aed1bae7645fced9710ad6dc75bed6725f837996900795a88ca8bb03f3f",
+    "packages/bash/tests/core/test_concurrent_close.py": "b9efd877794f4f94139c4ea88f8be5dd54632a9b560ac053697c4ce375aa148b",
+    "packages/bash/tests/core/test_no_mcp_install.py": "bf03f0fd9726f4ad541a5e43a251bbda78ec9e58ada4046ea09850501b834b28",
+    "packages/bash/tests/core/test_prestart_cancellation.py": "fdc6b0ac9e6a6a543567cc72e25927330b1c2c14d9c8e3ee634ac22c4acdac39",
+    "packages/bash/tests/core/test_runtime.py": "f609eba28dc7a6e01d75b3aefbccc615bb54428f5fee9f5a2923da884fe7c3ea",
+    "packages/bash/tests/integration/test_local_only_protocol.py": "f1ed81b5ff3803220293d74cfe4d4be3f3ff84df8fecf432a738483281ce7422",
+    "packages/bash/tests/unit/test_artifacts_and_stdin.py": "e51d2beda54853e153d59c083727abb711bd871afe9e05e45e1f4866486f857f",
+    "packages/bash/tests/unit/test_caller_session_context.py": "41af659d7042c0ea731986b82c991dc98bd14131546f81b6f6e8a474b54f817c",
+    "packages/bash/tests/unit/test_output_retention.py": "122583f123f10ba5c4b7989795b08e4a9d3d083b4d8b3926cc27e4780b3677fe",
+    "packages/bash/tests/unit/test_purpose_summary.py": "020ae93a1e0383f8c59df18e75d47e966925464e12a5c5db9906f9bc0afaa033",
+    "packages/bash/tests/unit/test_run_command_bytes.py": "cbad567e9cb5123f9d73168935f188d6bdbf14002388d12079d9e2b770d3daca",
+    "packages/bash/tests/unit/test_run_tool.py": "46843186e8dd3d7e68313985d12e1bda90dbba7ac2d783a01de2c4020d66c7c0",
+    "packages/bash/tests/unit/test_script_tool.py": "60555c74f317a5c8a6ada7cd9ed6416c2b26b3ae1d4f5d8be9df3e2acf27df17",
+    "packages/bash/tests/unit/test_startup_logging.py": "67e81d987b242278df510f37a30147d764aa70d73884df7a8ebc38e1d3ea8c21",
+    "packages/bash/tests/unit/test_timeout_cancellation.py": "1bb7526984f608dc0241de1f21dae3711c72315ad9faa2633357014db9fe5837",
+    "packages/device-runtime/.gitignore": "0777dcb691a7d05e9a1e86f79a74e7b08dafb600a18a756af443ad3a64b9f80d",
+    "packages/device-runtime/LICENSE": "ff5bceffcb6ace1a050eff8680c262095e84ba755eb2cf2b560e7ae94ab65e7e",
+    "packages/device-runtime/README.md": "ecc610fd1cde45c9cdf42eb4d8bda0d0e230ec1d7ad4de2d9c2ab58def57c2e4",
+    "packages/device-runtime/examples/linux-container/Containerfile": "896805ced9956364f7909cfdd1caa4908e6c8664c9d756863d4080cc212149fa",
+    "packages/device-runtime/examples/linux-container/README.md": "091b66e1c225d86b330ed26ed9954655a26b6808ebe689b511219081675019da",
+    "packages/device-runtime/examples/linux-container/bootstrap.sh": "452b3862fe0af3e128aa59658e7fea9dd515d34ddb9558df3e7059f7e277b969",
+    "packages/device-runtime/examples/linux-container/live-acceptance.py": "d277a840d6d6bf9a5019c536a23636f11bdb823ffd5446affa35d1475b162f4f",
+    "packages/device-runtime/examples/linux-container/run-acceptance.py": "092e37a027d8eb4ffff83f82e458fe3e8d3b73ec8740cf0f7cea02707ddb70a3",
+    "packages/device-runtime/examples/mcp-servers.json": "adf93ad2503f82e97b4c3b235bab52a435834d1fc211eee1850d17e4c443f6e0",
+    "packages/device-runtime/pyproject.toml": "7d1dfc7b3baeac22e85f22f04543f4c1edd5d709279a32a01788e214f4a39e86",
+    "packages/device-runtime/scripts/accept-centos7.py": "9b4f753d6554bead8935dae1c68e6c9d2b24eb23b0816e84d12fb9e6ca7424b4",
+    "packages/device-runtime/scripts/build-centos7-dependencies.sh": "27a6e9b31d07657e393121a16e319f89e76e61f666a4cfdea2c62f2100cac913",
+    "packages/device-runtime/scripts/centos7-build-inside.sh": "2b6dc3dfc2e8cf179d140bfebdaa1d52ebbbaded64498344d1c44917034dd335",
+    "packages/device-runtime/scripts/manifest-dependencies.py": "e05f21a8b1d7450025f42a3edd4770281486b6e437881cc180233a1d113eb425",
+    "packages/device-runtime/scripts/verify-pillow.py": "93703ffeee74b0283dd69f3b6d60fa9d70ebb96c93a4fc1840c213557da33139",
+    "packages/device-runtime/src/device_runtime/__init__.py": "d008d1a1775f67b8e674a0c0758213d4258e1104eae03d72e46b15dbfe415137",
+    "packages/device-runtime/src/device_runtime/bundle.py": "0e388bff1f22ac468f652ff66e3a037bbff2d942a2f986e3e7db3288c5f3247f",
+    "packages/device-runtime/src/device_runtime/cli.py": "34dddca44255ba490f0c9ae5e66795485a275e74a54423fe337ad9a68d4f508e",
+    "packages/device-runtime/src/device_runtime/client.py": "9e1413c7ee8de7350f8922fec527e29e521a9991df5234b1b85ac39295e7f174",
+    "packages/device-runtime/src/device_runtime/dependencies.py": "318dd6af24784059df30a0ceb6ae9325d6428dd0f56d68cb00f17dd22405d6fc",
+    "packages/device-runtime/src/device_runtime/executor.py": "5c5e8bb79217f6ba8accc279fd23f352aebf499a348f61fb13632180e365d595",
+    "packages/device-runtime/src/device_runtime/http_client.py": "59f9d01cf72a20d4b412eaf07eed2188d636b4b8eecf6d96495891575cf820b8",
+    "packages/device-runtime/src/device_runtime/installation.py": "4b64825107d9072c12ee9244af76efd491cdbd6c4393b7c27f484c858c2296d2",
+    "packages/device-runtime/src/device_runtime/journal.py": "b4cb9b25729a7cd601922a78ce07067b5783a59d18c71e72de2166fbaec209cf",
+    "packages/device-runtime/src/device_runtime/lifecycle.py": "baffc9519cdbe81a792ed6caa0234a84cb8d80076537ecaff62d3bbccb39a2f9",
+    "packages/device-runtime/src/device_runtime/limits.py": "75ad4128ea21ee74b94b223ef106ac3008707c0f10aab7216c80339beaffb8bd",
+    "packages/device-runtime/src/device_runtime/mcp_server.py": "dae5b46179e1706b3ae2221a4b5642ea756f54369f1237fbf29499eac1a7e036",
+    "packages/device-runtime/src/device_runtime/operations_cli.py": "76715a11d6b5c8d1af423e3795826b7d754f1bdad5c14d7d5047ea402ae6bb89",
+    "packages/device-runtime/src/device_runtime/protocol.py": "0e7ece2bdf6657e9bb0d0abbee0ba4516e462e37acd4a4ad716853f52712a1d3",
+    "packages/device-runtime/src/device_runtime/server.py": "85eefe26a7e31d78f8e077fa025034c976a70623eb187b4f0a55fe227838bf50",
+    "packages/device-runtime/src/device_runtime/service.py": "b3f0a5eb77620ec52f74f8442a72c36bdb532741e33882ed6e40b95b2d5034c4",
+    "packages/device-runtime/src/device_runtime/tasks.py": "e26717e50105d6155494edd9e2e3295af88d4342af634a5fe94fd8f0ab470803",
+    "packages/device-runtime/src/device_runtime/version.py": "4d05e2dd4eded75e8cf589eccacfb31c17bccdb0b48be195f84544a65a1aabb5",
+    "packages/device-runtime/tests/conftest.py": "a960e133ef3cb4c5fd3a60c3de3a71083eb6a9e4e408326d7913ee114210faee",
+    "packages/device-runtime/tests/test_bundle.py": "3646c9e08502f73a0681a042376446a19379cdf3060ac92af829dbbcc06f3040",
+    "packages/device-runtime/tests/test_cli.py": "d06c089a21eb8cdb08fddd3d3d9fb091e15021d698fb681343426e0833ce346d",
+    "packages/device-runtime/tests/test_client_lifecycle.py": "65a0e400ebeea7ea0c94dbec9560b494a532e0b21791b5b25b0a543dd244b339",
+    "packages/device-runtime/tests/test_client_races.py": "2f8a5eee9b822bd19c127199b5b1ca91582f3b10cc42ab6e9b0389cf35ad55fa",
+    "packages/device-runtime/tests/test_concurrency_config.py": "bc59f2faa27b4290cdebacfd923810a80ece7c6e7455b7de267b64a6b790700e",
+    "packages/device-runtime/tests/test_dependencies.py": "e9bccd2ecfd000c58ad231ff311beb623b5eefd18af7e25baf3ae87af2e3fb6e",
+    "packages/device-runtime/tests/test_execution_review_regressions.py": "ef6ae92aebd877e628a0a9447439186a3bb168369a4f514e65b81be4ec88c2f6",
+    "packages/device-runtime/tests/test_get_deadline.py": "0f5de82e773de66bc622fbbd4431e3fe69bbce602e9c71fd594387fa9b43ba51",
+    "packages/device-runtime/tests/test_get_deadline_integration.py": "2a25e52923a4e9c91422bb372b867f299fdf4b5cf0e77670b89af0c9033b2564",
+    "packages/device-runtime/tests/test_http_client.py": "a60cb60e80c3cd59c5608033835d2b07c2ba7032a005e1857349842b65377bef",
+    "packages/device-runtime/tests/test_images.py": "55261ac7036533c79b8252dd75e1f87e0012e91d5e98c7b5a4312dc6b8451e3d",
+    "packages/device-runtime/tests/test_installation.py": "6da85ce8a7fb6cd94e45d1a1cfb536b70afdd2a31066618561c927d2716c47e9",
+    "packages/device-runtime/tests/test_instance_lifecycle.py": "278420fcdb23cc4ccd7397f45acd4acafd705ba46c356c6fa1e4bfc57f52ee74",
+    "packages/device-runtime/tests/test_journal_protocol.py": "34b71da8f16869d3694b7517dd1398c2ca83f29a0f16ae783fca389dce2b06ea",
+    "packages/device-runtime/tests/test_linux_delivery.py": "8edaef52dc07c1da5765270751d4ca502d3809793e76db1cbef8d224c86fb7f6",
+    "packages/device-runtime/tests/test_mcp_stdio.py": "ac4a7673ec04fc178a30a47b0a72651cb58b926c122d1afcf2d3476bcc58f9de",
+    "packages/device-runtime/tests/test_operations_cli.py": "0ced2a45c367f7b166f1cdac539cb6bce78df99e6cdd2fc5d22dd41399aefb9a",
+    "packages/device-runtime/tests/test_phase1.py": "6976136451baed0af47a154d08cb887b377abf3153c8d4ebd456788fbef76f5d",
+    "packages/device-runtime/tests/test_service.py": "2a12a37f099a59cf77015d9b8a68a2672e49afec06e8345ca543f74962937a0e",
+    "packages/device-runtime/tests/test_tasks.py": "eb743c3cb8844100aa769d9c38ed57820de2d39a42dd6af84ee129939d02a059",
+    "packages/device-runtime/tests/test_tasks_mcp.py": "9af955bf41557e20b14e4a38c7bcd08e162f0a386e6c85cc93d1ed5b22be1a60",
+    "packages/device-runtime/tests/test_unified_execution.py": "8978658241d9b73822870933918209a369afbfd775487bc320dee5aec8d70bb7",
+    "packages/device-runtime/tests/test_version.py": "a7729bf0fe8e9e44730dde8ec588b84806b129e9a7fbf7f97927ee94da734972",
+    "packages/device-runtime/tests/test_websocket.py": "b4edb65a4a1fd81971d0781ac3f0bac73d071d445e08f1020226d94385ce183d",
+    "packages/fs/.env.example": "fe46d8f3c18a861e3645f431aee5e4c84b9e4ba4ab79a226c4d8ff2ae12ffc58",
+    "packages/fs/.gitignore": "478f2169af764fa986cf53b3d5e5a5d0278a5da554f89887d3d703333a023bd8",
+    "packages/fs/LICENSE": "ff5bceffcb6ace1a050eff8680c262095e84ba755eb2cf2b560e7ae94ab65e7e",
+    "packages/fs/README.md": "d5f38f368d3356e32086577884b8484ea2b957a52969e0c94873e841972041f3",
+    "packages/fs/docs/READ_IMAGE_END_TO_END_WORK_PLAN.md": "bd13e6c34f9aac4f5d6d57677711c0d4bf31fb88381b47ef77f3144931938383",
+    "packages/fs/docs/REMOTE_HOST_DESIGN.md": "b8aba186f63025459cd3e5c268cbdeb2d4503813517564bff7d2c4bdd9f67a76",
+    "packages/fs/docs/usage-guide.md": "20d4cf47b4a9ff269243b94f9f5ad1a7948648cf41256dc3fdbc2380e0884968",
+    "packages/fs/main.py": "bdf4c3048cd78311415da7cefd1351cd1dd4df2259a534dfad2591ae195ae638",
+    "packages/fs/mcp_server_fs/__init__.py": "8737fa8bccfd7ab96dce0f40cfca151877671625497aa09b29350f62d5054a93",
+    "packages/fs/mcp_server_fs/__main__.py": "eedf03220492892e46a5b56906f0524c06e5907b1639d3717b787486a77a850b",
+    "packages/fs/mcp_server_fs/cli.py": "f28a00a50ec161898fe8b4a5f3378b0bffadb4e0fec29dc04c4600f640674e13",
+    "packages/fs/mcp_server_fs/common.py": "e11632fd5db8ed560644fa849f0c785be0c03e6eee4224e52e6210e1bd41d122",
+    "packages/fs/mcp_server_fs/config.py": "d8f2039ebba5d0d5362e9945cd2effb1fd7675dd5ee707d117cff57d93d2d70a",
+    "packages/fs/mcp_server_fs/core/__init__.py": "a244aea0240fec80190d109be9baba4b6faab85e6d43b2964247c6ed6c69b157",
+    "packages/fs/mcp_server_fs/core/apply_patch.py": "73ff1536e383437410164ee42465034467a7cbe0ccd02dc5ff9b1af7e37594db",
+    "packages/fs/mcp_server_fs/core/edit_file.py": "cbef3b9718a2495a808609ea2b9391233b53c9608d59a07f452e935f198861c8",
+    "packages/fs/mcp_server_fs/core/insert_file.py": "75b4842d16f3279765e4794221ba12bc8d83877771db8840516262363cc00137",
+    "packages/fs/mcp_server_fs/core/read_file.py": "dd9f473312022ef18e6dc0e49a5fa3a84538a1e911341af13f491257b3892137",
+    "packages/fs/mcp_server_fs/core/read_image.py": "ec083551ec2b77f66725a018f565f568f69169566e26556f94a7401bef388b9e",
+    "packages/fs/mcp_server_fs/core/results.py": "73c05bb7949085294dc00231287ccc23add10fd8b18be8a31620822c4361578c",
+    "packages/fs/mcp_server_fs/core/write_file.py": "eb21f2bccaeeb5594f21cfda5d0f2f1bbe7828aae7b50d22d65c34e1a6a1d3ad",
+    "packages/fs/mcp_server_fs/defaults.py": "975340717ee2f8326971ceae0b52e08f571b2d9d1a79a0fe0f4f06067aea3792",
+    "packages/fs/mcp_server_fs/formatting.py": "6340259d2442baf4963d85ecc460c24d574f63bb395f6cda2fb678aa37522ed0",
+    "packages/fs/mcp_server_fs/image_utils.py": "c22af810071084f6fa1ea6be27b2207cb97bf092bfd1518107873ffbafdfbc66",
+    "packages/fs/mcp_server_fs/io_utils.py": "3c5880ba9c615589cfe339c6516fe501e94e978920c4157d8798afddb18586ec",
+    "packages/fs/mcp_server_fs/patch/__init__.py": "14eae5f938c6a1e8f48273fc12ef3a4384ef7bc245370551c67a3b37577a69f8",
+    "packages/fs/mcp_server_fs/patch/errors.py": "90f2ef31b1e06ce8485ca310fe37954a9200d04263eaa2d33fcdd008ca1f7ce4",
+    "packages/fs/mcp_server_fs/patch/executor.py": "a111bc745cc6203fc600a14d91df17557b35aeb27ac87da5ceb90214a40b33c7",
+    "packages/fs/mcp_server_fs/patch/models.py": "925675bf76ed8bbfb7e1db2d5eb356b0bbe6fbffde65f7e1bd8fc0578001d2ba",
+    "packages/fs/mcp_server_fs/patch/parser.py": "d6ff792a9945e464c737c6b4150968551c9d72cd04749304c5bdb06d54de7230",
+    "packages/fs/mcp_server_fs/path_utils.py": "ac513d042642f4abf8a887b6aa3bebb01f486188731175d33d0bf053fbbd85c2",
+    "packages/fs/mcp_server_fs/responses.py": "d108970167fc075d42fefb155d87c027934d96a637b05a97082d9afc435277f6",
+    "packages/fs/mcp_server_fs/server.py": "290f813b01e4cc5cd02220c79087808588d166842cc976606602add1d3c6df5e",
+    "packages/fs/mcp_server_fs/tools/__init__.py": "60353cebb580da43071d191ea43be71639cd0cfe7e06347799d06e7a40682f31",
+    "packages/fs/mcp_server_fs/tools/apply_patch.py": "bad1c75548329eb8f365d176aecd63f0f96b5dc29d664cad40024daf58e26f46",
+    "packages/fs/mcp_server_fs/tools/edit_file.py": "cc160875c3661c0c223626792d0fc09771e5cc0583d57a74170b5b3b6fa43317",
+    "packages/fs/mcp_server_fs/tools/insert_file.py": "47e1177c717d5dad50c3578a6dc4aec8b4d0283c611560885c50ed2e95b3aee7",
+    "packages/fs/mcp_server_fs/tools/read_file.py": "60d21cc913fe91ef96b649a78e6fce5b096ab187e4f47a91fa951274ff609fc9",
+    "packages/fs/mcp_server_fs/tools/read_image.py": "fdbbf190ebdab83614a9a7479121c379f274328efd2c0775e554f6af35a2ee41",
+    "packages/fs/mcp_server_fs/tools/results.py": "764e8b123fbfdd4431f77c60d1943a11047585fb8c490ed607ceffc583086287",
+    "packages/fs/mcp_server_fs/tools/write_file.py": "7b2a325cf1e9c46d4bb0d72535ac70f72cfc0a1dcd1ee656e1b4b42a5166ee5f",
+    "packages/fs/pyproject.toml": "8846494ff105cc861b354697d9d5aff41b97f603c736610efe8e1611e155f6ee",
+    "packages/fs/scripts/inspector.sh": "a60f16cce78aa2dc39c2e2a1fa436c0a0e425e27c1519d956daca24246607726",
+    "packages/fs/tests/__init__.py": "3e7ed72d917590c5b2f457b9d9f5d014c48fa455e9303862e1bf57849d522da1",
+    "packages/fs/tests/core/test_edit_file_schema.py": "9d9c15dd268149c473ebf19c1791ee6a7462e37e175a9a2b564dd408f4a5aded",
+    "packages/fs/tests/core/test_local_only_contract.py": "b790c7e4cb3a51013e58290627340ee084c6e7986f3e6a2f600306b8b62d2689",
+    "packages/fs/tests/core/test_read_image.py": "4a2d25fb18e31d3dcecf85e294b5889009fb8af9abe02ac8be650921f0115595",
+    "packages/fs/tests/core/test_read_ranges.py": "562efe8c286bcece3828dc147d96678b2c14591921c0dbb120915f6622cd8533",
+    "packages/fs/tests/core/test_server_core.py": "736a4b7c6b0f2bc6f5f7617a37ebbd036c4a5717e543bf46dbab309aed19a01c",
+    "packages/fs/tests/core/test_standalone_core.py": "48cf24ace96d1622ed4ba13759c2ee03fbdc12d30b5dde65c52a987bac20c198",
+    "packages/fs/tests/core/test_tool_behaviors.py": "af4a092b05204217cb75cc8266a2c123e4c0ff0b93da992a9b97d97a970300e1",
+    "packages/fs/tests/patch/test_apply_patch.py": "6dc62dedb96459e8dffffaa1cbb127f1d028e5cf82d6132f6b29e7cb2d4ea8e8"
+  },
+  "verified_resolution": {
+    "client": {
+      "packaging": "26.3",
+      "ai-device-bash": "0.2.0",
+      "websockets": "17.3",
+      "pillow": "13.0.0",
+      "ai-device": "0.2.2",
+      "pydantic_core": "2.50.1",
+      "annotated-types": "0.8.0",
+      "typing-inspection": "0.4.4",
+      "typing_extensions": "4.16.0",
+      "pydantic": "2.14.1",
+      "psutil": "7.2.2",
+      "ai-device-fs": "0.2.0"
+    },
+    "center": {
+      "uvicorn": "0.54.0",
+      "click": "8.5.0",
+      "packaging": "26.3",
+      "starlette": "1.9.0",
+      "websockets": "17.3",
+      "opentelemetry-api": "1.45.1",
+      "ai-device": "0.2.2",
+      "h11": "0.16.0",
+      "pydantic_core": "2.50.1",
+      "fastapi": "0.159.1",
+      "annotated-types": "0.8.0",
+      "annotated-doc": "0.0.5",
+      "typing-inspection": "0.4.4",
+      "typing_extensions": "4.16.0",
+      "pydantic": "2.14.1",
+      "anyio": "4.15.1",
+      "idna": "3.20"
+    },
+    "mcp": {
+      "uvicorn": "0.54.0",
+      "mcp": "1.30.0",
+      "click": "8.5.0",
+      "packaging": "26.3",
+      "starlette": "1.9.0",
+      "jsonschema-specifications": "2025.9.1",
+      "jsonschema": "4.26.0",
+      "websockets": "17.3",
+      "PyJWT": "2.15.1",
+      "httpcore": "1.0.9",
+      "cryptography": "50.0.2",
+      "ai-device": "0.2.2",
+      "h11": "0.16.0",
+      "pydantic_core": "2.50.1",
+      "python-multipart": "0.0.32",
+      "python-dotenv": "1.2.4",
+      "cffi": "2.1.1",
+      "annotated-types": "0.8.0",
+      "referencing": "0.37.0",
+      "pydantic-settings": "2.16.1",
+      "pycparser": "3.11",
+      "typing-inspection": "0.4.4",
+      "rpds-py": "2026.9.1",
+      "attrs": "26.1.0",
+      "certifi": "2026.10.19",
+      "httpx": "0.28.1",
+      "typing_extensions": "4.16.0",
+      "sse-starlette": "3.5.0",
+      "pydantic": "2.14.1",
+      "httpx-sse": "0.4.3",
+      "anyio": "4.15.1",
+      "idna": "3.20"
+    },
+    "ops": {
+      "packaging": "26.3",
+      "websockets": "17.3",
+      "httpcore": "1.0.9",
+      "ai-device": "0.2.2",
+      "h11": "0.16.0",
+      "pydantic_core": "2.50.1",
+      "annotated-types": "0.8.0",
+      "typing-inspection": "0.4.4",
+      "certifi": "2026.10.19",
+      "httpx": "0.28.1",
+      "typing_extensions": "4.16.0",
+      "pydantic": "2.14.1",
+      "anyio": "4.15.1",
+      "idna": "3.20"
+    }
+  },
+  "stage_c_limitations": [
+    "macOS arm64 real lifecycle only",
+    "Linux CI configured but not run",
+    "No production or host migration",
+    "Third-party inventory is not comprehensive provenance/legal audit"
+  ]
+}

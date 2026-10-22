@@ -15,7 +15,7 @@ jobs:
         with:
           version: '0.10.9'
       - run: uv sync --python 3.13 --locked --all-packages --all-extras --group dev
-      - run: uv run --no-sync ruff check scripts/verify_artifacts.py
+      - run: uv run --no-sync ruff check scripts/verify_artifacts.py scripts/verify_delivery.py scripts/capture_evidence.py
       - name: Package tests (separate pytest configurations)
         shell: bash
         run: |
@@ -24,6 +24,9 @@ jobs:
           done
       - run: uv build --all-packages
       - run: uv run --no-sync python scripts/verify_artifacts.py --fs-python 3.10
+      - name: macOS real delivery lifecycle
+        if: runner.os == 'macOS'
+        run: uv run --no-sync python scripts/verify_delivery.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:

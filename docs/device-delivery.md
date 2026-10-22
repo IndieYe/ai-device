@@ -1,5 +1,7 @@
 # Device 版本化交付包（Mac 首期）
 
+> 三包迁移说明：本文保留来源项目的历史交付与验收记录，不代表新仓本次已完成相同平台验收。新包名称和当前支持范围以 [阶段C验收](stage-c-acceptance.md) 为准；AI 助手专属配置留在宿主仓库。
+
 运行版本查询自 Device 0.2.1 起提供，详见 [Device Runtime](device-runtime.md)。
 组件版本由 `__version__` 唯一定义；不同代码发布必须递增版本。交付包 `release_version`、
 制品 Hash 与进程运行版本职责不同，安装指针切换不证明既有进程已加载新版本。
@@ -49,9 +51,9 @@
 device-runtime bundle build \
   --output /absolute/new-bundle-directory \
   --version 0.2.0 \
-  --device-wheel /absolute/wheels/ai_device-0.2.0-py3-none-any.whl \
-  --bash-wheel /absolute/wheels/mcp_server_bash-0.2.0-py3-none-any.whl \
-  --fs-wheel /absolute/wheels/mcp_server_fs-0.2.0-py3-none-any.whl \
+  --device-wheel /absolute/wheels/ai_device-0.2.2-py3-none-any.whl \
+  --bash-wheel /absolute/wheels/ai_device_bash-0.2.0-py3-none-any.whl \
+  --fs-wheel /absolute/wheels/ai_device_fs-0.2.0-py3-none-any.whl \
   --constraints /absolute/constraints.txt \
   --sources /absolute/sources.json
 ```
@@ -99,7 +101,7 @@ device-runtime bundle inspect /absolute/bundle-directory
 ```bash
 BUNDLE=/absolute/bundle
 ROOT="/absolute/instances/My Mac"
-DEVICE_WHEEL="$BUNDLE/wheels/ai_device-0.2.0-py3-none-any.whl"
+DEVICE_WHEEL="$BUNDLE/wheels/ai_device-0.2.2-py3-none-any.whl"
 uv run --no-project --python 3.13 --with "$DEVICE_WHEEL" python -I -m device_runtime.cli \
   instance install --bundle "$BUNDLE" --instance-id isolated-mac --root "$ROOT" \
   --role center --role mcp --role client --server-url http://127.0.0.1:28765 --port 28765
@@ -156,7 +158,7 @@ AI Assistant 工作目录的 `config/config.json` 使用顶层 **`mcp-servers`**
 
 替换为实际绝对 root，JSON command 内的空格是路径本身，**不额外嵌 shell 引号、不把 command 和 args 拼成 shell 字符串**。API URL 由 run 从 roles.json 读取；只有声明的 admin token 从宿主环境加入这次 stdio 的内存 env。名单只存名称，不保存解析值、不做 `${VAR}` 展开，不自动继承整个宿主环境；缺失或空值在 spawn 前拒绝，同名键不能同时存在于字面量 env。每次重连重新取值，不能把配置保存当成凭证已供给。
 
-此字段要求包含 `inherit_env` 实现的 Core；旧 Core 可能忽略未知字段，**仅写 JSON 不能越过宿主升级和连接验证门禁**。用户负责让实际启动 Core 的进程事先具有所需环境及 python3 PATH（终端 export 不会改变已运行的服务）。配置与组件生效规则见 [配置与生效边界](configuration/index.md)；真实配置变更/服务重启不是隔离开发验收动作，仍须独立授权。这里不宣称当前线上 Core 已加载该实现。
+此字段要求包含 `inherit_env` 实现的 Core；旧 Core 可能忽略未知字段，**仅写 JSON 不能越过宿主升级和连接验证门禁**。用户负责让实际启动 Core 的进程事先具有所需环境及 python3 PATH（终端 export 不会改变已运行的服务）。配置与组件生效规则见 [配置与生效边界](../README.md)；真实配置变更/服务重启不是隔离开发验收动作，仍须独立授权。这里不宣称当前线上 Core 已加载该实现。
 
 标准 MCP Python SDK 使用 `StdioServerParameters`，`inherit_env` 是 AI Assistant 的宿主配置扩展，不能原样当作 SDK 字段。其他客户端的配置容器和环境注入规则以其自身契约为准；使用 SDK 时仅在内存传入值，例如：
 
@@ -246,7 +248,7 @@ RESTORED=/absolute/new-offline-instance
 uv run --no-project --python 3.13 --with "$DEVICE_WHEEL" python -I -m device_runtime.cli \
   instance backup --root "$ROOT" --destination "$BACKUP" --stopped
 # 恢复不依赖原release/venv；可用备份中的准确Device wheel引导，无源码checkout。
-BACKUP_WHEEL="$BACKUP/bundle/wheels/ai_device-0.2.0-py3-none-any.whl"
+BACKUP_WHEEL="$BACKUP/bundle/wheels/ai_device-0.2.2-py3-none-any.whl"
 uv run --no-project --python 3.13 --with "$BACKUP_WHEEL" python -I -m device_runtime.cli \
   instance restore --backup "$BACKUP" --destination "$RESTORED"
 ```

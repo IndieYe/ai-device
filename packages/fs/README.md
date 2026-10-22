@@ -35,7 +35,7 @@ uv run --extra mcp python -m mcp_server_fs --transport sse --port 8000
 MCP_TRANSPORT=stdio    # stdio 或 sse
 MCP_HOST=127.0.0.1     # SSE 模式主机
 MCP_PORT=8000          # SSE 模式端口
-MCP_TEMP_DIR=~/.ai-device-fs  # 临时文件目录
+MCP_TEMP_DIR=~/.mcp-server-fs  # 临时文件目录
 ```
 
 配置优先级：命令行参数 > 环境变量 > 默认值
@@ -43,7 +43,7 @@ MCP_TEMP_DIR=~/.ai-device-fs  # 临时文件目录
 兼容入口说明：
 
 - 推荐入口：`python -m mcp_server_fs`
-- 脚本入口：`ai-device-fs`
+- 脚本入口：`mcp-server-fs`
 - 根目录 `main.py` 仍可运行，但仅作为兼容入口保留；新增代码不要再依赖它导出的内部 helper 或公共工具函数
 
 ## 客户端集成
@@ -131,7 +131,7 @@ preview = core.edit_file(
 - 六个公共操作：`read_file`、`write_file`、`edit_file`、`insert_file`、`apply_patch`、`read_image`。
 - 文本操作返回 `FileResult`：`data` 是普通字典（保持既有成功/错误字段），`metadata` 保存路径和摘要。无需解析 JSON 字符串。`read_file` 错误为 `data["error"]`，写入/编辑/插入/patch 错误为 `data["success"] == False`；本阶段保留现有行为，不统一改写错误契约。
 - 图片操作返回 `ImageResult`：`info` 包含原始 `bytes`、MIME、尺寸等，`path` 为设备本地路径；失败抛出带稳定错误码的 `ImageReadError`。Base64 与 MCP `ImageContent` 仅由适配层生成。
-- 核心导入不加载 `.env`、不创建目录、不初始化 MCP。编辑/插入的长 diff 可用 `temp_dir` 指定保存目录；省略时使用系统临时目录下的 `ai-device-fs/`，仅在确实需要保存完整输出时创建。MCP 适配仍使用 `MCP_TEMP_DIR` 配置。
+- 核心导入不加载 `.env`、不创建目录、不初始化 MCP。编辑/插入的长 diff 可用 `temp_dir` 指定保存目录；省略时使用系统临时目录下的 `mcp-server-fs/`，仅在确实需要保存完整输出时创建。MCP 适配仍使用 `MCP_TEMP_DIR` 配置。
 - 核心是同步本地 I/O。异步客户端应将完整操作放到线程池，不直接阻塞事件循环。设备身份、网络、任务重试与断线对账由设备层负责；返回路径属于执行所在机器。
 
 ## 执行位置与升级
