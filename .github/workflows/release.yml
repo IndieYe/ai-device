@@ -41,6 +41,7 @@ jobs:
             (cd packages/$package && ../../.venv/bin/python -m pytest -q)
           done
           uv run --no-sync python -m pytest tests/test_stage_c_tools.py tests/test_release_artifacts.py -q
+          uv run --no-sync --with pyyaml python -m pytest tests/test_release_workflow.py -q
       - run: uv build --all-packages
       - run: uv run --isolated --no-project --with twine python -m twine check dist/*
       - run: uv run --no-sync python scripts/verify_artifacts.py --fs-python 3.10
@@ -57,13 +58,77 @@ jobs:
           path: release/
           if-no-files-found: error
           retention-days: 14
-  publish:
+  publish-bash:
     if: inputs.publish
     needs: prepare
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
     environment:
       name: pypi
+      url: https://pypi.org/p/ai-device-bash
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@v4
+        with:
+          name: pypi-release-${{ github.sha }}
+          path: release/
+      - name: Verify immutable candidate before upload
+        run: |
+          test "$(cat release/source-commit.txt)" = "$GITHUB_SHA"
+          python scripts/release_artifacts.py check
+      - name: Publish bash (no automatic retry or skip-existing)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: release/bash/
+      - name: Verify public metadata and downloaded bytes
+        run: python scripts/release_artifacts.py public --group bash
+  publish-fs:
+    if: inputs.publish
+    needs: [prepare, publish-bash]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: pypi-fs
+      url: https://pypi.org/p/ai-device-fs
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@v4
+        with:
+          name: pypi-release-${{ github.sha }}
+          path: release/
+      - name: Verify immutable candidate before upload
+        run: |
+          test "$(cat release/source-commit.txt)" = "$GITHUB_SHA"
+          python scripts/release_artifacts.py check
+      - name: Publish fs (no automatic retry or skip-existing)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: release/fs/
+      - name: Verify public metadata and downloaded bytes
+        run: python scripts/release_artifacts.py public --group fs
+  publish-device:
+    if: inputs.publish
+    needs: [prepare, publish-fs]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: pypi-device
       url: https://pypi.org/p/ai-device
     permissions:
       contents: read
@@ -83,18 +148,9 @@ jobs:
         run: |
           test "$(cat release/source-commit.txt)" = "$GITHUB_SHA"
           python scripts/release_artifacts.py check
-      - name: Publish Bash (no automatic retry or skip-existing)
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: release/bash/
-      - run: python scripts/release_artifacts.py public --group bash
-      - name: Publish FS
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: release/fs/
-      - run: python scripts/release_artifacts.py public --group fs
-      - name: Publish Device only after dependencies verified
+      - name: Publish device (no automatic retry or skip-existing)
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: release/device/
-      - run: python scripts/release_artifacts.py public --group device
+      - name: Verify public metadata and downloaded bytes
+        run: python scripts/release_artifacts.py public --group device

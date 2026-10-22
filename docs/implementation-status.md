@@ -60,4 +60,10 @@ FS3.10首次20个失败已定位为unittest.mock对同名导出函数和子模�
 
 ## 本地发布工作流准备
 
-已准备人工触发、默认不上传的release.yml、准确制品整理/公共哈希核验工具及回归。未推送、未运行Actions、未配置Environment或PyPI发布者；外部门禁保持未通过。详细配置与部分失败对账见release-preparation.md。本地16项回归及stage/check通过，ruff通过；actionlint因Go代理网络超时未完成，仅完成YAML解析和关键结构断言，远程语义待验证。
+已准备人工触发、默认不上传的release.yml、准确制品整理/公共哈希核验工具及回归。未推送、未运行Actions；之后已创建GitHub pypi Environment及Bash Pending Publisher，但FS复用相同绑定被PyPI拒绝，外部门禁未全部通过。详细配置与部分失败对账见release-preparation.md。本地16项回归及stage/check通过，ruff通过；actionlint因Go代理网络超时未完成，仅完成YAML解析和关键结构断言，远程语义待验证。
+
+## Pending绑定规则整改
+
+保留release.yml及Bash的pypi绑定；三个上传job串行，FS/Device分别绑定pypi-fs/pypi-device，每个job核验同run准确制品后仅发布本包，公共哈希通过再放行下游。新增工作流结构与Bash语法回归；本轮仅本地改动，未创建剩余Environment/发布者、不推送不发布。旧单job独审结论不覆盖此次调整，远程Actions/OIDC仍未验证。
+
+本次调整验证：新增6项工作流结构/语法用例与既有16项共22项通过（5.58秒），ruff与diff check通过。初次生成的结构截断错误由回归发现并修正。actionlint仍未完成，未重跑制品构建/交付或远程发布；包源码和六制品未改。
