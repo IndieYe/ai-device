@@ -87,6 +87,53 @@ assert pathlib.Path(module.__file__).resolve().is_relative_to(pathlib.Path(sys.p
                     env,
                 )
                 run([str(executable), "-I", "-c", probe], work, env)
+                if package == "fs":
+                    run(
+                        ["uv", "pip", "install", "--python", str(executable), "pytest"],
+                        work,
+                        env,
+                    )
+                    suite = work / ("fs-mcp-tests" if extras else "fs-base-tests")
+                    suite.mkdir()
+                    files = [
+                        "core/test_standalone_core.py",
+                        "core/test_read_ranges.py",
+                    ]
+                    if extras:
+                        files += [
+                            "patch/test_apply_patch.py",
+                            "core/test_local_only_contract.py",
+                            "core/test_server_core.py",
+                            "core/test_read_image.py",
+                            "core/test_tool_behaviors.py",
+                            "core/test_edit_file_schema.py",
+                        ]
+                    for relative in files:
+                        shutil.copy2(
+                            ROOT / "packages/fs/tests" / relative,
+                            suite / Path(relative).name,
+                        )
+                    config = suite / "pytest.ini"
+                    config.write_text("[pytest]\n")
+                    expression = "not built_wheel and not inspector"
+                    if not extras:
+                        expression += " and not mcp_diff"
+                    run(
+                        [
+                            str(executable),
+                            "-I",
+                            "-m",
+                            "pytest",
+                            "-c",
+                            str(config),
+                            str(suite),
+                            "-q",
+                            "-k",
+                            expression,
+                        ],
+                        work,
+                        env,
+                    )
         venv = work / "venv"
         run(["uv", "venv", "--python", args.python, str(venv)], work, env)
         python = venv / "bin/python"

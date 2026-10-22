@@ -1,5 +1,7 @@
 """Local-only signatures and rejection through a real in-memory MCP session."""
 
+import importlib
+
 import inspect
 import json
 from unittest.mock import patch
@@ -54,7 +56,7 @@ def test_removed_host_is_rejected_before_file_operation(tmp_path, name, host):
     mcp, _ = create_mcp()
     # All read/write entry paths use these helpers. Reaching them is a test failure.
     helper = "execute_patch" if name == "apply_patch" else "validate_path"
-    with patch(f"mcp_server_fs.core.{name}.{helper}", side_effect=AssertionError("operation started")) as operation:
+    with patch.object(importlib.import_module(f"mcp_server_fs.core.{name}"), helper, side_effect=AssertionError("operation started")) as operation:
         result = _invoke(mcp, name, {**arguments, "host": host})
 
     assert result.is_error is True

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import subprocess
@@ -223,7 +224,7 @@ def test_image_access_failure_is_a_typed_core_error(tmp_path, failure_point):
     source.stat.return_value = SimpleNamespace(st_size=10)
     getattr(source, failure_point).side_effect = PermissionError("access denied")
     with (
-        patch("mcp_server_fs.core.read_image.validate_path", return_value=source),
+        patch.object(importlib.import_module("mcp_server_fs.core.read_image"), "validate_path", return_value=source),
         pytest.raises(core.ImageReadError) as caught,
     ):
         core.read_image(str(tmp_path / "image.png"))

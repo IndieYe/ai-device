@@ -32,19 +32,20 @@
 | Bash/FS base及MCP独立venv导入 | Python3.13成功，base无FastMCP |
 | 安装wheel后Device完整测试 | 581 passed，模块来源指向独立venv |
 | FS Python3.10.20 base/MCP安装导入 | 成功；MCP create_mcp可创建 |
-| FS Python3.10完整测试 | **20 failed, 96 passed，未关闭** |
+| FS Python3.10完整测试 | 修正mock模块定位后116 passed；Python3.13复跑116 passed |
+| FS Python3.10独立wheel行为 | base 14 passed/3 deselected；MCP 114 passed/2 deselected（源码构建与Inspector用例不在制品行为范围） |
 | Ruff | 新制品脚本及Device源码/测试通过 |
 | uv lock --check | 通过 |
 | CI远程运行 | 未运行，未推送 |
 
-FS3.10失败中已观察到unittest.mock对`mcp_server_fs.core.<操作>.<helper>`的解析落在同名导出函数上，抛AttributeError；尚未逐项完成根因核验和修正。不得据安装/导入成功宣称Python3.10全部支持验收通过。该次测试从新仓运行，不属于独立wheel完整FS测试证明。
+FS3.10首次20个失败已定位为unittest.mock对同名导出函数和子模块的解析差异。两个测试文件改用importlib显式获取模块后patch.object；断言和运行实现不变。3.10及3.13全套均116通过。独立FS wheel在3.10运行base和MCP行为套件通过，排除仅适用于源码构建和Inspector脚本的用例。最新Device wheel回归581 passed（41.61秒）。
 
 原始输出位于本机被忽略的 artifacts/：test-bash.log、test-fs.log、test-device-runtime.log、collection-comparison.json、build.log、verify-artifacts.log、artifact-verification.json、fs-python310-base.log、fs-python310-mcp.log、fs310-tests.log。不要将可变本地输出当作长期发布证据。
 
 ## 阶段结论与剩余门禁
 
 - 阶段B：导入、workspace及包内3.13回归已建立，本地提交作为检查点；仍须整体自审后最终收口。
-- 阶段C：**部分完成，未通过最终门禁**。优先处理FS3.10测试失败，核实最低支持边界；补实际行为与独立FS制品测试。
+- 阶段C：**部分完成，未通过最终门禁**。FS3.10失败已关闭且补独立wheel行为验证；仍需完成下述生命周期、角色、许可和交付组合门禁。
 - 安装生命周期已有Device回归覆盖，但尚未形成保留命令×平台×角色的完整新制品验收矩阵，不能宣称所有实际安装/prepare/activate/rebuild路径均已动态验收。
 - Device各角色独立最小依赖安装、完整三包来源/依赖/制品发布组合记录、第三方许可审查仍需收口。
 - 导入文档仍含历史交付说明；需要继续核对命令示例、路径、历史支持声明，尤其Linux各角色及CentOS交付，不能直接据旧文档宣称新包已支持。
@@ -52,4 +53,4 @@ FS3.10失败中已观察到unittest.mock对`mcp_server_fs.core.<操作>.<helper>
 
 ## 接续入口
 
-先阅读需求第6.1—6.6节和AC-17—AC-22。下一步定位FS3.10 mock解析问题，复核基线同环境行为并做最小测试适配；完成后重跑3.10/3.13及独立制品验证，再补生命周期和角色矩阵、文档与组合证据。没有新授权不得推送、发包或修改AI助手/真实服务。
+先阅读需求第6.1—6.6节和AC-17—AC-22。下一步补实际安装生命周期和最小角色矩阵、文档与完整组合证据。没有新授权不得推送、发包或修改AI助手/真实服务。
