@@ -33,6 +33,20 @@ async def terminal(http, operation_id):
     return record
 
 
+async def wait_for_unknown(http, operation_id, *, timeout=5):
+    record = None
+
+    async def check():
+        nonlocal record
+        response = await http.get("/v1/operations/" + operation_id)
+        assert response.status_code == 200
+        record = response.json()
+        return record["state"] == "unknown"
+
+    await eventually(check, timeout=timeout)
+    return record
+
+
 async def test_live_success_idempotent_and_offline(live_server, tmp_path):
     _, _, http = live_server
     assert (await http.post("/v1/operations", json=payload())).status_code == 409
@@ -286,7 +300,55 @@ async def test_bash_failure_and_timeout_are_terminal(live_server, tmp_path):
         assert not executor.runtime._active
 
 
-async def test_persistence_failure_is_fatal_not_silent_success(live_server, tmp_path, monkeypatch):
+@pytest.mark.parametrize("delayed_detach", [False, True])
+async def test_persistence_failure_is_fatal_not_silent_success(
+    live_server, tmp_path, monkeypatch, delayed_detach
+):
+    _, service, http = live_server
+    detach_entered = asyncio.Event()
+    release_detach = asyncio.Event()
+    observed_running = asyncio.Event()
+    original_detach = service.detach
+    original_get = http.get
+
+    async def detach(device_id, peer):
+        detach_entered.set()
+        await release_detach.wait()
+        return await original_detach(device_id, peer)
+
+    async def get(*args, **kwargs):
+        response = await original_get(*args, **kwargs)
+        if response.status_code == 200 and response.json()["state"] == "running":
+            observed_running.set()
+        return response
+
+    if delayed_detach:
+        monkeypatch.setattr(service, "detach", detach)
+        monkeypatch.setattr(http, "get", get)
+    else:
+        release_detach.set()
+
+    waiter = None
+    try:
+        await assert_persistence_failure(live_server, tmp_path, monkeypatch)
+        if delayed_detach:
+            await asyncio.wait_for(detach_entered.wait(), 5)
+        # Client shutdown is not a server-side disconnect completion barrier.
+        waiter = asyncio.create_task(wait_for_unknown(http, "op-net"))
+        if delayed_detach:
+            await asyncio.wait_for(observed_running.wait(), 5)
+            assert not waiter.done()
+            release_detach.set()
+        assert (await waiter)["state"] == "unknown"
+    finally:
+        release_detach.set()
+        if waiter is not None:
+            if not waiter.done():
+                waiter.cancel()
+            await asyncio.gather(waiter, return_exceptions=True)
+
+
+async def assert_persistence_failure(live_server, tmp_path, monkeypatch):
     _, _, http = live_server
     with pytest.raises(OSError, match="intentional journal failure"):
         async with running_client(live_server, tmp_path / "client", FakeExecutor()) as client:
@@ -300,7 +362,16 @@ async def test_persistence_failure_is_fatal_not_silent_success(live_server, tmp_
             monkeypatch.setattr(client.journal, "update", fail_terminal)
             await http.post("/v1/operations", json=payload())
             await asyncio.wait_for(client._closed.wait(), 5)
-    assert (await http.get("/v1/operations/op-net")).json()["state"] == "unknown"
+
+
+async def test_wait_for_unknown_times_out_if_center_does_not_converge():
+    from unittest.mock import AsyncMock, Mock
+
+    http = Mock()
+    http.get = AsyncMock(return_value=Mock(status_code=200, json=lambda: {"state": "running"}))
+    with pytest.raises(TimeoutError):
+        await wait_for_unknown(http, "op-net", timeout=0.02)
+    assert http.get.await_count > 0
 
 
 async def test_live_submit_wait_returns_result(live_server, tmp_path):
