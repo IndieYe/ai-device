@@ -48,7 +48,7 @@ FS3.10首次20个失败已定位为unittest.mock对同名导出函数和子模�
 - 阶段C：macOS arm64本地限定范围的最小角色、真实标准安装生命周期和独立制品验收已补齐；详见 [阶段C验收](stage-c-acceptance.md)。Linux/Windows不在本轮实际安装验证范围，CI远程未运行。
 - 已补真实临时实例install/inspect、稳定runner中心/客户端/MCP、prepare/activate/rebuild、rollback/backup/restore，以及租约、损坏制品、无效release和平台/角色拒绝。
 - 已保存第三方许可元数据与声明正文、三包源码/制品对应及组合证据；不等于法律审计或已获发布权限。
-- 阶段D/E/F未开始：无发布、宿主切换、旧源码移除或真实设备升级。
+- D1本地准备完成；D2正式发布及后续宿主切换、E/F未开始：无发布、宿主切换、旧源码移除或真实设备升级。
 
 ## 接续入口
 
