@@ -34,6 +34,7 @@ Bash/FS 的 MCP 服务使用各自的 `[mcp]` extra；Device extras 为 client�
 - [阶段C验收矩阵](docs/stage-c-acceptance.md)
 - [D1本地发布准备与外部门禁](docs/release-preparation.md)
 - [来源文件清单](docs/source-manifest.json)
+- [第三方许可补充资料与再分发边界](docs/third-party-licenses/README.md)
 - [Device 使用](packages/device-runtime/README.md)
 - [Bash 使用](packages/bash/README.md)
 - [FS 使用](packages/fs/README.md)

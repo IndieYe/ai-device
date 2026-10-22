@@ -81,14 +81,24 @@ def validate_candidate(root):
     return hashes
 
 
+def notice_header():
+    return (
+        "# Third-party dependency notices\n\n"
+        "Local development and verification environment inventory, "
+        "not a universal dependency graph or legal opinion.\n\n"
+        "Version-specific supplemental license texts and redistribution scope: "
+        "[third-party license materials](docs/third-party-licenses/README.md) "
+        "([index](docs/third-party-licenses/index.json)). "
+        "These repository materials are not automatically included in bundles.\n"
+    )
+
+
 def main():
     evidence = ROOT / "docs/evidence"
     validate_candidate(ROOT)
     pending = {}
     inventory = []
-    notices = [
-        "# Third-party dependency notices\n\nLocal development and verification environment inventory, not a universal dependency graph or legal opinion.\n"
-    ]
+    notices = [notice_header()]
     for distribution in sorted(
         metadata.distributions(), key=lambda d: d.metadata["Name"].lower()
     ):

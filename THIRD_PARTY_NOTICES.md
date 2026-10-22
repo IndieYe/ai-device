@@ -2,6 +2,8 @@
 
 Local development and verification environment inventory, not a universal dependency graph or legal opinion.
 
+Version-specific supplemental license texts and redistribution scope: [third-party license materials](docs/third-party-licenses/README.md) ([index](docs/third-party-licenses/index.json)). These repository materials are not automatically included in bundles.
+
 ## aiofile 3.12.3: aiofile-3.12.3.dist-info/licenses/LICENCE
 
 ```text

@@ -14,6 +14,12 @@
 
 三包已补Homepage、Repository、Issues链接，MIT元数据与LICENSE保留。源码来源和许可技术检查见阶段C记录及THIRD_PARTY_NOTICES.md。依赖许可清单不是逐行第三方代码溯源或法律审计。
 
+## 第三方许可补充资料（后续更新）
+
+准确版本的许可正文、固定源码 commit、wheel 哈希和再分发义务索引见 [第三方许可补充资料](third-party-licenses/README.md)。本次补齐 dnspython 2.9.0 / fastmcp-slim 3.4.11 正文缺项，并补充 certifi 2026.10.19 的 MPL 正文和源码定位；不改写历史环境清单，不自动随 bundle 分发，不代表全部依赖法律审计完成。三处导入代码的权利归属及 MIT 公开授权仍须另行确认。
+
+本次只改仓库资料、通知引用及其校验，不改三包源码、构建配置或 bundle 协议，不构建或发布。下述 D1 及远程状态属于当时记录，不应用来覆盖后续运行事实。
+
 ## 准确制品及证据
 
 - 六制品在被忽略的dist/，名称、SHA256及大小由 `evidence/candidate-manifest.json` 固定。
