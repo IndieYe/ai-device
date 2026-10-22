@@ -59,7 +59,9 @@ def execute(argv, cwd, env, timeout=180):
         raise
     if process.returncode:
         raise RuntimeError(
-            f"Command failed ({process.returncode}): {argv[:4]}\n{stderr[-3000:]}"
+            f"Command failed ({process.returncode}): {argv[:4]}\n"
+            f"stdout (last 12000 characters):\n{stdout[-12000:]}\n"
+            f"stderr (last 3000 characters):\n{stderr[-3000:]}"
         )
     return stdout
 

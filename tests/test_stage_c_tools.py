@@ -107,3 +107,48 @@ def test_cleanup_already_exited():
     p = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
     p.wait(timeout=5)
     cleanup_process(p, grace=0.1)
+
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr", "both"])
+def test_failed_command_preserves_both_output_streams(tmp_path, stream):
+    code = (
+        "import sys;"
+        + (
+            "print('FAILED test_regression: stdout-detail');"
+            if stream != "stderr"
+            else ""
+        )
+        + ("print('stderr-detail', file=sys.stderr);" if stream != "stdout" else "")
+        + "sys.exit(7)"
+    )
+    with pytest.raises(RuntimeError) as error:
+        execute([sys.executable, "-c", code], tmp_path, {}, timeout=5)
+    message = str(error.value)
+    assert "Command failed (7)" in message
+    assert "stdout (last 12000 characters):" in message
+    assert "stderr (last 3000 characters):" in message
+    assert ("stdout-detail" in message) == (stream != "stderr")
+    assert ("stderr-detail" in message) == (stream != "stdout")
+
+
+def test_failed_command_bounds_each_output_tail(tmp_path):
+    code = (
+        "import sys;"
+        "sys.stdout.write('stdout-head'+'x'*15000+'stdout-tail');"
+        "sys.stderr.write('stderr-head'+'y'*5000+'stderr-tail');"
+        "sys.exit(3)"
+    )
+    with pytest.raises(RuntimeError) as error:
+        execute([sys.executable, "-c", code], tmp_path, {}, timeout=5)
+    message = str(error.value)
+    output = message.split("stdout (last 12000 characters):\n", 1)[1]
+    stdout, stderr = output.split("\nstderr (last 3000 characters):\n", 1)
+    assert len(stdout) == 12000
+    assert len(stderr) == 3000
+    assert stdout.endswith("stdout-tail") and "stdout-head" not in stdout
+    assert stderr.endswith("stderr-tail") and "stderr-head" not in stderr
+
+
+def test_successful_command_returns_full_stdout(tmp_path):
+    code = "import sys;sys.stdout.write('x'*15000);sys.stderr.write('diagnostic')"
+    assert execute([sys.executable, "-c", code], tmp_path, {}, timeout=5) == "x" * 15000
