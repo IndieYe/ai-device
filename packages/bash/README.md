@@ -236,6 +236,8 @@ BASH_OUTPUT_TTL_SECONDS=604800
 ## 隐私边界
 
 - Bash MCP 服务日志不记录完整 argv、script、stdin 或环境变量值。
+- 上节列出的配置项不会进入 `bash`、`run`、`script` 启动的子进程环境。宿主通过 `config.json` 的 `env` 或 `inherit_env` 供给的配置值同样被排除，包括 `BASH_CALLER_CONTEXT_TOKEN` 这类服务间密钥；命令需要某个值时，调用方应显式通过 `meta.shell_env` 传入。
+- 其他环境变量照常继承，模型与工具不应据此假定子进程只能看到白名单。
 - AI Assistant 会持久化工具调用参数，因此敏感凭证不要写入 purpose、command、argv、script
   或 stdin；应通过调用元数据 `meta.shell_env` 传递。
 

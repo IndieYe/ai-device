@@ -8,6 +8,7 @@ import signal
 import subprocess
 from typing import Optional
 
+from ..env_keys import SERVICE_CONFIG_ENV_KEYS
 from ..models import ProcessExecutionInfo, ScriptSyntaxError
 
 _cached_shell: Optional[tuple[str, list[str]]] = None
@@ -38,7 +39,21 @@ def get_shell_config() -> tuple[str, list[str]]:
 
 
 def get_shell_env() -> dict[str, str]:
-    return dict(os.environ)
+    """Return the parent environment without the server's own configuration.
+
+    Commands inherit this mapping, so service settings and caller secrets must not
+    reach them: ``config.json`` ``env``/``inherit_env`` entries land in this
+    process's environment, and ``BASH_CALLER_CONTEXT_TOKEN`` in particular is a
+    service-to-service secret rather than something a command should read.
+
+    Callers can still pass a name explicitly through ``meta.shell_env``; that
+    override is applied afterwards by ``merge_shell_env``.
+    """
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key not in SERVICE_CONFIG_ENV_KEYS
+    }
 
 
 def merge_shell_env(env_overrides: Optional[dict[str, str]] = None) -> dict[str, str]:
