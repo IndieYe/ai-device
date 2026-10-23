@@ -93,12 +93,16 @@ def child(work, wheels, pins):
         "bash": next(wheels.glob("ai_device_bash-*.whl")),
         "fs": next(wheels.glob("ai_device_fs-*.whl")),
     }
+    # Derive the release version from the built artifact instead of repeating a
+    # literal here; build_bundle validates the format but never compares this
+    # value with the versions recorded inside the wheels.
+    release_version = components["device"].name.split("-")[1]
     report = {"minimal_roles": {}, "lifecycle": {}, "third_party": []}
     sources = json.loads((work / "sources.json").read_text())
     bundle = work / "bundle"
     build_bundle(
         bundle,
-        release_version="0.2.2",
+        release_version=release_version,
         wheels=components,
         constraints=pins,
         sources=sources,
@@ -262,7 +266,7 @@ asyncio.run(main())
     linux = work / "linux-client-bundle"
     build_bundle(
         linux,
-        release_version="0.2.2",
+        release_version=release_version,
         wheels=components,
         constraints=pins,
         sources=sources,
