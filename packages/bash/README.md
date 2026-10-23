@@ -198,7 +198,16 @@ get(pid, timeout=0, bytes=200)
 
 ## 配置
 
-服务从项目根目录 `.env` 读取配置。新增执行模式相关配置：
+配置来源有两个，优先级从高到低：
+
+1. 进程环境变量；
+2. 项目根目录 `.env`（源码检出时的 `packages/bash/.env`）。
+
+以 `pip install ai-device-bash` 安装后不存在项目根目录，`.env` 不参与配置，必须使用环境变量。只有下节列出的键会从环境变量读取，其他变量不会变成配置。
+
+读取配置不会把值写回进程环境：执行后端为每条命令继承 `os.environ`，因此 `BASH_CALLER_CONTEXT_TOKEN` 等值不会泄漏到用户 shell。
+
+新增执行模式相关配置：
 
 ```env
 BASH_MAX_ARGV_COUNT=4096
