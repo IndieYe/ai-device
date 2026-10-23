@@ -28,6 +28,9 @@ def main():
     client.add_argument("--device-id", required=True)
     client.add_argument("--state-dir", type=Path, required=True)
     client.add_argument("--token-env", default="DEVICE_RUNTIME_TOKEN")
+    client.add_argument(
+        "--maintenance", action="store_true", help="Enable local upgrade control socket"
+    )
     from .limits import DEFAULT_CONCURRENCY, positive_limit
 
     def concurrency(value):
@@ -53,9 +56,15 @@ def main():
     server.add_argument("--device-tokens-env", default="DEVICE_RUNTIME_DEVICE_TOKENS")
     modes.add_parser("ops", help="Device operations (device-runtime ops --help)")
     add_bundle_parser(modes)
+    from . import upgrader
+
+    upgrader.add_parser(modes)
     add_instance_parser(modes)
     args = parser.parse_args()
     try:
+        if args.mode == "upgrade":
+            upgrader.run(args)
+            return
         if args.mode == "bundle":
             run_bundle(args)
         elif args.mode == "instance":
@@ -76,10 +85,25 @@ def main():
                 token=token,
                 state_dir=args.state_dir,
                 executor=executor,
+                maintenance=args.maintenance,
                 max_concurrent_requests=args.max_concurrent_requests,
                 max_concurrent_queries=args.max_concurrent_queries,
             )
-            asyncio.run(runtime.run())
+
+            async def run_client():
+                import signal
+
+                loop = asyncio.get_running_loop()
+                task = asyncio.create_task(runtime.run())
+                loop.add_signal_handler(signal.SIGTERM, task.cancel)
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                finally:
+                    loop.remove_signal_handler(signal.SIGTERM)
+
+            asyncio.run(run_client())
         else:
             if args.host not in ("127.0.0.1", "::1", "localhost"):
                 raise ValueError(
@@ -106,7 +130,7 @@ def main():
         parser.exit(2, f"device-runtime bundle: {exc}\n")
     except KeyboardInterrupt:
         pass
-    except (ValueError, RuntimeError, ImportError) as exc:
+    except (ValueError, RuntimeError, ImportError, OSError) as exc:
         # Parsing errors must not echo a potentially secret JSON environment value.
         parser.exit(
             2,

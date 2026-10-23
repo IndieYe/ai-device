@@ -115,6 +115,10 @@ class BackgroundTasks:
             return "unknown"
         return "succeeded" if result["exit_code"] == 0 else "failed"
 
+    async def active_count(self):
+        async with self._lock:
+            return len(self._owned | self._live)
+
     async def execute(self, operation):
         if self._closed:
             raise RuntimeError("device task manager is closed")

@@ -47,6 +47,7 @@ class DeviceClient:
         state_dir: Path,
         executor,
         reconnect_delay=1,
+        maintenance=False,
         max_concurrent_requests=DEFAULT_CONCURRENCY,
         max_concurrent_queries=DEFAULT_CONCURRENCY,
     ):
@@ -55,6 +56,7 @@ class DeviceClient:
         self.url = device_url(server_url, device_id)
         if len(token) < 16 or not token.isascii() or not token.isprintable():
             raise ValueError("configure a printable ASCII device token of at least 16 characters")
+        self.state_dir = Path(state_dir)
         self.device_id = device_id
         self.token = token
         self.journal = Journal(Path(state_dir) / "operations.sqlite3", owner=self.url)
@@ -68,6 +70,15 @@ class DeviceClient:
         self._close_task = None
         self._initialized = False
         self._failure = None
+        self._loaded_release = None
+        active_path = self.state_dir.parent.parent / "active.json"
+        if active_path.is_file():
+            self._loaded_release = json.loads(active_path.read_text()).get("release")
+        self._maintenance_id = None
+        self._maintenance_server = None
+        self._maintenance_enabled = (
+            maintenance or (self.state_dir.parent.parent / "upgrade-profile.json").is_file()
+        )
 
     async def _send(self, message):
         async with self._send_lock:
@@ -98,6 +109,43 @@ class DeviceClient:
                 await self._report(record)
             after = records[-1]["operation_id"]
 
+    async def maintenance_status(self, upgrade_id):
+        import os
+
+        return {
+            "upgrade_id": upgrade_id,
+            "pid": os.getpid(),
+            "python": sys.executable,
+            "maintenance_owner": self._maintenance_id,
+            "ready": self._initialized and not self._closed.is_set() and self._failure is None,
+            "device_id": self.device_id,
+            "release": self._loaded_release,
+        }
+
+    async def maintenance_drain(self, upgrade_id):
+        async with self._lifecycle_lock:
+            if self._maintenance_id not in (None, upgrade_id):
+                raise ValueError("another maintenance operation owns admission")
+            self._maintenance_id = upgrade_id
+            # In-flight request registration shares this lock. Once zero, no new
+            # operation can race with the background-task count check below.
+            requests = len(self._tasks)
+            tasks = await self.executor.tasks.active_count()
+            return {
+                "upgrade_id": upgrade_id,
+                "device_id": self.device_id,
+                "drained": requests == 0 and tasks == 0,
+                "active_requests": requests,
+                "active_tasks": tasks,
+            }
+
+    async def maintenance_resume(self, upgrade_id):
+        async with self._lifecycle_lock:
+            if self._maintenance_id != upgrade_id:
+                raise ValueError("maintenance owner mismatch")
+            self._maintenance_id = None
+            return {"upgrade_id": upgrade_id, "resumed": True}
+
     async def _accept(self, operation: Operation):
         if operation.device_id != self.device_id:
             raise Conflict("operation targets another device")
@@ -117,6 +165,12 @@ class DeviceClient:
                 return
             if not fresh:
                 report_record = record
+            elif self._maintenance_id is not None:
+                result = {
+                    "location": {"namespace": "device", "device_id": self.device_id},
+                    "data": {"success": False, "error": "client_maintenance"},
+                }
+                report_record = await self.journal.update(operation.operation_id, "failed", result)
             elif sum(
                 getattr(task, "_device_query", False) == (operation.action == "bash.get")
                 for task in self._tasks
@@ -179,7 +233,14 @@ class DeviceClient:
         await self._report(record)
 
     async def run(self):
+        from .maintenance import MaintenanceServer
+
         try:
+            if self._maintenance_enabled:
+                self._maintenance_server = MaintenanceServer(
+                    self, self.state_dir / "maintenance.sock"
+                )
+                await self._maintenance_server.start()
             async with self._lifecycle_lock:
                 if not self._closed.is_set():
                     await self.journal.initialize()
@@ -260,6 +321,8 @@ class DeviceClient:
                     if self._socket is not None:
                         await self._socket.close(code=1001)
                 finally:
+                    if self._maintenance_server is not None:
+                        await self._maintenance_server.close()
                     async with self._lifecycle_lock:
                         for task in tuple(self._tasks):
                             task.cancel()
