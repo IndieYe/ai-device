@@ -92,3 +92,36 @@ PyPI Pending Publisher 的唯一键为owner、repository、workflow、environmen
 静态检查和本地mock测试不证明GitHub Actions远程可运行、三个Environment均已受保护或OIDC/PyPI权限有效。正式注册表安装组合验收仍归D3，公开下载哈希检查不能代替它。远程验证或实际发布前建议独立审核本次工作流增量。
 
 三个上传job各自经过Environment审批，需要逐包批准。上游公共下载核验失败时，下游依赖默认success条件停止；不使用always绕过失败。剩余两个Environment与发布者待另行授权配置。原单job独审PASS不覆盖本次增量，调整后需限定复核。
+
+## 固定候选的 FS / Device 恢复流程（实现不等于获准发布）
+
+`recover-release.yml` 只用于首次正式 run `39883225536` 的剩余两包。
+默认 `publish=false`，仅手动、仅本仓 main；与原发布共用 `pypi-release` 并发组。
+它从原 Artifact `12471078590` 下载 ZIP，校验固定 ZIP SHA256、六制品准确
+manifest/hash、两个原验证报告 hash，以及原来源提交 `718385bc9d3514a700a6e5f042c813d4e37704dc`。
+不重建、不重传 Bash，不接受其他 run/candidate。过期或不一致立即停止，不自动换来源。
+`expected_commit` 则要求准确的、经审核的**恢复流程提交**等于运行 `GITHUB_SHA`；
+原制品来源与恢复代码来源分别记录，不能混写。
+
+预检先对账 Bash 公网准确文件/hash/下载字节及未 yanked 状态，再确认 FS 0.2.0、
+Device 0.2.2 均不存在；只有准确版本 API 的 404 表示不存在，限流、网络错误和其他状态失败。
+正式开启 `publish=true` 仍须本次明确发布授权。FS 与 Device 使用 `pypi-fs`、
+`pypi-device` 独立审批；每 job 重新下载原 ZIP 并在审批后复查前提。
+FS 上传和公网对账、Python 3.10 干净安装通过后，Device 才能审批上传；
+Device 复查 Bash/FS 已发布内容和自身不存在，然后上传并完成公网对账与干净安装烟测。
+干净安装只访问 PyPI，不从 checkout 或候选 wheel 安装；help 不启动真实服务。
+这些烟测不等于生产部署或全部角色功能验收，既有原候选动态验证证据仍需保留。
+
+### 执行前必须落实的外部门禁
+
+- **新 workflow 文件名不同**：PyPI FS / Device Trusted Publisher 必须对应
+  `IndieYe/ai-device`、`recover-release.yml` 及各自 Environment；不能沿用旧
+  `release.yml` 声明而假定可上传。新增/调整需另行授权，本次实现不修改外部配置。
+- 保留两个 Environment 的人工 reviewer、main 限制；不批准 Bash Environment。
+- 先推送经审核代码并运行 `publish=false` 禁发布预检，审核其准确提交、原候选及公网结果；
+  然后另行授权 `publish=true` 并逐包审批。布尔开关不是用户授权。
+- 不重跑原正式 run 或其失败上传 job；不使用 skip-existing、自动上传重试或删除/yank。
+
+上传后失败或结果未知先对账。若 FS 已成功存在，即使字节一致，本流程下次预检也会停止；
+不得盲目重跑本流程，应另定仅 Device 的恢复方案并授权。发现已存在但不一致、Artifact
+不可验证或公网异常时硬停止。此流程不打 tag、不创建 Release、不部署或更新生产设备。

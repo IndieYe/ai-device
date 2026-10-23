@@ -23,6 +23,7 @@ jobs:
             (cd packages/$package && ../../.venv/bin/python -m pytest -q) || exit $?
           done
       - run: uv run --no-sync python -m pytest tests/test_stage_c_tools.py -q
+      - run: uv run --no-sync --with pyyaml python -m pytest tests/test_release_artifacts.py tests/test_release_workflow.py tests/test_recover_release.py -q
       - run: uv build --all-packages
       - run: uv run --no-sync python scripts/verify_artifacts.py --fs-python 3.10
       - name: macOS real delivery lifecycle

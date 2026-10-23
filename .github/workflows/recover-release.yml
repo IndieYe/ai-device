@@ -1,0 +1,150 @@
+name: Recover FS and Device publication (fixed original candidate)
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        description: Exact reviewed recovery workflow commit on main
+        required: true
+        type: string
+      publish:
+        description: Upload only FS then Device (separate authorization required)
+        default: false
+        type: boolean
+permissions:
+  contents: read
+concurrency:
+  group: pypi-release
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: github.repository == 'IndieYe/ai-device' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Check recovery commit
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: |
+          test "$EXPECTED_COMMIT" = "$GITHUB_SHA"
+          test "${#EXPECTED_COMMIT}" -eq 40
+      - name: Download original candidate ZIP (never rebuild)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/IndieYe/ai-device/actions/artifacts/12471078590/zip > candidate.zip
+      - name: Verify original ZIP and frozen candidate
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: python scripts/recover_release.py extract --expected-commit "$EXPECTED_COMMIT"
+      - name: Reconcile prerequisites and require unpublished targets
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: python scripts/recover_release.py preflight --phase prepare --expected-commit "$EXPECTED_COMMIT"
+  publish-fs:
+    if: inputs.publish && github.repository == 'IndieYe/ai-device' && github.ref == 'refs/heads/main'
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    environment:
+      name: pypi-fs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Check recovery commit
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: |
+          test "$EXPECTED_COMMIT" = "$GITHUB_SHA"
+          test "${#EXPECTED_COMMIT}" -eq 40
+      - name: Download original candidate ZIP (never rebuild)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/IndieYe/ai-device/actions/artifacts/12471078590/zip > candidate.zip
+      - name: Verify original ZIP and frozen candidate
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: python scripts/recover_release.py extract --expected-commit "$EXPECTED_COMMIT"
+      - name: Reconcile prerequisites and require unpublished targets
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: python scripts/recover_release.py preflight --phase fs --expected-commit "$EXPECTED_COMMIT"
+      - name: Publish fs once (no retry or skip-existing)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: release/fs/
+      - name: Verify public metadata and downloaded bytes
+        run: python scripts/release_artifacts.py public --group fs
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.10.9'
+      - name: Clean public installation smoke test
+        working-directory: ${{ runner.temp }}
+        run: |
+          uv venv recovery-fs --python 3.10
+          uv pip install --python recovery-fs/bin/python --index-url https://pypi.org/simple 'ai-device-fs==0.2.0'
+          recovery-fs/bin/python -c "from importlib.metadata import version; assert version('ai-device-fs') == '0.2.0'; import mcp_server_fs"
+  publish-device:
+    if: inputs.publish && github.repository == 'IndieYe/ai-device' && github.ref == 'refs/heads/main'
+    needs: [prepare, publish-fs]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    environment:
+      name: pypi-device
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Check recovery commit
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: |
+          test "$EXPECTED_COMMIT" = "$GITHUB_SHA"
+          test "${#EXPECTED_COMMIT}" -eq 40
+      - name: Download original candidate ZIP (never rebuild)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/IndieYe/ai-device/actions/artifacts/12471078590/zip > candidate.zip
+      - name: Verify original ZIP and frozen candidate
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: python scripts/recover_release.py extract --expected-commit "$EXPECTED_COMMIT"
+      - name: Reconcile prerequisites and require unpublished targets
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: python scripts/recover_release.py preflight --phase device --expected-commit "$EXPECTED_COMMIT"
+      - name: Publish device once (no retry or skip-existing)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: release/device/
+      - name: Verify public metadata and downloaded bytes
+        run: python scripts/release_artifacts.py public --group device
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.10.9'
+      - name: Clean public installation smoke test
+        working-directory: ${{ runner.temp }}
+        run: |
+          uv venv recovery-device --python 3.13
+          uv pip install --python recovery-device/bin/python --index-url https://pypi.org/simple 'ai-device[client,server,ops,mcp]==0.2.2'
+          recovery-device/bin/device-runtime --version
+          recovery-device/bin/device-runtime client --help
+          recovery-device/bin/device-runtime server --help
+          recovery-device/bin/device-runtime ops --help
+          recovery-device/bin/device-mcp --help
