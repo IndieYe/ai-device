@@ -151,3 +151,40 @@ def test_publish_rejects_writable_boot_pointer(instance, upgraded):
     with pytest.raises(up.UpgradeError, match="unsafe permissions"):
         up.activate(instance, "one", stopped=True)
     assert pointer.read_bytes() == before
+
+
+def test_online_prepare_does_not_snapshot_live_state(instance, upgraded, monkeypatch):
+    import socket
+
+    from device_runtime import lifecycle as life
+
+    sock = socket.socket(socket.AF_UNIX)
+    socket_path = instance / "state/client/maintenance.sock"
+    monkeypatch.chdir(instance)
+    sock.bind("state/client/maintenance.sock")
+    original_tree = life._tree
+
+    def stable_tree(path):
+        assert "state" not in path.relative_to(instance).parts
+        return original_tree(path)
+
+    monkeypatch.setattr(life, "_tree", stable_tree)
+    try:
+        assert up.prepare(instance, upgraded, "live-socket")["state"] == "prepared"
+        assert socket_path.exists()
+    finally:
+        sock.close()
+
+
+@pytest.mark.parametrize("directory", ["state", "state/client"])
+def test_online_layout_rejects_symlink_state(instance, tmp_path, directory):
+    import shutil
+
+    from device_runtime import lifecycle as life
+
+    target = instance / directory
+    external = tmp_path / "external-state"
+    shutil.move(target, external)
+    target.symlink_to(external, target_is_directory=True)
+    with pytest.raises(install.InstallationError):
+        life._layout(instance, online=True)

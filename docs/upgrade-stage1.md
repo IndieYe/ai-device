@@ -109,3 +109,8 @@ prepare与activate存在profile时共同校验；supervise首次drain前及stop�
 真实验收矩阵见 [Linux/systemd验收门禁](upgrade-stage1-acceptance.md)。
 新增人工恢复/纳管资产已完成独立审核及权限P1整改复核；不代表真实系统验收。未完成：真实隔离Linux/systemd、主机重启/目录权限/模板实际验收、最终独立验收。
 正式部署、发布、Git提交/合并/推送和旧目录清理均不在当前持续授权内。
+
+
+### 在线准备与活跃状态边界
+
+在线升级仅验证 state 根及角色目录为真实目录，并绑定稳定的身份、配置和 active 指针；不递归快照运行中的 socket、数据库/WAL 或任务输出。离线生命周期与备份仍使用原严格快照校验。Linux v3 离线依赖当前基线为 glibc >= 2.27。

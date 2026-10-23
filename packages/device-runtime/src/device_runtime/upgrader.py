@@ -89,7 +89,7 @@ def _policy(root, *, release=None, fingerprint=None):
 @contextmanager
 def _control(root, upgrade_id, *, supervised=False):
     root = life._root(root)
-    life._layout(root)
+    life._layout(root, online=True)
     _operation_id(upgrade_id)
     directory = root / "upgrades"
     if directory.is_symlink():
@@ -114,7 +114,7 @@ def _control(root, upgrade_id, *, supervised=False):
 
 
 def _baseline(root):
-    active, identity = life._layout(root)
+    active, identity = life._layout(root, online=True)
     return life._binding(root, active, identity)
 
 

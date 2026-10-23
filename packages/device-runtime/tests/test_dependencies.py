@@ -105,13 +105,21 @@ def test_reject_incompatible_native_wheel(tmp_path, tag):
         inspect_dependencies(directory, pins)
 
 
-def test_accept_native_cp313_manylinux2014(tmp_path):
+@pytest.mark.parametrize(
+    "tag",
+    [
+        "manylinux2014_x86_64",
+        "manylinux_2_27_x86_64",
+        "manylinux_2_27_x86_64.manylinux_2_28_x86_64",
+    ],
+)
+def test_accept_native_cp313_compatible_baseline(tmp_path, tag):
     pins = {"pydantic": "2.13.5"}
     directory = tmp_path / "dependencies"
     manifest = dependency_set(directory, pins)
     entry = manifest["wheels"][0]
     old = directory / entry["path"]
-    entry["path"] = "pydantic-2.13.5-cp313-cp313-manylinux2014_x86_64.whl"
+    entry["path"] = f"pydantic-2.13.5-cp313-cp313-{tag}.whl"
     old.rename(directory / entry["path"])
     (directory / "manifest.json").write_text(json.dumps(manifest))
     assert inspect_dependencies(directory, pins) == manifest
@@ -126,3 +134,13 @@ def test_built_pillow_source_is_self_contained():
     assert "../" not in source
     assert "3b8182a766685eaa002637e28b4ec8d6b18819a0c71f579bf0dbaa5830297cce" in source
     assert "jpegsrc.v9f.tar.gz" in source and "libwebp-1.6.0.tar.gz" in source
+
+
+def test_previous_glibc_manifest_is_not_silently_reinterpreted(tmp_path):
+    pins = {"pydantic": "2.13.5"}
+    directory = tmp_path / "dependencies"
+    manifest = dependency_set(directory, pins)
+    manifest["target"] = {**TARGET, "glibc": "2.17"}
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="unsupported dependency format or target"):
+        inspect_dependencies(directory, pins)

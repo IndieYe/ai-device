@@ -239,7 +239,7 @@ def test_local_dependencies_install_rebuild_upgrade(
 ):
     monkeypatch.setattr(install.sys, "platform", "linux")
     monkeypatch.setattr(install.platform, "machine", lambda: "x86_64")
-    monkeypatch.setattr(install.platform, "libc_ver", lambda: ("glibc", "2.17"))
+    monkeypatch.setattr(install.platform, "libc_ver", lambda: ("glibc", "2.27"))
     root = tmp_path / "local-instance"
     create(root, local_linux_bundle)
     install.rebuild_instance(root)
@@ -266,7 +266,7 @@ def test_local_dependencies_install_rebuild_upgrade(
 
 @pytest.mark.parametrize(
     "machine,libc",
-    [("aarch64", ("glibc", "2.17")), ("x86_64", ("musl", "1.2")), ("x86_64", ("glibc", "2.16"))],
+    [("aarch64", ("glibc", "2.27")), ("x86_64", ("musl", "1.2")), ("x86_64", ("glibc", "2.26"))],
 )
 def test_local_dependency_wrong_host_rejected(
     tmp_path, local_linux_bundle, simulated_installer, monkeypatch, machine, libc
@@ -288,7 +288,7 @@ def test_native_dependency_directory_lifecycle(
 
     monkeypatch.setattr(install.sys, "platform", "linux")
     monkeypatch.setattr(install.platform, "machine", lambda: "x86_64")
-    monkeypatch.setattr(install.platform, "libc_ver", lambda: ("glibc", "2.17"))
+    monkeypatch.setattr(install.platform, "libc_ver", lambda: ("glibc", "2.27"))
     manifest = inspect_bundle(linux_bundle)
     dependencies = tmp_path / "native-wheels"
     dependency_set(dependencies, manifest["constraints"]["pins"])

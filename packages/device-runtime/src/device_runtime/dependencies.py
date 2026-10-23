@@ -10,11 +10,11 @@ from packaging.tags import compatible_tags, cpython_tags
 from packaging.utils import canonicalize_name, parse_wheel_filename
 from packaging.version import Version
 
-TARGET = {"system": "linux", "machine": "x86_64", "python": "cp313", "glibc": "2.17"}
+TARGET = {"system": "linux", "machine": "x86_64", "python": "cp313", "glibc": "2.27"}
 
 
 def _tags():
-    platforms = [f"manylinux_2_{minor}_x86_64" for minor in range(17, 4, -1)]
+    platforms = [f"manylinux_2_{minor}_x86_64" for minor in range(27, 4, -1)]
     platforms += ["manylinux2014_x86_64", "manylinux2010_x86_64", "manylinux1_x86_64"]
     return set(cpython_tags((3, 13), platforms=platforms)) | set(
         compatible_tags((3, 13), interpreter="cp313", platforms=platforms)
@@ -47,7 +47,7 @@ def inspect_dependencies(directory, pins):
             if name in found or name not in pins or version != Version(pins[name]):
                 raise ValueError("dependency wheel must match exactly one constraint pin")
             if not tags & supported:
-                raise ValueError("dependency wheel is incompatible with cp313 glibc2.17 x86_64")
+                raise ValueError("dependency wheel is incompatible with cp313 glibc2.27 x86_64")
             for key in ("source", "license"):
                 if not isinstance(entry[key], str) or not entry[key].strip():
                     raise ValueError("dependency source and license are required")

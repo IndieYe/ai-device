@@ -277,8 +277,8 @@ def _check_target(manifest, roles):
             glibc = tuple(int(part) for part in version.split(".")[:2])
         except ValueError:
             glibc = ()
-        if platform.machine() != "x86_64" or libc != "glibc" or glibc < (2, 17):
-            raise InstallationError("local dependencies require x86_64 Linux glibc >= 2.17")
+        if platform.machine() != "x86_64" or libc != "glibc" or glibc < (2, 27):
+            raise InstallationError("local dependencies require x86_64 Linux glibc >= 2.27")
     if not roles or any(role not in manifest["roles"] for role in roles):
         raise InstallationError("installed roles are not supported by this bundle target")
 

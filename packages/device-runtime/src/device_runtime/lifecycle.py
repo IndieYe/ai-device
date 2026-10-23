@@ -135,9 +135,14 @@ def _record(active):
     return active
 
 
-def _persistent(root, roles):
+def _persistent(root, roles, *, online=False):
     for name in PERSISTENT:
-        _tree(root / name)
+        if online and name == "state":
+            # Live sockets, WALs and task output are not a stable snapshot.
+            if (root / name).is_symlink() or not (root / name).is_dir():
+                raise InstallationError("invalid live state directory")
+        else:
+            _tree(root / name)
     identity = _read(root / "instance.json")
     if identity["format_version"] != 1:
         raise InstallationError("unsupported identity/state format")
@@ -146,7 +151,11 @@ def _persistent(root, roles):
     if not isinstance(config, dict) or set(config) != set(roles):
         raise InstallationError("persistent role configuration does not match installed roles")
     for role in roles:
-        if not isinstance(config[role], dict) or not (root / "state" / role).is_dir():
+        if (
+            not isinstance(config[role], dict)
+            or (root / "state" / role).is_symlink()
+            or not (root / "state" / role).is_dir()
+        ):
             raise InstallationError("persistent state/config is missing; use backup recovery")
         if role == "center":
             port = config[role]["port"]
@@ -175,14 +184,14 @@ def _persistent(root, roles):
     return identity
 
 
-def _layout(root):
+def _layout(root, *, online=False):
     # Validate before obtaining a lease: never create a lock in an unrelated directory.
     if not (root / ".installation.lock").is_file() or (root / ".installation.lock").is_symlink():
         raise InstallationError("installation lease is missing or invalid")
     if (root / "active.json").is_symlink() or (root / "releases").is_symlink():
         raise InstallationError("invalid active pointer/release directory")
     active = _record(_read(root / "active.json"))
-    identity = _persistent(root, active["roles"])
+    identity = _persistent(root, active["roles"], online=online)
     return active, identity
 
 
