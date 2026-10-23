@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+"""Stable user-bin entry; profile runtime is installed separately at cutover."""
+from pathlib import Path
+import runpy
+import sys
+
+if __name__ == "__main__":
+    root = Path.home() / ".device-runtime/operators/public-center"
+    try:
+        main = runpy.run_path(str(root / "runtime.py"))["main"]
+    except (OSError, KeyError):
+        print("Device operator runtime unavailable", file=sys.stderr)
+        raise SystemExit(2) from None
+    raise SystemExit(main(root, "ops", sys.argv[1:]))

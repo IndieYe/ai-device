@@ -41,3 +41,5 @@ Bash/FS 的 MCP 服务使用各自的 `[mcp]` extra；Device extras 为 client�
 - [Agent 操作技能](skills/device-operations/SKILL.md)
 
 MIT。第三方依赖按各自许可使用；完整第三方声明与对外发布审查仍须在发布前收口。当前 CI 配置不包含发布步骤；未推送前没有远程 CI 运行结果。
+
+- [本机 Operator 稳定入口与发布清单（待部署）](docs/operator-release.md)
