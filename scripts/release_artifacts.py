@@ -33,11 +33,22 @@ def stage(root, target):
     (target / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 
-def check_files(target):
+def check_files(target, *, attestations_for=None):
     manifest = json.loads((target / "manifest.json").read_text())
+    # The publish action writes sidecars next to uploaded artifacts. Only public
+    # reconciliation permits these exact names; upload preflight stays strict.
+    sidecars = {
+        name + ".publish.attestation"
+        for name in manifest
+        if attestations_for in GROUPS and name.startswith(attestations_for + "/")
+    }
     actual = {
         str(p.relative_to(target)) for g in GROUPS for p in (target / g).iterdir()
     }
+    for name in actual & sidecars:
+        if not (target / name).is_file() or (target / name).is_symlink():
+            raise ValueError(f"invalid attestation sidecar: {name}")
+    actual -= sidecars
     if actual != set(manifest) or len(actual) != 6:
         raise ValueError("release file set mismatch")
     for name, digest in manifest.items():
@@ -47,7 +58,7 @@ def check_files(target):
 
 
 def check_public(target, group):
-    manifest = check_files(target)
+    manifest = check_files(target, attestations_for=group)
     files = {Path(n).name: h for n, h in manifest.items() if n.startswith(group + "/")}
     wheel = next(n for n in files if n.endswith(".whl"))
     version = wheel.split("-")[1]
