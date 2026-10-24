@@ -74,6 +74,100 @@ def persistent(root):
     }
 
 
+@pytest.mark.parametrize("operation", ["install", "rebuild", "prepare"])
+def test_environment_uses_bootstrap_python_not_uv_discovery(
+    tmp_path, delivery, fake_uv, monkeypatch, operation
+):
+    from pathlib import Path
+
+    from device_runtime import upgrader
+
+    root = tmp_path / "instance"
+    if operation != "install":
+        create(root, delivery)
+        fake_uv.clear()
+    # Simulate a transient bootstrap venv backed by a durable interpreter.
+    interpreter = tmp_path / "shared python" / "python3.13"
+    interpreter.parent.mkdir()
+    interpreter.symlink_to(Path(sys.executable).resolve())
+    bootstrap = tmp_path / "bootstrap-python"
+    bootstrap.symlink_to(interpreter)
+    monkeypatch.setattr(module.sys, "executable", str(bootstrap))
+    monkeypatch.setenv("UV_PYTHON", "/root/private/python")
+    monkeypatch.setenv("UV_PYTHON_INSTALL_DIR", "/root/private/managed")
+    if operation == "install":
+        create(root, delivery, ("center", "client", "mcp"))
+    elif operation == "rebuild":
+        rebuild_instance(root)
+    else:
+        upgrader.prepare(root, delivery, "python-selection")
+    commands = [args for args, _ in fake_uv if args[2] == "venv"]
+    assert len(commands) == (3 if operation == "install" else 1)
+    for args in commands:
+        assert args[args.index("--python") + 1] == str(interpreter.resolve())
+        assert "--no-python-downloads" in args
+
+
+@pytest.mark.parametrize("version", [(3, 12), (3, 14)])
+def test_wrong_bootstrap_python_rejected_before_release_creation(
+    tmp_path, delivery, fake_uv, monkeypatch, version
+):
+    monkeypatch.setattr(module.sys, "version_info", version)
+    root = tmp_path / "instance"
+    with pytest.raises(InstallationError, match="CPython 3.13"):
+        create(root, delivery)
+    assert not list((root / "releases").glob("*"))
+    assert not fake_uv
+
+
+@pytest.mark.skipif(not REAL_UV, reason="uv is required for real interpreter selection")
+def test_real_uv_venv_uses_bootstrap_base_with_hostile_uv_environment(
+    tmp_path, delivery, fake_uv, monkeypatch
+):
+    from pathlib import Path
+
+    monkeypatch.setenv("UV_PYTHON", "/root/private/nonexistent-python")
+    monkeypatch.setenv("UV_PYTHON_INSTALL_DIR", "/root/private/nonexistent-managed")
+    monkeypatch.setenv("UV_PYTHON_DOWNLOADS", "never")
+    commands = []
+
+    def invoke(args, **kwargs):
+        commands.append(args)
+        if args[2] == "venv":
+            REAL_INVOKE([REAL_UV, *args[1:]], **kwargs)
+
+    monkeypatch.setattr(module, "_invoke", invoke)
+    root = tmp_path / "instance"
+    active = create(root, delivery)
+    python = root / "releases" / active["release"] / "client/venv/bin/python"
+    actual = json.loads(
+        subprocess.check_output(
+            [
+                str(python),
+                "-I",
+                "-B",
+                "-c",
+                "import sys,json;print(json.dumps([sys.version_info[:2],sys.base_prefix]))",
+            ],
+            text=True,
+        )
+    )
+    assert actual == [[3, 13], sys.base_prefix]
+    assert python.resolve() == Path(sys.executable).resolve()
+    assert commands[0][commands[0].index("--python") + 1] == str(python.resolve())
+
+
+def test_missing_bootstrap_python_rejected_before_release_creation(
+    tmp_path, delivery, fake_uv, monkeypatch
+):
+    monkeypatch.setattr(module.sys, "executable", str(tmp_path / "missing-python"))
+    root = tmp_path / "instance"
+    with pytest.raises(InstallationError, match="executable at a durable shared path"):
+        create(root, delivery)
+    assert not list((root / "releases").glob("*"))
+    assert not fake_uv
+
+
 def test_three_roles_and_stable_entry(tmp_path, delivery, fake_uv):
     root = tmp_path / "instance with spaces"
     result = create(root, delivery, ("center", "mcp", "client"))

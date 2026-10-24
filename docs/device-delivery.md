@@ -96,6 +96,14 @@ device-runtime bundle inspect /absolute/bundle-directory
 
 ## 无源码安装
 
+### 安装器的 Python 来源
+
+`install`、`rebuild`、`restore` 及升级 `prepare` 创建角色 venv 时，固定使用**运行安装器的 CPython 3.13 可执行文件所解析到的绝对路径**，不再让 uv 按字符串 `3.13` 重新搜索；创建 venv 时禁止隐式下载 Python。其他版本或不可执行路径在创建 release 前拒绝。运行安装器的引导 venv 可以是临时的，但其底层 Python 必须长期保留。
+
+为非 root systemd 服务安装时，先把受控 Python 放到服务用户可遍历、可执行的持久路径（例如 `/opt/.../python/...`），然后用该 Python 运行安装器；不能从 `/root`、其他用户私有目录或临时解包目录启动安装器。`ProtectHome=yes` 仍须保留，安装器不会通过放松权限或加固来让私有解释器可用。安装器不能仅凭 root 权限检查证明目标服务身份可访问，部署验收仍须以实际 UID 和 unit 环境核对解释器、导入及健康。
+
+安装子进程继续过滤 `UV_*`、`PYTHONPATH`、`PYTHONHOME`。设置 `UV_PYTHON` 或 `UV_PYTHON_INSTALL_DIR` 不能覆盖上述绑定；如需使用指定解释器，应在启动安装器时明确选择它，而不是依赖环境变量影响内部 uv 搜索。
+
 前置条件是 PATH 上有 `uv`、可联网取得受控 Python 3.13 与第三方依赖，并持有已核对来源与引导 wheel 校验值的完整 bundle。不使用系统 pip，也不需要源码仓库。先比较交付方校验值，再用下列相同 uv 引导前缀执行 `bundle inspect "$BUNDLE"`（即替换 `instance install ...` 子命令）；成功后才安装。不能先执行来源未确认的 wheel，再用其自检代替来源确认。
 
 ```bash
@@ -279,7 +287,7 @@ Linux client 可使用 cp313 / x86_64 / glibc >= 2.27 的完整第三方 wheel �
 
 已有 v2 bundle 可直接传给 `instance install` 或 `instance prepare`，同时指定 `--dependency-dir`，工具先生成临时 v3 快照，再执行标准流程，不修改原 bundle。`instance rebuild --bundle <原v2> --dependency-dir <相同依赖>` 必须生成与 active 相同指纹；通常只执行 `instance rebuild --root <root>`，直接使用已保存的 v3 快照。v3 不允许依赖覆盖；更换依赖须创建新 bundle 并走升级准备/激活流程。`--dependency-dir` 与显式 bundle 配套使用。
 
-v3 环境安装使用 `--no-index --only-binary :all:`、固定 constraints 和准确本地 wheel；安装/重建/升级共享此入口。uv 创建环境可能仍需取得 Python，因此**第三方依赖离线不等于 uv/Python 全离线**。必须事先提供 uv 和可用 Python 3.13。稳定 `run` 的 shebang 可能命中系统旧 Python；systemd `ExecStart` 应显式使用受管理 Python 3.13 的绝对路径，再传 `<root>/run client`。不要清理该解释器。
+v3 环境安装使用 `--no-index --only-binary :all:`、固定 constraints 和准确本地 wheel；安装/重建/升级共享此入口。引导阶段必须预先取得 uv 和位于持久可访问路径的 CPython 3.13；**第三方依赖离线不等于引导工具链已就绪**。角色 venv 创建阶段固定使用运行安装器的底层解释器，禁止隐式下载 Python，不再按版本字符串重新搜索。稳定 `run` 的 shebang 可能命中系统旧 Python；systemd `ExecStart` 应显式使用受管理 Python 3.13 的绝对路径，再传 `<root>/run client`。不要清理该解释器。
 
 ### 构建与验收边界
 

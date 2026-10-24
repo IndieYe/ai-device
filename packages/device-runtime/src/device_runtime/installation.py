@@ -290,6 +290,14 @@ def _prepare(root, bundle, manifest, roles, *, required_output_map_format=None):
     uv = shutil.which("uv")
     if not uv:
         raise InstallationError("uv must be installed and available on PATH")
+    # UV_* is intentionally filtered by _invoke. Do not ask uv to rediscover
+    # "3.13": that may select a different, root-private managed interpreter.
+    # Resolve the bootstrap venv symlink so releases do not depend on its lifetime.
+    if sys.implementation.name != "cpython" or sys.version_info[:2] != (3, 13):
+        raise InstallationError("run the installer with CPython 3.13 at a durable shared path")
+    interpreter = Path(sys.executable).resolve()
+    if not interpreter.is_file() or not os.access(interpreter, os.X_OK):
+        raise InstallationError("installer Python must be an executable at a durable shared path")
     release = manifest["release_version"] + "-" + uuid.uuid4().hex
     directory = root / "releases" / release
     directory.mkdir(parents=True)
@@ -303,7 +311,19 @@ def _prepare(root, bundle, manifest, roles, *, required_output_map_format=None):
         home.mkdir()
         log = home / "prepare.log"
         venv = home / "venv"
-        _invoke([uv, "--no-config", "venv", "--python", "3.13", str(venv)], cwd=home, log=log)
+        _invoke(
+            [
+                uv,
+                "--no-config",
+                "venv",
+                "--no-python-downloads",
+                "--python",
+                str(interpreter),
+                str(venv),
+            ],
+            cwd=home,
+            log=log,
+        )
         python = venv / "bin" / "python"
         wheels = []
         for component in ROLES[role]["components"]:
