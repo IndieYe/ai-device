@@ -28,7 +28,7 @@ state、supervisor.phase、recovery、expected_active，不把含baseline配置�
 | draining、旧指针/原客户端健康 | 显式resume-admission，准入开放后cancelled | 丢回执先status；owner他人则停止 |
 | stopping、旧指针、服务仍在线 | 核实实际旧客户端后由管理员决策；不再次stop | 不以新请求强行取代原意图 |
 | stopping、旧指针、无expected_active、已确认服务停止 | 选择recover publish，或recover start-original | 二选一，每步单独确认；不自动串联 |
-| publishing/unknown、有expected_active | 比较完整active（含activation_id）；先对账 | 不重新生成pointer、不换ID、不回退 |
+| publishing/unknown、有expected_active、仍为完整原指针 | 先对账；审阅新Hash后recover publish完成原意图 | 原样复用完整expected_active，不重新生成activation_id；不start、不回退 |
 | 准确expected_active、候选未运行、服务确实停止 | recover start-candidate | 发布和启动分两步；不得从此启动旧版本 |
 | 准确候选运行、ready、owner=null | reconcile-supervision → verified_local | 不再start；仍不代表中心认证 |
 | 候选运行但owner非空 | 保留unknown，查原owner及实际任务现场 | 不无条件resume别的owner；不报健康 |
@@ -58,8 +58,13 @@ sha256sum '<root>/upgrades/<原ID>.json'
   --expected-record-sha256 <已审阅记录哈希> --confirm-service-change
 ```
 
-- publish：仅旧指针精确匹配、没有任何expected_active发布意图时；先保存恢复意图，再复用
-  原候选/策略/独占安装锁校验，生成准确pointer。仅发布，不start。失败不盲重试。
+- publish：仅旧指针精确匹配时；先保存恢复意图，再复用原候选/策略/独占安装锁校验。
+  无expected_active时生成一次准确pointer（P0）；已有expected_active时，严格核验候选字段、
+  原activation_id及原输出映射Hash后原样完成发布（P1），不生成新身份、不换upgrade ID。
+  安装锁内重新核验记录、完整baseline及候选，漂移即拒绝。仅发布，不start。
+  active已等于expected_active时拒绝再次发布，应先对账后单独start-candidate（P2）。
+  再次写前失败仍保留同一意图；写后回执丢失按P2处理。失败后先对账、审阅新Hash，
+  不拿旧Hash盲重试。普通activate不接受unknown/publishing重放。
 - start-original：只在从未产生发布意图、当前仍为原指针时；不修改pointer，**不是回滚**。
   start后保存draining，核实原客户端后执行resume-admission关闭升级为cancelled。
 - start-candidate：必须准确expected_active已发布，候选、策略、配置与unit匹配；仅start，

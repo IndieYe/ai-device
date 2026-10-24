@@ -185,6 +185,23 @@ def status(root, upgrade_id):
     return life._read(path)
 
 
+def _publication_pointer(record):
+    """Validate a durable intent without regenerating its activation identity."""
+    pointer = record.get("expected_active")
+    if not isinstance(pointer, dict):
+        raise UpgradeError("invalid expected active pointer")
+    activation = pointer.get("activation_id")
+    if not isinstance(activation, str) or not re.fullmatch(r"[0-9a-f]{32}", activation):
+        raise UpgradeError("invalid expected active pointer")
+    expected = {**record["candidate"], "activation_id": activation}
+    original = record["baseline"]["active"]
+    if "task_output_map_sha256" in original:
+        expected["task_output_map_sha256"] = original["task_output_map_sha256"]
+    if pointer != expected:
+        raise UpgradeError("invalid expected active pointer")
+    return pointer
+
+
 def activate(root, upgrade_id, *, stopped=False, _supervised=False, _recovery=False):
     """Publish once after an external supervisor has stopped/drained the instance.
 
@@ -199,7 +216,6 @@ def activate(root, upgrade_id, *, stopped=False, _supervised=False, _recovery=Fa
             and _supervised
             and record["state"] == "unknown"
             and record.get("supervisor", {}).get("phase") == "recovering-publish"
-            and "expected_active" not in record
         )
         if not recovering and record["state"] not in {
             "prepared",
@@ -216,6 +232,8 @@ def activate(root, upgrade_id, *, stopped=False, _supervised=False, _recovery=Fa
         if record["state"] in {"published", "verified_local", "succeeded"}:
             return record
         with install._lock(instance):
+            if life._read(path) != record:
+                raise UpgradeError("upgrade record changed; inspect again")
             if _baseline(instance) != record["baseline"]:
                 raise UpgradeError("stale candidate; current instance differs")
             candidate = record["candidate"]
@@ -225,10 +243,13 @@ def activate(root, upgrade_id, *, stopped=False, _supervised=False, _recovery=Fa
             # Save exact expected pointer before publication, enabling interrupted reconciliation.
             import uuid
 
-            pointer = {**candidate, "activation_id": uuid.uuid4().hex}
-            current = life._read(instance / "active.json")
-            if "task_output_map_sha256" in current:
-                pointer["task_output_map_sha256"] = current["task_output_map_sha256"]
+            if recovering and "expected_active" in record:
+                pointer = _publication_pointer(record)
+            else:
+                pointer = {**candidate, "activation_id": uuid.uuid4().hex}
+                current = life._read(instance / "active.json")
+                if "task_output_map_sha256" in current:
+                    pointer["task_output_map_sha256"] = current["task_output_map_sha256"]
             record.update(state="publishing", expected_active=pointer)
             _save(path, record)
             _save(instance / "active.json", pointer)

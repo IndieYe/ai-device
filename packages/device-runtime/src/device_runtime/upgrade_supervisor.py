@@ -213,8 +213,10 @@ def recover(root, upgrade_id, *, action, expected_record_sha256, confirmed=False
         original = pointer == baseline["active"]
         exact = record.get("expected_active") is not None and pointer == record["expected_active"]
         if action == "publish":
-            if not original or "expected_active" in record:
-                raise up.UpgradeError("publication already attempted or pointer changed; reconcile")
+            if not original:
+                raise up.UpgradeError("pointer changed; reconcile before publication")
+            if "expected_active" in record:
+                up._publication_pointer(record)
         elif action == "start-original":
             if not original or "expected_active" in record:
                 raise up.UpgradeError("cannot start original after publication intent; no rollback")

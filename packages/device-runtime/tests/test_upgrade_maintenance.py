@@ -652,3 +652,212 @@ def test_original_start_lost_receipt_can_resume_without_replay(single, upgraded,
         == "cancelled"
     )
     assert service.actions == actions
+
+
+def interrupt_publication(single, upgraded, monkeypatch):
+    """Persist the actual publication intent, then fail before pointer replacement."""
+    setup_supervision(single, upgraded, monkeypatch)
+    service = Service(single)
+    save = up._save
+
+    def fail(path, value):
+        if path == single / "active.json":
+            raise OSError("pointer write interrupted")
+        return save(path, value)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(up, "_save", fail)
+        with pytest.raises(up.UpgradeError):
+            supervisor.supervise(single, "one", confirmed=True, adapter=service)
+    record = up.status(single, "one")
+    assert record["state"] == "unknown"
+    assert record["expected_active"] != up.life._read(single / "active.json")
+    assert service.actions == ["stop"]
+    return service, record["expected_active"]
+
+
+def recover_publish(single, service):
+    return supervisor.recover(
+        single,
+        "one",
+        action="publish",
+        expected_record_sha256=record_hash(single),
+        confirmed=True,
+        adapter=service,
+    )
+
+
+@pytest.mark.parametrize("second_fault", [None, "before", "after"])
+def test_p1_reuses_intent_across_recovery_interruptions(
+    single, upgraded, monkeypatch, second_fault
+):
+    service, pointer = interrupt_publication(single, upgraded, monkeypatch)
+    with pytest.raises(up.UpgradeError, match="reconciliation"):
+        up.activate(single, "one", stopped=True)
+    with pytest.raises(up.UpgradeError, match="no rollback"):
+        supervisor.recover(
+            single,
+            "one",
+            action="start-original",
+            expected_record_sha256=record_hash(single),
+            confirmed=True,
+            adapter=service,
+        )
+    supervisor.reconcile_supervision(single, "one", adapter=service)
+    digest = record_hash(single)
+    save = up._save
+    writes = []
+
+    def fault(path, value):
+        if path == single / "active.json":
+            if second_fault == "before":
+                raise OSError("repeat pointer failure")
+            writes.append(value)
+        if second_fault == "after" and path.name == "one.json" and value["state"] == "published":
+            raise OSError("published receipt lost")
+        return save(path, value)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(up, "_save", fault)
+        if second_fault:
+            with pytest.raises(up.UpgradeError, match="unconfirmed"):
+                recover_publish(single, service)
+        else:
+            assert recover_publish(single, service)["state"] == "published"
+    assert up.status(single, "one")["expected_active"] == pointer
+    assert service.actions == ["stop"]
+    with pytest.raises(up.UpgradeError, match="record changed"):
+        supervisor.recover(
+            single,
+            "one",
+            action="publish",
+            expected_record_sha256=digest,
+            confirmed=True,
+            adapter=service,
+        )
+    if second_fault == "before":
+        supervisor.reconcile_supervision(single, "one", adapter=service)
+        assert recover_publish(single, service)["state"] == "published"
+    else:
+        assert writes == [pointer]
+    assert up.life._read(single / "active.json") == pointer
+    with pytest.raises(up.UpgradeError, match="pointer changed"):
+        recover_publish(single, service)
+    supervisor.recover(
+        single,
+        "one",
+        action="start-candidate",
+        expected_record_sha256=record_hash(single),
+        confirmed=True,
+        adapter=service,
+    )
+    assert service.actions == ["stop", "start"]
+    assert (
+        supervisor.reconcile_supervision(single, "one", adapter=service)["state"]
+        == "verified_local"
+    )
+    assert up.life._read(single / "active.json") == pointer
+
+
+@pytest.mark.parametrize("change", ["activation", "candidate", "extra", "missing", "map", "null"])
+def test_p1_invalid_pointer_rejected_before_recovery_intent(single, upgraded, monkeypatch, change):
+    service, _ = interrupt_publication(single, upgraded, monkeypatch)
+    path = single / "upgrades/one.json"
+    record = up.status(single, "one")
+    pointer = record["expected_active"]
+    if change == "activation":
+        pointer["activation_id"] = "invalid"
+    elif change == "candidate":
+        pointer["release"] = "different"
+    elif change == "extra":
+        pointer["extra"] = True
+    elif change == "missing":
+        pointer.pop("roles")
+    elif change == "map":
+        pointer["task_output_map_sha256"] = "0" * 64
+    else:
+        record["expected_active"] = None
+    up._save(path, record)
+    before = path.read_bytes()
+    with pytest.raises(up.UpgradeError, match="invalid expected active"):
+        recover_publish(single, service)
+    assert path.read_bytes() == before
+    assert service.actions == ["stop"]
+
+
+@pytest.mark.parametrize("guard", ["running", "policy", "candidate", "pointer", "unit", "config"])
+def test_p1_existing_recovery_guards_preserved(single, upgraded, monkeypatch, guard):
+    service, pointer = interrupt_publication(single, upgraded, monkeypatch)
+    path = single / "upgrades/one.json"
+    if guard == "running":
+        service.running = True
+    elif guard == "policy":
+
+        def reject(*args, **kwargs):
+            raise up.UpgradeError("policy expired")
+
+        monkeypatch.setattr(up, "_policy", reject)
+    elif guard == "candidate":
+        monkeypatch.setattr(up.life, "_check_release", lambda *args: {})
+    elif guard == "pointer":
+        up._save(single / "active.json", {**pointer, "activation_id": "f" * 32})
+    elif guard == "unit":
+        show = service.show
+        monkeypatch.setattr(service, "show", lambda: {**show(), "ExecStart": "wrong"})
+    else:
+        baseline = up._baseline
+        monkeypatch.setattr(
+            up, "_baseline", lambda root: {**baseline(root), "config_sha256": "changed"}
+        )
+    before = path.read_bytes()
+    with pytest.raises(up.UpgradeError):
+        recover_publish(single, service)
+    assert path.read_bytes() == before
+    assert service.actions == ["stop"]
+
+
+@pytest.mark.parametrize("drift", ["record", "pointer", "candidate"])
+def test_p1_rechecks_under_install_lock(single, upgraded, monkeypatch, drift):
+    from contextlib import contextmanager
+
+    service, pointer = interrupt_publication(single, upgraded, monkeypatch)
+    real = up.install._lock
+    before = (single / "active.json").read_bytes()
+
+    @contextmanager
+    def lock(root):
+        with real(root):
+            if drift == "record":
+                path = single / "upgrades/one.json"
+                value = up.status(single, "one")
+                value["changed"] = True
+                up._save(path, value)
+            elif drift == "pointer":
+                up._save(single / "active.json", {**pointer, "activation_id": "f" * 32})
+            else:
+                monkeypatch.setattr(up.life, "_check_release", lambda *args: {})
+            yield
+
+    monkeypatch.setattr(up.install, "_lock", lock)
+    with pytest.raises(up.UpgradeError):
+        recover_publish(single, service)
+    assert service.actions == ["stop"]
+    assert up.status(single, "one")["expected_active"] == pointer
+    if drift != "pointer":
+        assert (single / "active.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("mapping", [None, "a" * 64])
+def test_publication_pointer_preserves_exact_original_output_map(mapping):
+    candidate = {"release": "candidate", "roles": ["client"], "bundle_sha256": "b" * 64}
+    original = {"release": "original"}
+    pointer = {**candidate, "activation_id": "1" * 32}
+    if mapping is not None:
+        original["task_output_map_sha256"] = mapping
+        pointer["task_output_map_sha256"] = mapping
+    record = {"candidate": candidate, "baseline": {"active": original}, "expected_active": pointer}
+    assert up._publication_pointer(record) is pointer
+    if mapping is not None:
+        pointer.pop("task_output_map_sha256")
+        with pytest.raises(up.UpgradeError, match="invalid expected active"):
+            up._publication_pointer(record)
