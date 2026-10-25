@@ -1,4 +1,5 @@
 import asyncio
+import os
 import sys
 import tempfile
 import time
@@ -375,6 +376,41 @@ def test_load_env_config_reads_project_root_dotenv(tmp_path):
     loaded = config.load_env_config(tmp_path)
 
     assert loaded == {"A": "1", "B": "two"}
+
+
+def test_process_env_overrides_dotenv(tmp_path, monkeypatch):
+    (tmp_path / ".env").write_text("DEFAULT_CWD=/from/file\n", encoding="utf-8")
+    monkeypatch.setenv("DEFAULT_CWD", "/from/env")
+
+    assert config.load_env_config(tmp_path)["DEFAULT_CWD"] == "/from/env"
+
+
+def test_process_env_supplies_config_without_dotenv(tmp_path, monkeypatch):
+    """An installed wheel cannot reach the source .env; env must be enough."""
+    monkeypatch.setenv("DEFAULT_CWD", "/env-only")
+    monkeypatch.setenv("BASH_OUTPUT_DIR", "/env/out")
+
+    loaded = config.load_env_config(tmp_path)
+
+    assert loaded == {"DEFAULT_CWD": "/env-only", "BASH_OUTPUT_DIR": "/env/out"}
+    assert config.load_app_config(tmp_path).default_cwd == "/env-only"
+
+
+def test_process_env_outside_whitelist_is_ignored(tmp_path, monkeypatch):
+    monkeypatch.setenv("TMPDIR", "/not/a/config/key")
+    monkeypatch.setenv("RANDOM_UNRELATED", "x")
+
+    assert config.load_env_config(tmp_path) == {}
+
+
+def test_config_reading_does_not_pollute_os_environ(tmp_path, monkeypatch):
+    """The execution backend inherits os.environ for every command."""
+    varname = "BASH_CALLER_CONTEXT_TOKEN"
+    monkeypatch.delenv(varname, raising=False)
+    (tmp_path / ".env").write_text(f"{varname}=secret-token\n", encoding="utf-8")
+
+    assert config.load_env_config(tmp_path)[varname] == "secret-token"
+    assert varname not in os.environ
 
 
 @pytest.mark.asyncio

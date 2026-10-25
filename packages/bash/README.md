@@ -198,7 +198,16 @@ get(pid, timeout=0, bytes=200)
 
 ## 配置
 
-服务从项目根目录 `.env` 读取配置。新增执行模式相关配置：
+配置来源有两个，优先级从高到低：
+
+1. 进程环境变量；
+2. 项目根目录 `.env`（源码检出时的 `packages/bash/.env`）。
+
+以 `pip install ai-device-bash` 安装后不存在项目根目录，`.env` 不参与配置，必须使用环境变量。只有下节列出的键会从环境变量读取，其他变量不会变成配置。
+
+读取配置不会把值写回进程环境：执行后端为每条命令继承 `os.environ`，因此 `BASH_CALLER_CONTEXT_TOKEN` 等值不会泄漏到用户 shell。
+
+新增执行模式相关配置：
 
 ```env
 BASH_MAX_ARGV_COUNT=4096
@@ -227,6 +236,8 @@ BASH_OUTPUT_TTL_SECONDS=604800
 ## 隐私边界
 
 - Bash MCP 服务日志不记录完整 argv、script、stdin 或环境变量值。
+- 上节列出的配置项不会进入 `bash`、`run`、`script` 启动的子进程环境。宿主通过 `config.json` 的 `env` 或 `inherit_env` 供给的配置值同样被排除，包括 `BASH_CALLER_CONTEXT_TOKEN` 这类服务间密钥；命令需要某个值时，调用方应显式通过 `meta.shell_env` 传入。
+- 其他环境变量照常继承，模型与工具不应据此假定子进程只能看到白名单。
 - AI Assistant 会持久化工具调用参数，因此敏感凭证不要写入 purpose、command、argv、script
   或 stdin；应通过调用元数据 `meta.shell_env` 传递。
 

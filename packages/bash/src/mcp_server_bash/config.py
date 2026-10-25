@@ -9,11 +9,25 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from .env_keys import SERVICE_CONFIG_ENV_KEYS
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Explicit whitelist of settings the process environment may override. Keeping the
+# list closed prevents unrelated variables from silently becoming configuration.
+ENV_OVERRIDE_KEYS = SERVICE_CONFIG_ENV_KEYS
 
 
 def load_env_config(project_root: Path = PROJECT_ROOT) -> dict[str, str]:
-    """Load .env file from the project root."""
+    """Load configuration from the project root .env and the process environment.
+
+    The process environment wins over the file so that a host can configure an
+    installed wheel, where ``parents[2]`` no longer reaches the source checkout.
+    Values are read one key at a time and never written back into ``os.environ``:
+    the execution backend inherits that mapping for every spawned command, so
+    importing dotenv-style loading would leak ``BASH_CALLER_CONTEXT_TOKEN`` into
+    user shells.
+    """
     config: dict[str, str] = {}
     env_file = project_root / ".env"
 
@@ -24,6 +38,11 @@ def load_env_config(project_root: Path = PROJECT_ROOT) -> dict[str, str]:
                 if line and not line.startswith("#") and "=" in line:
                     key, value = line.split("=", 1)
                     config[key.strip()] = value.strip()
+
+    for key in ENV_OVERRIDE_KEYS:
+        value = os.environ.get(key)
+        if value is not None:
+            config[key] = value
 
     return config
 

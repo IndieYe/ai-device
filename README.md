@@ -10,7 +10,7 @@
 | packages/fs | ai-device-fs | mcp_server_fs | mcp-server-fs |
 | packages/device-runtime | ai-device | device_runtime | device-runtime / device-mcp |
 
-目前仅本地构建，未发布到 PyPI。名称查询未发现已发布项目，不代表名称预留。版本沿用导入基线，首次正式发布版本另定。不要安装同名旧包代替本仓准确制品。
+三个包已发布到 PyPI：ai-device-bash 0.2.0、ai-device-fs 0.2.0、ai-device 0.2.2。三个版本号在仓库内必须保持一致：`ai-device` 的 `client` extra 精确 pin 另两个包的版本，`STATE_COMPATIBILITY` 需显式登记新 device 版本；`tests/test_release_version_consistency.py` 会在漏改时报错。不要安装同名旧包代替本仓准确制品。
 
 ## 开发
 
@@ -40,6 +40,6 @@ Bash/FS 的 MCP 服务使用各自的 `[mcp]` extra；Device extras 为 client�
 - [FS 使用](packages/fs/README.md)
 - [Agent 操作技能](skills/device-operations/SKILL.md)
 
-MIT。第三方依赖按各自许可使用；完整第三方声明与对外发布审查仍须在发布前收口。当前 CI 配置不包含发布步骤；未推送前没有远程 CI 运行结果。
+MIT。第三方依赖按各自许可使用；完整第三方声明与对外发布审查仍须在发布前收口。`test.yml` 在 push/PR 运行测试与构建，不包含上传步骤；PyPI 发布由 `release.yml` 手动触发并逐包经过 Environment 审批，不会因 push 自动发布。详见 [D1本地发布准备](docs/release-preparation.md)。
 
 - [本机 Operator 稳定入口与发布清单（待部署）](docs/operator-release.md)
