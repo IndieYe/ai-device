@@ -28,6 +28,9 @@ home=/opt/ai-device/packages/0.2.2-native1
 exec "$home/runtime/bin/python3.13" -I -m device_runtime.native_install --payload "$home" "$@"
 EOF
 chmod 755 "$root/usr/bin/ai-device-native-install"
+# Upstream CPython files can be group-writable. Published system programs must
+# not be writable by the client or group before a root helper trusts them.
+chmod -R go-w "$root$home"
 # Fail closed: no upgrade/removal of an existing native instance until helper
 # transactions are implemented. This development package only supports fresh install.
 cat > "$work/preflight" <<'EOF'

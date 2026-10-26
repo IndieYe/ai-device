@@ -235,3 +235,23 @@ P1仍进行中。本轮把运行时准备接到真实离线应用安装，未完
 5. Linux systemd与登录/机器恢复、用户工作区、安装失败接续等实机验证。容器包安装不替代这些。
 
 当前P1不得标为通过，也不因已有可安装包进入P2。后续继续当前Worktree，先核查本节的准确包及源码状态。
+
+## 10. P1 helper与systemd绑定实现（2026-10-26）
+
+用户要求优先helper和systemd。本轮新增 `native_helper.py`、30项测试、真实注册验证脚本及 `native/HELPER.md`。P1继续进行中，不进入P2。
+
+实现：root管理员显式注册已安装的普通用户单client实例，生成systemd unit及no-replace持久绑定；摘要校验runner/身份/配置/unit和已加载systemd的准确User、Group、FragmentPath、ExecStart。AF_UNIX请求通过SO_PEERCRED获取可信UID，只接受query/start/reconcile和两个稳定ID，不提供任意命令、服务名或路径。start先记录intent，超时/丢结果保存unknown不重放，新ID不能绕过；query/reconcile只读。实例锁、安装共享锁、旧监督锁和非终态升级检查避免启动绕过维护。
+
+客户端unit生成使用明确普通UID/GID、绝对稳定入口、Restart=on-failure、NoNewPrivileges、UMask0077和SendSIGKILL=no。helper unit生成使用独立bootstrap，不自动启用、reload、启动或清除已有socket。当前未实现package-apply/activate/uninstall及socket遗留恢复，明确拒绝而不伪装完成。
+
+实际验证：
+
+- helper测试30项通过；Device完整 **746 passed in 45.02s**；ruff及构建脚本语法检查通过。
+- 客户端unit在新建一次性容器中通过真实systemd-analyze verify。
+- Linux容器管理员注册普通UID12345 fixture、双unit verify、重复注册拒绝通过，started=false、enabled=false；不读取真实凭证，不启停任何真实服务。
+- 真实注册发现上游CPython解释器为775，root信任校验拒绝；包构建器增加程序树chmod -R go-w。采用root ownership＋规范权限后注册通过，未放松检查。修改后未重建v5包，不以旧包为新权限验证证据。
+- 初次macOS生成Linux路径时/etc别名不满足canonical校验，随后用无别名Linux路径完成验证；不降低canonical约束。
+
+隔离验证脚本 `packages/device-runtime/scripts/accept-native-helper.py`。所有本轮验证容器均本任务新建--rm，无后台遗留，无正式服务操作。完整契约、模块CLI与未完成边界见 `packages/device-runtime/native/HELPER.md`。
+
+下一步仍在P1：先重建包含helper与规范权限的新包，完成独立bootstrap、unit安装及显式enable/启动编排，再在隔离systemd环境验证真实普通用户进程和健康；补socket生命周期与未知操作恢复、旧工具互斥，最后完成更新卸载事务及实机验收。不得用当前生成unit替代服务已启动或设备已上线。
