@@ -88,6 +88,8 @@ def test_v3_bundle_snapshot_and_legacy(tmp_path, artifacts):
     "tag",
     [
         "cp313-cp313-manylinux_2_28_x86_64",
+        "cp313-cp313-manylinux_2_27_x86_64",
+        "cp313-cp313-manylinux_2_18_x86_64",
         "cp312-cp312-manylinux_2_17_x86_64",
         "cp313-cp313-manylinux_2_17_aarch64",
     ],
@@ -109,8 +111,8 @@ def test_reject_incompatible_native_wheel(tmp_path, tag):
     "tag",
     [
         "manylinux2014_x86_64",
-        "manylinux_2_27_x86_64",
-        "manylinux_2_27_x86_64.manylinux_2_28_x86_64",
+        "manylinux_2_17_x86_64",
+        "manylinux_2_17_x86_64.manylinux_2_28_x86_64",
     ],
 )
 def test_accept_native_cp313_compatible_baseline(tmp_path, tag):
@@ -136,11 +138,33 @@ def test_built_pillow_source_is_self_contained():
     assert "jpegsrc.v9f.tar.gz" in source and "libwebp-1.6.0.tar.gz" in source
 
 
-def test_previous_glibc_manifest_is_not_silently_reinterpreted(tmp_path):
+def test_previous_glibc_manifest_preserves_its_target(tmp_path):
     pins = {"pydantic": "2.13.5"}
     directory = tmp_path / "dependencies"
     manifest = dependency_set(directory, pins)
-    manifest["target"] = {**TARGET, "glibc": "2.17"}
+    manifest["target"] = {**TARGET, "glibc": "2.27"}
     (directory / "manifest.json").write_text(json.dumps(manifest))
-    with pytest.raises(ValueError, match="unsupported dependency format or target"):
-        inspect_dependencies(directory, pins)
+    assert inspect_dependencies(directory, pins)["target"]["glibc"] == "2.27"
+
+
+@pytest.mark.parametrize("baseline,tag,accepted", [
+    ("2.17", "manylinux_2_27_x86_64", False),
+    ("2.27", "manylinux_2_27_x86_64", True),
+    ("2.27", "manylinux_2_28_x86_64", False),
+    ("2.17", "manylinux2014_x86_64", True),
+])
+def test_tags_follow_declared_target(tmp_path, baseline, tag, accepted):
+    pins = {"pydantic": "2.13.5"}
+    directory = tmp_path / "deps"
+    manifest = dependency_set(directory, pins)
+    manifest["target"] = {**TARGET, "glibc": baseline}
+    entry = manifest["wheels"][0]
+    old = directory / entry["path"]
+    entry["path"] = f"pydantic-2.13.5-cp313-cp313-{tag}.whl"
+    old.rename(directory / entry["path"])
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+    if accepted:
+        assert inspect_dependencies(directory, pins) == manifest
+    else:
+        with pytest.raises(ValueError, match="incompatible"):
+            inspect_dependencies(directory, pins)

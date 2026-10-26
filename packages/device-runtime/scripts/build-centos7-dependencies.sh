@@ -15,8 +15,14 @@ PROXY_ARGS=()
 if [[ -n "${BUILD_HTTPS_PROXY:-}" ]]; then
   PROXY_ARGS=(--env "HTTPS_PROXY=$BUILD_HTTPS_PROXY" --env "HTTP_PROXY=$BUILD_HTTPS_PROXY")
 fi
+CACHE_ARGS=()
+if [[ -n "${BUILD_SOURCE_CACHE:-}" ]]; then
+  [[ -d "$BUILD_SOURCE_CACHE" ]] || { echo 'BUILD_SOURCE_CACHE must be a directory' >&2; exit 2; }
+  CACHE=$(cd "$BUILD_SOURCE_CACHE" && pwd)
+  CACHE_ARGS=(--env BUILD_SOURCE_CACHE=/source-cache --mount "type=bind,source=$CACHE,target=/source-cache,readonly")
+fi
 # Source snapshot only; input is read-only, output is the sole writable host mount.
-docker run "${PROXY_ARGS[@]}" --rm --platform linux/amd64 --cpus 2 --memory 4g --pids-limit 256 \
+docker run "${PROXY_ARGS[@]}" "${CACHE_ARGS[@]}" --rm --platform linux/amd64 --cpus 2 --memory 4g --pids-limit 256 \
   --cap-drop ALL --security-opt no-new-privileges \
   --mount "type=bind,source=$SCRIPT_DIR,target=/input,readonly" \
   --mount "type=bind,source=$OUTPUT,target=/output" \

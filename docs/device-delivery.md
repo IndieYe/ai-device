@@ -273,14 +273,14 @@ uv run --no-project --python 3.13 --with "$BACKUP_WHEEL" python -I -m device_run
 
 ## CentOS 7 的本地依赖交付
 
-当前离线依赖基线已提高到 glibc 2.27；不再支持 glibc 2.17 主机或声明旧 target 的依赖清单。较低 manylinux 标签的 wheel 仍可用，但仅声明 2.28 及以上的 wheel 拒绝；多标签 wheel 含 2.27 标签则可接受。旧 bundle 保留原样，不修改其 manifest 或指纹，需重新生成新 bundle。
+新离线依赖的默认兼容基线为 glibc 2.17（manylinux2014），目标为 cp313 / Linux x86_64。仅声明 2.18 及以上的 wheel 不能放入 2.17 清单；多标签 wheel 含有效 2.17 或更低标签可接受。已发布的 2.27 清单继续按其原始目标检查依赖与宿主，绝不降格解释为 2.17；旧 bundle 的 manifest、指纹与内容不改写。
 
-Linux client 可使用 cp313 / x86_64 / glibc >= 2.27 的完整第三方 wheel 集合。旧格式 v2 继续联网解析；带依赖的 v3 将依赖清单、wheel 和哈希纳入 bundle 指纹。不要通过放开 `UV_*` 环境变量或临时 uv 包装器切换依赖。
+Linux client 可使用 cp313 / x86_64 / glibc >= 2.17 的完整第三方 wheel 集合。旧格式 v2 继续联网解析；带依赖的 v3 将依赖清单、wheel 和哈希纳入 bundle 指纹。不要通过放开 `UV_*` 环境变量或临时 uv 包装器切换依赖。
 
 本地依赖目录为平面目录，仅包含 `manifest.json` 和每个 constraints pin 对应的一个 wheel：
 
 ```json
-{"format_version":1,"target":{"system":"linux","machine":"x86_64","python":"cp313","glibc":"2.27"},"wheels":[{"path":"package-1.0-py3-none-any.whl","sha256":"64位SHA256","source":"准确来源URL或构建记录定位","license":"真实许可证声明"}]}
+{"format_version":1,"target":{"system":"linux","machine":"x86_64","python":"cp313","glibc":"2.17"},"wheels":[{"path":"package-1.0-py3-none-any.whl","sha256":"64位SHA256","source":"准确来源URL或构建记录定位","license":"真实许可证声明"}]}
 ```
 
 清单记录所有固定第三方依赖，而不是只记录 Pillow。构建命令 `bundle build` 原有参数不变，增加 `--dependency-dir /absolute/wheelhouse`；目标必须是 `--target-system linux`。构建器校验 pin、wheel 文件名/元数据、平台标签、哈希、来源和许可证，并复制为 v3 bundle。缺失或未登记文件均拒绝。哈希保护制品一致性，不是来源签名；依赖关系仍由安装 resolver 和 `pip check` 验证。
@@ -289,9 +289,11 @@ Linux client 可使用 cp313 / x86_64 / glibc >= 2.27 的完整第三方 wheel �
 
 v3 环境安装使用 `--no-index --only-binary :all:`、固定 constraints 和准确本地 wheel；安装/重建/升级共享此入口。引导阶段必须预先取得 uv 和位于持久可访问路径的 CPython 3.13；**第三方依赖离线不等于引导工具链已就绪**。角色 venv 创建阶段固定使用运行安装器的底层解释器，禁止隐式下载 Python，不再按版本字符串重新搜索。稳定 `run` 的 shebang 可能命中系统旧 Python；systemd `ExecStart` 应显式使用受管理 Python 3.13 的绝对路径，再传 `<root>/run client`。不要清理该解释器。
 
+最低 glibc 版本不是完整系统支持承诺：还需验证解释器、CPU 指令集、内核、动态库、证书、服务管理和实际功能。CentOS 7 已结束官方维护，兼容不等于推荐新部署。ARM64、musl/Alpine、Windows 原生不在此 x86_64 glibc 声明中。不得替换宿主 glibc、只修改 wheel 标签或跳过校验；依赖升级后需重新构建、审计和验收。
+
 ### 构建与验收边界
 
-以下为历史 glibc 2.17 构建/验收资料，不代表当前支持范围。其旧依赖 manifest 不能直接用于当前基线；不自动改写历史制品。
+以下保留历史 glibc 2.17 构建/验收资料，其证据只属于对应版本制品，不代表当前源码或新依赖已通过动态验收。当前候选的真实构建、安装与平台测试结果另行记录；不自动改写历史制品。
 
 仓库 `packages/device-runtime/scripts/build-centos7-dependencies.sh NEW_OUTPUT_DIRECTORY` 仅在显式执行时启动隔离 Docker 构建；固定 manylinux2014 镜像摘要，限制 CPU/内存/PID，仅挂载脚本只读和新输出目录，不挂业务数据或 Docker socket。内部固定 Pillow/JPEG/WebP 源码哈希，JPEG 静态、WebP 共享，再由固定 auditwheel 修复 wheel。其他固定版本 wheel 从 PyPI 下载并核对其发布 SHA256；远程元数据不是独立锁定的供应链签名。输出 `wheelhouse/manifest.json`、wheel、构建日志、源码摘要和 auditwheel 报告。构建工具依赖解析和原生编译不承诺逐字节相同产物，应保存每次实际清单。
 

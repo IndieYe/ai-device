@@ -10,11 +10,24 @@ from packaging.tags import compatible_tags, cpython_tags
 from packaging.utils import canonicalize_name, parse_wheel_filename
 from packaging.version import Version
 
-TARGET = {"system": "linux", "machine": "x86_64", "python": "cp313", "glibc": "2.27"}
+TARGET = {"system": "linux", "machine": "x86_64", "python": "cp313", "glibc": "2.17"}
 
 
-def _tags():
-    platforms = [f"manylinux_2_{minor}_x86_64" for minor in range(27, 4, -1)]
+# Retain the exact semantics of previously published 2.27 manifests.
+SUPPORTED_GLIBC = ("2.17", "2.27")
+
+
+def dependency_target(target):
+    if not isinstance(target, dict) or target.get("glibc") not in SUPPORTED_GLIBC:
+        raise ValueError("unsupported dependency format or target")
+    if target != {**TARGET, "glibc": target["glibc"]}:
+        raise ValueError("unsupported dependency format or target")
+    return tuple(map(int, target["glibc"].split(".")))
+
+
+def _tags(glibc="2.17"):
+    minor = int(glibc.split(".")[1])
+    platforms = [f"manylinux_2_{n}_x86_64" for n in range(minor, 4, -1)]
     platforms += ["manylinux2014_x86_64", "manylinux2010_x86_64", "manylinux1_x86_64"]
     return set(cpython_tags((3, 13), platforms=platforms)) | set(
         compatible_tags((3, 13), interpreter="cp313", platforms=platforms)
@@ -30,13 +43,14 @@ def inspect_dependencies(directory, pins):
     directory = Path(directory)
     try:
         manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
-        if manifest["format_version"] != 1 or manifest["target"] != TARGET:
+        if manifest["format_version"] != 1:
             raise ValueError("unsupported dependency format or target")
+        dependency_target(manifest["target"])
         entries = manifest["wheels"]
         if not isinstance(entries, list) or not entries:
             raise ValueError("dependency wheels must be a nonempty list")
         found, expected = {}, {"manifest.json"}
-        supported = _tags()
+        supported = _tags(manifest["target"]["glibc"])
         for entry in entries:
             filename = entry["path"]
             if not isinstance(filename, str) or Path(filename).name != filename:
@@ -47,7 +61,9 @@ def inspect_dependencies(directory, pins):
             if name in found or name not in pins or version != Version(pins[name]):
                 raise ValueError("dependency wheel must match exactly one constraint pin")
             if not tags & supported:
-                raise ValueError("dependency wheel is incompatible with cp313 glibc2.27 x86_64")
+                raise ValueError(
+                    f"dependency wheel is incompatible with cp313 glibc{manifest['target']['glibc']} x86_64"
+                )
             for key in ("source", "license"):
                 if not isinstance(entry[key], str) or not entry[key].strip():
                     raise ValueError("dependency source and license are required")

@@ -234,12 +234,13 @@ def local_linux_bundle(tmp_path, linux_bundle):
     return output
 
 
+@pytest.mark.parametrize("host_glibc", ["2.17", "2.27", "2.28", "2.39"])
 def test_local_dependencies_install_rebuild_upgrade(
-    tmp_path, local_linux_bundle, simulated_installer, monkeypatch
+    tmp_path, local_linux_bundle, simulated_installer, monkeypatch, host_glibc
 ):
     monkeypatch.setattr(install.sys, "platform", "linux")
     monkeypatch.setattr(install.platform, "machine", lambda: "x86_64")
-    monkeypatch.setattr(install.platform, "libc_ver", lambda: ("glibc", "2.27"))
+    monkeypatch.setattr(install.platform, "libc_ver", lambda: ("glibc", host_glibc))
     root = tmp_path / "local-instance"
     create(root, local_linux_bundle)
     install.rebuild_instance(root)
@@ -266,7 +267,7 @@ def test_local_dependencies_install_rebuild_upgrade(
 
 @pytest.mark.parametrize(
     "machine,libc",
-    [("aarch64", ("glibc", "2.27")), ("x86_64", ("musl", "1.2")), ("x86_64", ("glibc", "2.26"))],
+    [("aarch64", ("glibc", "2.27")), ("x86_64", ("musl", "1.2")), ("x86_64", ("glibc", "2.16"))],
 )
 def test_local_dependency_wrong_host_rejected(
     tmp_path, local_linux_bundle, simulated_installer, monkeypatch, machine, libc
@@ -310,3 +311,25 @@ def test_native_dependency_directory_lifecycle(
     install.rebuild_instance(root)
     assert len([a for a, _ in simulated_installer if "--no-index" in a]) == 4
     assert inspect_bundle(linux_bundle)["format_version"] == 2
+
+
+@pytest.mark.parametrize("required,host,accepted", [
+    ("2.17", "2.17", True), ("2.17", "2.16", False),
+    ("2.27", "2.17", False), ("2.27", "2.26", False),
+    ("2.27", "2.27", True), ("2.27", "2.39", True),
+])
+def test_host_requirement_uses_immutable_manifest(monkeypatch, required, host, accepted):
+    from device_runtime.dependencies import TARGET
+
+    monkeypatch.setattr(install.sys, "platform", "linux")
+    monkeypatch.setattr(install.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(install.platform, "libc_ver", lambda: ("glibc", host))
+    manifest = {
+        "format_version": 3, "target": {"system": "linux"}, "roles": ["client"],
+        "dependencies": {"manifest": {"target": {**TARGET, "glibc": required}}},
+    }
+    if accepted:
+        install._check_target(manifest, ["client"])
+    else:
+        with pytest.raises(InstallationError, match="glibc"):
+            install._check_target(manifest, ["client"])

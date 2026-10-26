@@ -6,13 +6,17 @@ mkdir -p "$HOME" /tmp/build /output/wheelhouse
 cd /tmp/build
 exec > >(tee /output/build.log) 2>&1
 fetch() {
-  curl --fail --location --retry 2 "$2" -o "$3"
+  if [[ -n "${BUILD_SOURCE_CACHE:-}" && -f "$BUILD_SOURCE_CACHE/$3" ]]; then
+    cp "$BUILD_SOURCE_CACHE/$3" "$3"
+  else
+    curl --fail --location --connect-timeout 15 --max-time 180 --retry 2 "$2" -o "$3"
+  fi
   printf '%s  %s\n' "$1" "$3" | sha256sum --check -
 }
 fetch 04705c110cb2469caa79fb71fba3d7bf834914706e9641a4589485c1f832565b https://www.ijg.org/files/jpegsrc.v9f.tar.gz jpeg.tar.gz
 fetch e4ab7009bf0629fd11982d4c2aa83964cf244cffba7347ecd39019a9e38c4564 https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0.tar.gz webp.tar.gz
 # PyPI JSON locates the sdist; only the independently fixed digest authorizes its bytes.
-curl --fail --location https://pypi.org/pypi/pillow/12.3.0/json -o pillow-index.json
+curl --fail --location --connect-timeout 15 --max-time 60 https://pypi.org/pypi/pillow/12.3.0/json -o pillow-index.json
 URL=$(python -c 'import json; print(next(x["url"] for x in json.load(open("pillow-index.json"))["urls"] if x["packagetype"]=="sdist"))')
 fetch 3b8182a766685eaa002637e28b4ec8d6b18819a0c71f579bf0dbaa5830297cce "$URL" pillow.tar.gz
 sha256sum jpeg.tar.gz webp.tar.gz pillow.tar.gz > /output/source-sha256.txt

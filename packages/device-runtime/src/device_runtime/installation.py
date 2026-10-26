@@ -272,13 +272,21 @@ def _check_target(manifest, roles):
     if manifest["target"]["system"] != sys.platform:
         raise InstallationError("bundle target does not match host platform")
     if manifest["format_version"] == 3:
+        from .dependencies import dependency_target
+
+        try:
+            minimum = dependency_target(manifest["dependencies"]["manifest"]["target"])
+        except (KeyError, ValueError, TypeError) as exc:
+            raise InstallationError("invalid local dependency target") from exc
         libc, version = platform.libc_ver()
         try:
             glibc = tuple(int(part) for part in version.split(".")[:2])
         except ValueError:
             glibc = ()
-        if platform.machine() != "x86_64" or libc != "glibc" or glibc < (2, 27):
-            raise InstallationError("local dependencies require x86_64 Linux glibc >= 2.27")
+        if platform.machine() != "x86_64" or libc != "glibc" or glibc < minimum:
+            raise InstallationError(
+                f"local dependencies require x86_64 Linux glibc >= {minimum[0]}.{minimum[1]}"
+            )
     if not roles or any(role not in manifest["roles"] for role in roles):
         raise InstallationError("installed roles are not supported by this bundle target")
 
