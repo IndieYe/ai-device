@@ -101,3 +101,9 @@ v11 DEB在真实隔离systemd中验证已运行丢响应恢复及明确失败后
 重启后复核发现版本1仅凭执行锁释放不足以证明guard异常退出时其子进程已退出。新版本guard在systemctl退出/超时回收后，原子no-replace发布 `sender-<instance>-<operation>.json`（sender_reaped、准确intent及返回码），文件与父目录fsync。新intent版本2；resolve-running/resolve-stopped均要求匹配的完整回执及独占执行锁。guard崩溃、回执缺失/不匹配仍unknown，不能仅凭锁释放恢复。版本1或无版本旧意图不允许未运行自动恢复。
 
 guard回执证明直接systemctl子进程已经回收，不宣称任意后代/外部管理者也已终结；随后仍必须核对systemd Job与服务状态。回执写入失败保守阻塞，不自动伪造回执。v12 DEB实际systemd两恢复分支通过，helper69项/Device785项通过；真实排队Job取消尚未实测，RPM尚未对齐本轮恢复实现。
+
+## 后补验收：真实Job、guard异常退出与RPM
+
+`../scripts/accept-native-recovery-faults.py` 在一次性systemd实例验证：依赖屏障产生实际排队Job，准确取消后confirmed_stopped再新ID启动；准确终止测试guard且fixture子进程自行退出，无回执仍阻止恢复和重试。排队场景使用测试发送适配器--no-block注入丢完成，不冒充生产guard超时路径。所有测试实例已回收。
+
+v12 RPM已对齐：与DEB helper源码和bundle manifest逐字节一致，Rocky9离线安装、普通UID依赖/独立bootstrap和恢复动作检查通过。RPM SHA256 `1d02abd52d0339401804dea7c4f81abd81b4091200bdb5e1f8055905884d57fd`。实际systemd故障运行在DEB隔离实例，未在Rocky复跑。完整Device785项通过。更新卸载、旧工具完整互斥、签名许可和实机恢复仍缺，P1未完成。

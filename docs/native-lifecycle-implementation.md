@@ -313,3 +313,17 @@ v11 DEB `build/native-packages-v11/ai-device-native-client_0.2.2-1_amd64.deb`，
 v12 DEB `build/native-packages-v12/ai-device-native-client_0.2.2-1_amd64.deb` 90,500,774字节，SHA256 `928f9a4debe0078423b5483d02509efdb3a99c7fad41b9bcd7b2d92c8f8682e1`。基线f9041f0＋本轮dirty wheel，未签名。本轮只修改helper、测试/故障脚本及文档，无前端/中心/数据库影响。
 
 仍在P1：后续真实排队Job取消与guard异常退出故障覆盖、最终RPM对齐；旧工具完整互斥、受控更新卸载、glibc主线、许可签名及实机恢复门禁未完成，不进入P2。
+
+## 15. P1真实故障验证及RPM对齐（2026-10-26）
+
+本轮产品源码保持3ca7941，新增 `packages/device-runtime/scripts/accept-native-recovery-faults.py`，复用v12 DEB和同一v12 payload构建RPM。未进入更新卸载或P2。
+
+真实隔离systemd故障：通过测试专用oneshot sleep依赖让客户端启动Job725排队，sender以--no-block返回并注入丢完成；实际查询failed/PID0/Job725，resolve-stopped取消准确Job后确认无Job，移除测试依赖并以新ID启动成功。此测试替换发送适配器以制造已退出发送者，Job查询/取消/启动均为真实systemd，不宣称生产guard120秒超时路径已实测。
+
+guard故障：准确Popen句柄启动产品guard，fixture发送进程有界等待；仅对该测试guard发SIGKILL，子进程自行退出，匹配回执缺失，重建Helper后resolve-stopped及新ID启动均被拒绝。没有终止真实服务。初版以父PID推断发信号在Rosetta下误终止验收调用者，已改准确句柄；后续测试适配器查询误指向fixture、Popen不支持capture_output参数均已修测试，不放宽产品校验。每次失败实验使用新容器重跑，最终全部通过，临时实例已回收。
+
+验证：完整Device **785 passed in 47.48s**，ruff/diff检查通过；v12 RPM普通用户离线安装、12包依赖检查、独立bootstrap、resolve-running/resolve-stopped动作、拒绝覆盖卸载和数据保留通过。RPM与已验DEB的helper SHA256均 `69a6d47d1f97035c0c8c6c6da3970337d88a40a0c347a6fc77d2ca8a9202942d`，manifest均与v12 payload逐字节一致，SHA256 `0754b8ab1f161fa64528d65a49fb924f02b5fc803ab9ad67be1b1f0b49477c2b`。manifest核对先误用bundle.json、再遇Rocky缺cmp，最终用准确manifest和包内Python完成，不把失败查询算通过。
+
+最终RPM `build/native-packages-v12/ai-device-native-client-0.2.2-1.x86_64.rpm`，91,750,067字节，SHA256 `1d02abd52d0339401804dea7c4f81abd81b4091200bdb5e1f8055905884d57fd`；DEB摘要见第14节未变化。二进制未提交，未签名，不是发布品。RPM未在Rocky复跑真实systemd启动，故障证据来自Apple container amd64/Rosetta的DEB实例。
+
+本轮交付仅故障脚本和说明，产品/API/CLI/数据库/前端无新增变化，不修改全局运行配置。P1仍未完成：旧工具完整互斥、批准更新卸载与失败恢复、glibc主线对齐、完整许可/SBOM/签名、目标实机和宿主重启恢复。下轮先对照P1验收逐项梳理剩余生命周期工作，不把故障门禁或RPM对齐当整个P1完成。
