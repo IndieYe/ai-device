@@ -28,7 +28,7 @@ subprocess.run(["systemctl", "daemon-reload"], check=True)
 
 
 class QueuedStart(nh.Systemd):
-    def start(self, name, *, lease_fd=None, receipt_path=None, intent=None):
+    def start(self, name, *, lease_fd=None, receipt_path=None, intent=None, package_fd=None):
         assert lease_fd is not None
         subprocess.run([self.executable, "start", "--no-block", name], check=True)
         # This test sender has returned; simulate lost completion while the real

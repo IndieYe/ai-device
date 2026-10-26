@@ -25,9 +25,11 @@ class LostCompletion(nh.Systemd):
         super().__init__()
         self.starts = 0
 
-    def start(self, name, *, lease_fd=None, receipt_path=None, intent=None):
+    def start(self, name, *, lease_fd=None, receipt_path=None, intent=None, package_fd=None):
         self.starts += 1
-        super().start(name, lease_fd=lease_fd, receipt_path=receipt_path, intent=intent)
+        super().start(
+            name, lease_fd=lease_fd, receipt_path=receipt_path, intent=intent, package_fd=package_fd
+        )
         raise subprocess.TimeoutExpired("injected lost completion", 120)
 
 

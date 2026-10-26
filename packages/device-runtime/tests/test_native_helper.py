@@ -32,7 +32,7 @@ class FakeSystemd:
             **self.override,
         }
 
-    def start(self, unit, *, lease_fd=None, receipt_path=None, intent=None):
+    def start(self, unit, *, lease_fd=None, receipt_path=None, intent=None, package_fd=None):
         if receipt_path is not None:
             nh._save_new(
                 receipt_path,
@@ -777,3 +777,175 @@ def test_native_management_marker_drift_blocks_helper(helper):
     with pytest.raises(nh.HelperError, match="management binding"):
         service.handle(req("start"), peer_uid=record["uid"])
     assert not adapter.calls
+
+
+@pytest.mark.parametrize("suffix", [".apply-intent.json", ".apply-intent.json.symlink"])
+def test_package_intent_blocks_new_start_but_not_query(helper, suffix):
+    manager, adapter, record = helper
+    directory = manager.registry / "updates"
+    directory.mkdir()
+    path = directory / "other--update.apply-intent.json"
+    if suffix.endswith("symlink"):
+        path.symlink_to(directory / "missing")
+    else:
+        path.write_text("corrupt still blocks")
+    with pytest.raises(nh.HelperError, match="package transaction blocks start"):
+        manager.handle(req("start"), peer_uid=record["uid"])
+    assert manager.handle(req("query"), peer_uid=record["uid"])["observation"]
+    assert not any(call[0] == "start" for call in adapter.calls)
+    assert not (manager.registry / "op-probe-one.json").exists()
+    # Re-creating the daemon object does not release the persistent fence.
+    again = nh.Helper(manager.registry, adapter=adapter)
+    with pytest.raises(nh.HelperError, match="package transaction"):
+        again.handle(req("start", "two"), peer_uid=record["uid"])
+
+
+def test_old_start_id_is_observation_only_during_update(helper):
+    manager, adapter, record = helper
+    manager.handle(req("start"), peer_uid=record["uid"])
+    directory = manager.registry / "updates"
+    directory.mkdir()
+    (directory / "probe--update.apply-intent.json").write_text("{}")
+    result = manager.handle(req("start"), peer_uid=record["uid"])
+    assert result["replayed"] is False
+    assert len([call for call in adapter.calls if call[0] == "start"]) == 1
+
+
+def test_package_exclusive_lease_blocks_start(helper):
+    manager, adapter, record = helper
+    with (
+        nh.package_lease(manager.registry, exclusive=True),
+        pytest.raises(nh.HelperError, match="still executing"),
+    ):
+        manager.handle(req("start"), peer_uid=record["uid"])
+    assert not any(call[0] == "start" for call in adapter.calls)
+
+
+def test_package_lock_shared_start_and_cross_process_exclusion(helper):
+    manager, _, _ = helper
+    import sys
+
+    # A separate process cannot acquire exclusive access while a start owns SH.
+    code = """import fcntl,os,sys
+fd=os.open(sys.argv[1],os.O_RDWR)
+try:
+    fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+except BlockingIOError:
+    sys.exit(7)
+"""
+    with nh.package_lease(manager.registry), nh.package_lease(manager.registry):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                code,
+                str(manager.registry / "package-manager.execution.lock"),
+            ],
+            check=False,
+        )
+        assert result.returncode == 7
+    with nh.package_lease(manager.registry, exclusive=True):
+        pass
+
+
+def test_systemd_guard_inherits_package_lease(tmp_path):
+
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    executable = tmp_path / "systemctl"
+    executable.write_text("#!/bin/sh\nexit 0\n")
+    executable.chmod(0o700)
+    # Use owned temporary storage while exercising the actual guard process.
+    from unittest.mock import patch
+
+    with (
+        patch.object(nh, "_trusted", lambda *a, **k: None),
+        nh.package_lease(registry) as package_fd,
+        (tmp_path / "execution.lock").open("a+b") as lease,
+    ):
+        real_run = subprocess.run
+
+        def checked_run(*args, **kwargs):
+            assert package_fd in kwargs["pass_fds"]
+            return real_run(*args, **kwargs)
+
+        with patch.object(nh.subprocess, "run", checked_run):
+            nh.Systemd(str(executable)).start(
+                "fixture",
+                lease_fd=lease.fileno(),
+                package_fd=package_fd,
+                receipt_path=tmp_path / "receipt.json",
+                intent={"fixture": True},
+            )
+    assert json.loads((tmp_path / "receipt.json").read_text())["state"] == "sender_reaped"
+
+
+def test_inherited_package_lock_survives_callers_fd_close(helper):
+    import sys
+
+    manager, _, _ = helper
+    with nh.package_lease(manager.registry) as fd:
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import sys; print('ready',flush=True); sys.stdin.read()"],
+            pass_fds=(fd,),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        assert child.stdout.readline().strip() == "ready"
+    try:
+        with (
+            pytest.raises(nh.HelperError, match="still executing"),
+            nh.package_lease(manager.registry, exclusive=True),
+        ):
+            pytest.fail("inherited shared lock lost")
+    finally:
+        child.communicate("", timeout=10)
+    assert child.returncode == 0
+    with nh.package_lease(manager.registry, exclusive=True):
+        pass
+
+
+@pytest.mark.parametrize(
+    "state",
+    ["unknown", "package_applied_pending_activation", "source_package_observed_recovery_required"],
+)
+def test_recovered_package_state_never_clears_start_fence(helper, state):
+    manager, adapter, record = helper
+    directory = manager.registry / "updates"
+    directory.mkdir()
+    (directory / "probe--update.apply-intent.json").write_text("{}")
+    (directory / "probe--update.recovery.json").write_text(json.dumps({"state": state}))
+    with pytest.raises(nh.HelperError, match="package transaction"):
+        manager.handle(req("start"), peer_uid=record["uid"])
+    assert not any(call[0] == "start" for call in adapter.calls)
+
+
+@pytest.mark.parametrize("held_lock", [False, True])
+def test_registration_blocked_by_package_execution_or_persistent_intent(
+    helper, monkeypatch, held_lock
+):
+    from contextlib import nullcontext
+
+    manager, _, record = helper
+    monkeypatch.setattr(nh.os, "geteuid", lambda: 0)
+    called = []
+    monkeypatch.setattr(nh, "_register", lambda *a, **k: called.append(True))
+    if not held_lock:
+        directory = manager.registry / "updates"
+        directory.mkdir()
+        (directory / "probe--update.apply-intent.json").write_text("{}")
+    with (
+        nh.package_lease(manager.registry, exclusive=True) if held_lock else nullcontext(),
+        pytest.raises(nh.HelperError, match="still executing|package transaction"),
+    ):
+        nh.register(
+            manager.registry,
+            manager.registry,
+            instance_id="second",
+            root=record["root"],
+            username="fixture",
+            environment_file=record["environment_file"],
+            recover=True,
+        )
+    assert called == []

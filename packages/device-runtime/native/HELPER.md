@@ -129,3 +129,13 @@ v12 RPM已对齐：与DEB helper源码和bundle manifest逐字节一致，Rocky9
 schema1标记、无标记旧登记、漂移/损坏unit及不匹配record拒绝，不提供自动迁移、删除或重新绑定；需明确管理员审核方案。此处不把拒绝称作旧登记迁移已完成。
 
 v15 DEB真实隔离验收marker发布后注入中断、公开CLI幂等恢复和冲突unit保持通过，原helper/unknown/Job/guard故障链通过。管理测试23项、helper70项、Device809项通过。v15 RPM已携带同一helper/management模块，离线安装/普通UID依赖/恢复CLI及manifest一致通过；未在Rocky复跑实际systemd。详见实施记录第17节。
+
+## P1更新事务启动互锁（开发原型，尚未制包）
+
+helper新启动请求、管理员register/recover-registration与更新事务共用 registry 下 `package-manager.execution.lock`。启动/登记取共享锁，包应用/恢复取独占锁；启动的标准库guard继承共享锁，helper调用方关闭fd后发送者仍持锁。更新使用guard持有独占锁。更新意图写入前要求停止且无Job，并拒绝未确认的旧启动请求。当前共享包只允许单登记实例；多实例收口未实现，明确拒绝而非只停一个实例就替换共享程序。
+
+`updates/*.apply-intent.json` 是持久启动门禁：不依赖调用期间的实例锁；新启动和登记/登记恢复均拒绝，query/reconcile及旧start ID的只读结果仍可用。unknown、包已应用待激活、观察到源包的恢复记录都不解除门禁。尚无安全终态解除协议，不提供删除账本解锁的建议；管理员手工包修复不等于已验证激活。新建updates目录在意图发布前fsync registry目录。
+
+`native_update.py` 目前仅开发用管理员DEB事务台账，非发布入口，不接helper IPC或构建器。现有包仍拒绝覆盖；缺签名候选、安全提取/普通用户准备、任务收口与准确停止、包钩子授权及稳定bootstrap、激活/健康/恢复终态、RPM等，禁止用于真实设备包事务。此前v15不含本轮代码。
+
+验证：helper/更新/管理定向120项、Device完整836项通过；包含独立进程锁争用、调用方fd关闭后子进程持锁、生产启动guard继承fd、持久意图跨helper重建、恢复不解除占用、登记互锁。未进行本轮真实systemd或dpkg验收，不沿用v15证据作为本轮包验证。

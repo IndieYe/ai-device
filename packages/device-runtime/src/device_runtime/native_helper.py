@@ -65,6 +65,40 @@ def _trusted(path, *, directory=False):
         raise HelperError("registry must be a directory")
 
 
+@contextmanager
+def package_lease(registry, *, exclusive=False, existing=False):
+    """Shared by start senders; exclusive for package mutation/recovery.
+
+    Lock order: instance lease -> package lease -> instance service lease.
+    A sender guard inherits this fd so daemon exit cannot release it early.
+    """
+    path = Path(registry) / "package-manager.execution.lock"
+    fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW | (0 if existing else os.O_CREAT), 0o600)
+    try:
+        info = os.fstat(fd)
+        _trusted(path)
+        if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o022:
+            raise HelperError("invalid package execution lock")
+        try:
+            fcntl.flock(fd, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise HelperError("package or start sender still executing") from exc
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def _assert_no_package_intent(registry):
+    directory = Path(registry) / "updates"
+    if not os.path.lexists(directory):
+        return
+    _trusted(directory, directory=True)
+    # Until activation/repair has a verified terminal protocol, no intent is
+    # automatically cleared, including failed or recovered package executions.
+    if any(directory.glob("*.apply-intent.json")):
+        raise HelperError("package transaction blocks start; administrator recovery required")
+
+
 def _save_new(path, value):
     data = json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
     # Hard-link publication provides no-replace semantics, even with other writers.
@@ -216,7 +250,10 @@ def register(registry, unit_dir, *, instance_id, root, username, environment_fil
     if os.geteuid() != 0:
         raise HelperError("registration requires administrator privileges")
     root = _path(root)
+    registry = _path(registry)
+    _trusted(registry, directory=True)
     with (
+        package_lease(registry),
         management_lease(root, registration=True, recovery=recover),
         (root / ".installation.lock").open("rb") as lease,
     ):
@@ -224,6 +261,7 @@ def register(registry, unit_dir, *, instance_id, root, username, environment_fil
             fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise HelperError("instance is running or maintenance is active") from exc
+        _assert_no_package_intent(registry)
         return _register(
             registry,
             unit_dir,
@@ -369,7 +407,7 @@ class Systemd:
             env={"PATH": "/usr/bin:/bin", "LANG": "C"},
         )
 
-    def start(self, unit, *, lease_fd=None, receipt_path=None, intent=None):
+    def start(self, unit, *, lease_fd=None, receipt_path=None, intent=None, package_fd=None):
         if lease_fd is None:
             raise HelperError("start execution lease required")
         # The standard-library guard owns the inherited flock until systemctl
@@ -408,7 +446,7 @@ sys.exit(code)
             ],
             check=True,
             capture_output=True,
-            pass_fds=(lease_fd,),
+            pass_fds=(lease_fd,) if package_fd is None else (lease_fd, package_fd),
             env={"PATH": "/usr/bin:/bin", "LANG": "C"},
         )
 
@@ -664,7 +702,11 @@ class Helper:
                         raise HelperError("invalid recovery evidence")
             if snapshot["ActiveState"] not in {"inactive", "failed", "active"}:
                 raise HelperError("service transition requires read-only reconciliation")
-            with self._execution_lease(instance_id) as execution_fd:
+            with (
+                self._execution_lease(instance_id) as execution_fd,
+                package_lease(self.registry) as package_fd,
+            ):
+                _assert_no_package_intent(self.registry)
                 _save_new(intent_path, intent)
                 outcome = {"state": "already_active"}
                 if snapshot["ActiveState"] != "active":
@@ -673,6 +715,7 @@ class Helper:
                             self.adapter.start(
                                 record["unit"],
                                 lease_fd=execution_fd,
+                                package_fd=package_fd,
                                 receipt_path=self.registry
                                 / f"sender-{instance_id}-{operation_id}.json",
                                 intent=intent,
