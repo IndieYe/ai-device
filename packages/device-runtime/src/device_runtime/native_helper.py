@@ -5,6 +5,7 @@ package activation or automatic replay. Run the daemon via its dedicated root un
 """
 
 import argparse
+import errno
 import fcntl
 import hashlib
 import json
@@ -23,6 +24,7 @@ from pathlib import Path
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
 MAX_REQUEST = 4096
 ACTIONS = {"query", "start", "reconcile"}
+RUNTIME_ROOT = Path("/run")
 
 
 class HelperError(ValueError):
@@ -111,6 +113,64 @@ def render_helper_unit(*, bootstrap_python, registry, socket_path, group):
         "# No ExecStartPre unlink: an orphan socket requires explicit reconciliation.\n"
         "\n[Install]\nWantedBy=multi-user.target\n"
     )
+
+
+def deploy_helper(*, bootstrap_python, registry, unit_dir, runtime_dir, group):
+    """Explicit administrator provisioning only; never reload, enable or start."""
+    if sys.platform != "linux" or os.geteuid() != 0:
+        raise HelperError("helper deployment requires Linux administrator identity")
+    python, registry, unit_dir, runtime_dir = map(
+        _path, (bootstrap_python, registry, unit_dir, runtime_dir)
+    )
+    content = render_helper_unit(
+        bootstrap_python=python,
+        registry=registry,
+        socket_path=runtime_dir / "helper.sock",
+        group=group,
+    )
+    _trusted(python)
+    if not python.is_file() or not os.access(python, os.X_OK):
+        raise HelperError("executable bootstrap required")
+    _trusted(unit_dir, directory=True)
+    if runtime_dir.parent != RUNTIME_ROOT:
+        raise HelperError("runtime directory must be directly beneath /run")
+    unit = unit_dir / "ai-device-native-helper.service"
+    if unit.exists() or unit.is_symlink():
+        raise HelperError("helper unit already exists; explicit reconciliation required")
+    for directory in (registry, runtime_dir):
+        if not directory.exists():
+            _trusted(directory.parent, directory=True)
+            directory.mkdir(mode=0o755)
+        _trusted(directory, directory=True)
+    # RuntimeDirectory is managed by systemd across host boots. Preserve sockets
+    # across daemon failures: never silently unlink an unknown existing endpoint.
+    content = content.replace(
+        "UMask=0077\n",
+        f"RuntimeDirectory={runtime_dir.name}\n"
+        "RuntimeDirectoryMode=0755\nRuntimeDirectoryPreserve=yes\nUMask=0077\n",
+    )
+    fd, temporary = tempfile.mkstemp(prefix=".helper-unit-", dir=unit_dir)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fchmod(stream.fileno(), 0o644)
+            os.fsync(stream.fileno())
+        os.link(temporary, unit)
+        with _directory_fd(unit_dir) as directory_fd:
+            os.fsync(directory_fd)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    return {"unit": str(unit), "started": False, "enabled": False, "daemon_reload_required": True}
+
+
+@contextmanager
+def _directory_fd(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        yield fd
+    finally:
+        os.close(fd)
 
 
 @contextmanager
@@ -372,7 +432,62 @@ class Helper:
             return {**result, "result": outcome, "replayed": False}
 
 
+@contextmanager
+def _daemon_lease(registry):
+    registry = _path(registry)
+    _trusted(registry, directory=True)
+    path = registry / "helper-daemon.lock"
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        _trusted(path)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise HelperError("helper daemon or recovery is already active") from exc
+        yield
+    finally:
+        os.close(fd)
+
+
+def recover_socket(registry, socket_path):
+    """Administrator-only explicit stale endpoint cleanup, never operation replay."""
+    if sys.platform != "linux" or os.geteuid() != 0:
+        raise HelperError("socket recovery requires Linux administrator identity")
+    socket_path = _path(socket_path)
+    _trusted(socket_path.parent, directory=True)
+    with _daemon_lease(registry):
+        try:
+            before = socket_path.lstat()
+        except FileNotFoundError:
+            return {"removed": False, "reason": "absent"}
+        if not stat.S_ISSOCK(before.st_mode) or before.st_uid != 0:
+            raise HelperError("only a root-owned Unix socket may be recovered")
+        with socket.socket(socket.AF_UNIX) as probe:
+            probe.settimeout(1)
+            try:
+                probe.connect(str(socket_path))
+            except OSError as exc:
+                if exc.errno != errno.ECONNREFUSED:
+                    raise HelperError("endpoint status uncertain; recovery refused") from exc
+            else:
+                raise HelperError("endpoint is listening; recovery refused")
+        after = socket_path.lstat()
+        if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+            raise HelperError("endpoint changed; recovery refused")
+        socket_path.unlink()
+        with _directory_fd(socket_path.parent) as directory_fd:
+            os.fsync(directory_fd)
+        return {"removed": True, "operations_changed": False}
+
+
 def serve(registry, socket_path, *, group):
+    if sys.platform != "linux" or os.geteuid() != 0:
+        raise HelperError("helper daemon requires Linux administrator identity")
+    with _daemon_lease(registry):
+        _serve(registry, socket_path, group=group)
+
+
+def _serve(registry, socket_path, *, group):
     if sys.platform != "linux" or os.geteuid() != 0:
         raise HelperError("helper daemon requires Linux administrator identity")
     helper = Helper(registry)
@@ -442,6 +557,13 @@ def main():
         provision.add_argument("--" + name, type=Path, required=True)
     provision.add_argument("--instance-id", required=True)
     provision.add_argument("--username", required=True)
+    deploy = modes.add_parser("deploy")
+    for name in ("bootstrap-python", "registry", "unit-dir", "runtime-dir"):
+        deploy.add_argument("--" + name, type=Path, required=True)
+    deploy.add_argument("--group", type=int, required=True)
+    recovery = modes.add_parser("recover-socket")
+    recovery.add_argument("--registry", type=Path, required=True)
+    recovery.add_argument("--socket", type=Path, required=True)
     daemon = modes.add_parser("serve")
     daemon.add_argument("--registry", type=Path, required=True)
     daemon.add_argument("--socket", type=Path, required=True)
@@ -456,11 +578,18 @@ def main():
     try:
         if mode == "register":
             print(json.dumps(register(**args), sort_keys=True))
+        elif mode == "deploy":
+            print(json.dumps(deploy_helper(**args), sort_keys=True))
+        elif mode == "recover-socket":
+            print(json.dumps(recover_socket(args["registry"], args["socket"]), sort_keys=True))
         elif mode == "serve":
             serve(args["registry"], args["socket"], group=args["group"])
         else:
             request = {key: args[key] for key in ("action", "instance_id", "operation_id")}
-            print(json.dumps(call_helper(args["socket"], request), sort_keys=True))
+            response = call_helper(args["socket"], request)
+            print(json.dumps(response, sort_keys=True))
+            if response.get("ok") is not True:
+                parser.exit(1)
     except (HelperError, OSError, ValueError, KeyError) as exc:
         parser.exit(1, f"helper refused: {exc}\n")
 

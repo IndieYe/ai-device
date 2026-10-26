@@ -28,15 +28,33 @@ home=/opt/ai-device/packages/0.2.2-native1
 exec "$home/runtime/bin/python3.13" -I -m device_runtime.native_install --payload "$home" "$@"
 EOF
 chmod 755 "$root/usr/bin/ai-device-native-install"
+# Independent standard-library-only administrator bootstrap, never client imports.
+bootstrap=/opt/ai-device/bootstrap/0.2.2-native1
+mkdir -p "$root$bootstrap"
+tar -xzf "$archive" -C "$root$bootstrap"
+mv "$root$bootstrap/python" "$root$bootstrap/runtime"
+site="$root$bootstrap/runtime/lib/python3.13/site-packages"
+rm -rf "$site"
+mkdir -p "$site/device_runtime"
+for module in __init__.py native_helper.py; do
+ cp "$root$home/runtime/lib/python3.13/site-packages/device_runtime/$module" "$site/device_runtime/"
+done
+cat > "$root/usr/bin/ai-device-native-helper" <<'EOF'
+#!/bin/sh
+set -eu
+exec /opt/ai-device/bootstrap/0.2.2-native1/runtime/bin/python3.13 -I -m device_runtime.native_helper "$@"
+EOF
+chmod 755 "$root/usr/bin/ai-device-native-helper"
 # Upstream CPython files can be group-writable. Published system programs must
 # not be writable by the client or group before a root helper trusts them.
 chmod -R go-w "$root$home"
+chmod -R go-w "$root$bootstrap"
 # Fail closed: no upgrade/removal of an existing native instance until helper
 # transactions are implemented. This development package only supports fresh install.
 cat > "$work/preflight" <<'EOF'
 #!/bin/sh
 set -eu
-if [ -e /opt/ai-device/instances ] || [ -e /var/lib/ai-device/manager ]; then
+if [ -e /opt/ai-device/instances ] || [ -e /var/lib/ai-device/manager ] || [ -e /opt/ai-device/bootstrap/0.2.2-native1 ]; then
  echo 'native lifecycle helper transaction required; no files have been replaced' >&2
  exit 1
 fi
@@ -60,7 +78,9 @@ EOF
  cat > "$root/DEBIAN/prerm" <<'EOF'
 #!/bin/sh
 set -eu
-[ ! -e /opt/ai-device/instances ] || { echo 'explicit instance/service uninstall required' >&2; exit 1; }
+for path in /opt/ai-device/instances /var/lib/ai-device/manager /etc/systemd/system/ai-device-native-helper.service; do
+ [ ! -e "$path" ] || { echo 'explicit instance/service uninstall required' >&2; exit 1; }
+done
 EOF
  chmod 755 "$root/DEBIAN/prerm"
  dpkg-deb --build "$root" "$output/ai-device-native-client_0.2.2-1_amd64.deb"
@@ -82,15 +102,18 @@ Offline development payload. Service management and unattended update not enable
 mkdir -p %{buildroot}
 cp -a $root/. %{buildroot}/
 %pretrans -p <lua>
-local p = {'/opt/ai-device/instances','/var/lib/ai-device/manager','/opt/ai-device/packages/0.2.2-native1'}
+local p = {'/opt/ai-device/instances','/var/lib/ai-device/manager','/opt/ai-device/packages/0.2.2-native1','/opt/ai-device/bootstrap/0.2.2-native1'}
 for _,path in ipairs(p) do
  if posix.stat(path) then error('existing native installation: helper transaction required') end
 end
 %preun -p <lua>
 if posix.stat('/opt/ai-device/instances') then error('explicit instance/service uninstall required') end
+if posix.stat('/var/lib/ai-device/manager') or posix.stat('/etc/systemd/system/ai-device-native-helper.service') then error('explicit helper uninstall required') end
 %files
 /opt/ai-device/packages/0.2.2-native1
 /usr/bin/ai-device-native-install
+/opt/ai-device/bootstrap/0.2.2-native1
+/usr/bin/ai-device-native-helper
 EOF
  rpmbuild --define "_topdir $work/rpm" -bb "$work/rpm/SPECS/native.spec" > "$work/rpm-build.log" 2>&1 || { cat "$work/rpm-build.log"; exit 1; }
  cp "$work/rpm/RPMS/x86_64/"*.rpm "$output/"

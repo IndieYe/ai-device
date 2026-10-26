@@ -321,3 +321,120 @@ def test_call_helper_lost_response_reports_unknown(tmp_path):
             nh.call_helper(path, req("start"))
         thread.join(timeout=5)
         assert not thread.is_alive()
+
+
+@pytest.fixture
+def deployment(tmp_path, monkeypatch):
+    monkeypatch.setattr(nh.sys, "platform", "linux")
+    monkeypatch.setattr(nh.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(nh, "_trusted", lambda *a, **kw: None)
+    monkeypatch.setattr(nh, "RUNTIME_ROOT", tmp_path)
+    python = tmp_path / "python"
+    python.write_text("fixture")
+    python.chmod(0o755)
+    units = tmp_path / "units"
+    units.mkdir()
+    return {
+        "bootstrap_python": python,
+        "registry": tmp_path / "registry",
+        "unit_dir": units,
+        "runtime_dir": tmp_path / "runtime",
+        "group": 12345,
+    }
+
+
+def test_deploy_helper_no_start_and_no_replace(deployment):
+    result = nh.deploy_helper(**deployment)
+    assert result["started"] is False and result["enabled"] is False
+    unit = Path(result["unit"])
+    content = unit.read_text()
+    assert "RuntimeDirectory=runtime\n" in content
+    assert "RuntimeDirectoryPreserve=yes" in content
+    assert "ExecStartPre" in content and "ExecStartPre=" not in content
+    assert "--group 12345" in content
+    with pytest.raises(nh.HelperError, match="already exists"):
+        nh.deploy_helper(**deployment)
+    assert unit.read_text() == content
+
+
+def test_deploy_helper_requires_administrator(deployment, monkeypatch):
+    monkeypatch.setattr(nh.os, "geteuid", lambda: 12345)
+    with pytest.raises(nh.HelperError, match="administrator"):
+        nh.deploy_helper(**deployment)
+    assert not deployment["registry"].exists()
+
+
+def test_deploy_helper_bad_runtime_has_no_side_effect(deployment):
+    deployment["runtime_dir"] /= "nested"
+    with pytest.raises(nh.HelperError, match="directly beneath"):
+        nh.deploy_helper(**deployment)
+    assert not deployment["registry"].exists()
+
+
+def test_deploy_helper_rejects_untrusted_bootstrap(deployment, monkeypatch):
+    def reject(*a, **kw):
+        raise nh.HelperError("untrusted bootstrap")
+
+    monkeypatch.setattr(nh, "_trusted", reject)
+    with pytest.raises(nh.HelperError, match="untrusted"):
+        nh.deploy_helper(**deployment)
+    assert not deployment["registry"].exists()
+
+
+@pytest.mark.parametrize("ok,code", [(True, None), (False, 1)])
+def test_call_cli_failure_exit(monkeypatch, capsys, ok, code):
+    monkeypatch.setattr(
+        nh.sys,
+        "argv",
+        [
+            "helper",
+            "call",
+            "--socket",
+            "/run/probe.sock",
+            "--action",
+            "query",
+            "--instance-id",
+            "probe",
+            "--operation-id",
+            "query-1",
+        ],
+    )
+    monkeypatch.setattr(nh, "call_helper", lambda *a: {"ok": ok})
+    if code is not None:
+        with pytest.raises(SystemExit) as result:
+            nh.main()
+        assert result.value.code == code
+    else:
+        nh.main()
+    assert json.loads(capsys.readouterr().out) == {"ok": ok}
+
+
+@pytest.fixture
+def recovery(tmp_path, monkeypatch):
+    monkeypatch.setattr(nh.sys, "platform", "linux")
+    monkeypatch.setattr(nh.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(nh, "_trusted", lambda *a, **kw: None)
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    return registry, tmp_path / "helper.sock"
+
+
+def test_recover_socket_absent_and_file_refused(recovery):
+    registry, path = recovery
+    assert nh.recover_socket(registry, path)["removed"] is False
+    path.write_text("not a socket")
+    with pytest.raises(nh.HelperError, match="root-owned Unix socket"):
+        nh.recover_socket(registry, path)
+    assert path.read_text() == "not a socket"
+
+
+def test_recover_socket_daemon_lock_blocks(recovery):
+    registry, path = recovery
+    with nh._daemon_lease(registry), pytest.raises(nh.HelperError, match="already active"):
+        nh.recover_socket(registry, path)
+
+
+def test_recover_socket_requires_administrator(recovery, monkeypatch):
+    monkeypatch.setattr(nh.os, "geteuid", lambda: 12345)
+    with pytest.raises(nh.HelperError, match="administrator"):
+        nh.recover_socket(*recovery)

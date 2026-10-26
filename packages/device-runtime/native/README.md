@@ -43,7 +43,7 @@ macOS 将 target 改为 `darwin-arm64`，使用对应归档。目的目录必须
 
 新增 `native_install.py` 调用现有 `install_instance`，不复制release生命周期。安装器必须由选定普通用户执行，拒绝root创建实例；包内自带runtime、uv及离线client依赖。`installation.install_instance(runner_python=...)` 在发布active前写入绝对解释器shebang，旧调用不传参时行为保持。
 
-构建入口：`../scripts/assemble-native-payload.py` 从三包wheel、client锁定约束和依赖wheel目录组装bundle，验证 `tool-lock.json` 内uv准确文件名/大小/摘要；`../scripts/build-native-linux.sh` 在独立amd64 Linux构建环境产出DEB/RPM。运行时归档在执行前验证锁定大小和SHA256。包是**未签名开发试制品**，固定开发版本布局，尚不支持更新/卸载已存在实例，未实现系统helper与systemd配置。
+构建入口：`../scripts/assemble-native-payload.py` 从三包wheel、client锁定约束和依赖wheel目录组装bundle，验证 `tool-lock.json` 内uv准确文件名/大小/摘要；`../scripts/build-native-linux.sh` 在独立amd64 Linux构建环境产出DEB/RPM。运行时归档在执行前验证锁定大小和SHA256。包是**未签名开发试制品**，固定开发版本布局，尚不支持更新/卸载已存在实例。现已包含独立helper bootstrap及显式systemd部署入口，包安装本身不自启；普通用户启动、UID隔离及socket显式恢复已在隔离Linux验证，契约与未完成边界见 [HELPER.md](HELPER.md)。
 
 开发包当前安装入口 `ai-device-native-install --root <new-instance> --instance-id <id> --server-url <https-center>` 必须由普通用户运行，父目录须事先授予该用户。它不启动服务、不配对、不要求输入长期Token。`--server-url` 目前只写入连接配置；实际配对由P2实现。
 

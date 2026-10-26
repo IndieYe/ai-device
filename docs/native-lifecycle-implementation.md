@@ -255,3 +255,29 @@ P1仍进行中。本轮把运行时准备接到真实离线应用安装，未完
 隔离验证脚本 `packages/device-runtime/scripts/accept-native-helper.py`。所有本轮验证容器均本任务新建--rm，无后台遗留，无正式服务操作。完整契约、模块CLI与未完成边界见 `packages/device-runtime/native/HELPER.md`。
 
 下一步仍在P1：先重建包含helper与规范权限的新包，完成独立bootstrap、unit安装及显式enable/启动编排，再在隔离systemd环境验证真实普通用户进程和健康；补socket生命周期与未知操作恢复、旧工具互斥，最后完成更新卸载事务及实机验收。不得用当前生成unit替代服务已启动或设备已上线。
+
+## 11. P1独立helper包交付与真实隔离systemd（2026-10-26）
+
+继续同一P1授权，新增独立root bootstrap和显式deploy/recover-socket CLI；包安装不隐式部署、自启或启动。bootstrap只包含标准库helper，不依赖客户端site-packages，客户端目录暂不可用时仍可部署。已有登记/unit时包卸载拒绝；失败可能留下目录或unit，需要明确对账，不宣称完整事务。
+
+动态验收发现call响应ok=false仍以0退出，已修为非零并补回归。serve与管理员socket恢复共用daemon锁；活动daemon/监听端点/非socket/未知结果拒绝删除，只对确认ECONNREFUSED、root-owned且inode未变的遗留socket显式移除。不改变unknown操作记录，不隐式重试start。
+
+验证：
+
+- helper **39 passed**，Device完整 **755 passed in 40.44s**；ruff、shell语法、git diff --check通过。
+- v9 DEB安装，无源码挂载：独立bootstrap、普通用户实例、真实Unix socket peer拒绝、无systemd时查询拒绝、活动daemon恢复拒绝、退出后显式socket恢复均通过。
+- 在新建Apple container amd64/Rosetta实例中实际启动systemd255/cgroupv2；初次缺少capability时systemd退出，使用cap-add ALL及container=apple后成功。不可把此实验当目标实机或最低glibc验收。
+- v8与最终v9均实际部署/启动helper，普通用户client active/running；/proc UID均12345，重复同ID启动PID不变，另一UID即使加入socket组仍被拒绝；双unit enable链接通过。测试中心为127.0.0.1:9，不连接真实中心，不代表业务健康、配对或中心确认。
+- 固化入口 `accept-packaged-helper.py`、`accept-native-systemd.sh`。普通poweroff依赖login1超时，最终仅回收本轮隔离容器；当前native-p1运行实例查询为空，无真实服务操作。
+- v8 RPM完成无源码离线安装、依赖检查、普通UID导入、独立helper导入及拒绝覆盖/卸载后数据保留；它不包含后补socket恢复，不能作为最终v9 RPM证据。
+
+制品（未签名开发品，源码基线19867be＋本轮dirty wheel，准确字节由build-inputs记录）：
+
+- v9 DEB `build/native-packages-v9/ai-device-native-client_0.2.2-1_amd64.deb`，90,491,644 bytes，SHA256 `ef647aeb45500d81a80b68f68a5f29e238e387cf77bd4264c43171c83a5184d0`；bundle `a26f79357759dd10b4d4c408700d354ed711f56ba56c5ccc682a79b72bc48e7c`。
+- v8 RPM `build/native-packages-v8/ai-device-native-client-0.2.2-1.x86_64.rpm`，91,756,264 bytes，SHA256 `04916138d2e3c57ec21366096c7ea52b1fd80c991ba9c70b32453ea8a5cf2082`。
+
+交付联动：实现/CLI/包脚本/测试/原生文档已更新；中心API、前端、数据库及宿主工作目录不适用，本轮未改变其契约或数据。二进制不提交，不覆盖全局用户配置。
+
+最终v9 RPM已重建并通过无源码离线安装、依赖/普通UID导入、独立helper和recover-socket命令、拒绝覆盖/卸载及数据保留检查。文件 `build/native-packages-v9/ai-device-native-client-0.2.2-1.x86_64.rpm`，91,744,776 bytes，SHA256 `86f64b7094580195346845bdfff7d2a3b3f03325982fa45e33ff813100dc46a5`。未在Rocky重复真实systemd启动，相关证据来自v9 DEB隔离systemd。
+
+P1仍未通过：未知启动结果的明确收敛、旧工具完整互斥、批准更新/卸载事务与故障恢复、glibc主线对齐、完整许可/SBOM/签名、目标实机及宿主重启恢复均仍缺；P2—P5未开始。后续继续P1，不把本地检查点作为整个任务完成。

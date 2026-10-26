@@ -50,3 +50,26 @@ register返回started=false、enabled=false、daemon_reload_required=true。是�
 ## P1仍缺
 
 独立bootstrap稳定交付、helper包内部署与socket生命周期恢复、systemd安装/enable/普通用户真实启动与健康验证、与旧升级器完整互斥、受控更新/卸载及故障恢复、正式签名与许可、glibc主线对齐和实机自启恢复。不能因为unit语法通过就把这些标为完成，也不能进入P2。
+
+## 后续实现：独立bootstrap、显式部署与socket恢复
+
+本节更新前文对应的“尚缺”描述，其余边界仍有效。开发包现额外携带 `/opt/ai-device/bootstrap/0.2.2-native1/runtime` 和 `/usr/bin/ai-device-native-helper`；bootstrap使用独立CPython、只保留device_runtime的包入口与标准库helper模块，不安装客户端依赖。客户端目录暂时不可用时部署验收通过。固定开发版本，不是可自动更新的通用bootstrap版本策略。
+
+新增管理员命令：
+
+```text
+ai-device-native-helper deploy
+  --bootstrap-python <独立bootstrap绝对解释器>
+  --registry <root管理的登记目录> --unit-dir <系统unit目录>
+  --runtime-dir /run/<专用目录> --group <明确socket组GID>
+ai-device-native-helper recover-socket
+  --registry <同一登记目录> --socket /run/<专用目录>/helper.sock
+```
+
+deploy只创建目录与无覆盖unit，返回started=false/enabled=false；失败可能留下目录，不能当事务成功。显式systemctl daemon-reload、enable、start与普通用户调用是另外步骤。RuntimeDirectory由systemd在开机时创建，Preserve=yes避免daemon退出时隐式移除socket。包安装本身不部署/启用/启动；登记或unit存在时拒绝包卸载。
+
+serve与recover-socket共用root登记目录内的daemon锁。recover-socket仅Linux管理员可用，拒绝活动daemon、监听端点、非root socket、普通文件及未知连接结果；只有明确ECONNREFUSED且inode不变才删除遗留端点并fsync。不修改unknown操作、不重放start。不是断电/文件系统损坏自动恢复承诺。
+
+CLI call在响应ok=false时返回非零退出码；包级验收发现并修复了此前错误返回0的问题，已补成功/失败退出码回归。
+
+验证入口：`../scripts/accept-packaged-helper.py`（独立bootstrap、真实socket/UID及显式遗留恢复），`../scripts/accept-native-systemd.sh`（全新隔离systemd内真实普通用户启动、自启链接、同ID PID稳定、非owner拒绝）。v9 DEB实测通过；helper39项、Device755项通过。v8 RPM离线安装/依赖/独立helper通过，但不代表其包含后补的socket恢复。隔离环境是Apple container的amd64/Rosetta，systemd255、cgroupv2，启动需要cap-add ALL和container=apple；不是目标实机或glibc最低基线证明。中心健康、配对、宿主重启恢复、unknown收敛及更新/卸载仍未验证。
