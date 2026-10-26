@@ -32,7 +32,16 @@ class FakeSystemd:
             **self.override,
         }
 
-    def start(self, unit, *, lease_fd=None):
+    def start(self, unit, *, lease_fd=None, receipt_path=None, intent=None):
+        if receipt_path is not None:
+            nh._save_new(
+                receipt_path,
+                {
+                    "state": "sender_reaped",
+                    "intent": intent,
+                    "returncode": 1 if self.failure else 0,
+                },
+            )
         self.calls.append(("start", unit))
         if self.failure:
             raise subprocess.TimeoutExpired("systemctl", 120)
@@ -650,7 +659,12 @@ def test_systemd_guard_inherits_sender_lock(tmp_path):
 
         def run():
             try:
-                nh.Systemd(str(executable)).start("fixture.service", lease_fd=lease.fileno())
+                nh.Systemd(str(executable)).start(
+                    "fixture.service",
+                    lease_fd=lease.fileno(),
+                    receipt_path=tmp_path / "receipt.json",
+                    intent={"fixture": True},
+                )
             except (OSError, subprocess.SubprocessError, nh.HelperError) as exc:
                 errors.append(exc)
 
@@ -719,3 +733,37 @@ def test_stopped_recovery_missing_sender_lock_refused(helper):
     with pytest.raises(FileNotFoundError):
         service.handle(req("resolve-stopped"), peer_uid=record["uid"])
     assert not (service.registry / "recovery-probe-one.json").exists()
+
+
+@pytest.mark.parametrize("action", ["resolve-running", "resolve-stopped"])
+def test_guard_missing_receipt_blocks_recovery(helper, action):
+    service, adapter, record = stopped_unknown(helper)
+    if action == "resolve-running":
+        adapter.override.clear()
+        adapter.active = "active"
+    (service.registry / "sender-probe-one.json").unlink()
+    with pytest.raises(nh.HelperError, match="receipt missing"):
+        service.handle(req(action), peer_uid=record["uid"])
+    assert not (service.registry / "recovery-probe-one.json").exists()
+    with pytest.raises(nh.HelperError, match="unconfirmed"):
+        service.handle(req("start", "bypass"), peer_uid=record["uid"])
+
+
+def test_guard_receipt_mismatch_refused(helper):
+    service, _adapter, record = stopped_unknown(helper)
+    path = service.registry / "sender-probe-one.json"
+    value = json.loads(path.read_text())
+    value["intent"]["operation_id"] = "different"
+    path.write_text(json.dumps(value))
+    with pytest.raises(nh.HelperError, match="receipt mismatch"):
+        service.handle(req("resolve-stopped"), peer_uid=record["uid"])
+
+
+def test_old_barrier_without_receipt_not_safe_for_stopped(helper):
+    service, _adapter, record = stopped_unknown(helper)
+    path = service.registry / "op-probe-one.json"
+    value = json.loads(path.read_text())
+    value["execution_barrier"] = 1
+    path.write_text(json.dumps(value))
+    with pytest.raises(nh.HelperError, match="legacy"):
+        service.handle(req("resolve-stopped"), peer_uid=record["uid"])

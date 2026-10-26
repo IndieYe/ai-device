@@ -306,19 +306,43 @@ class Systemd:
             env={"PATH": "/usr/bin:/bin", "LANG": "C"},
         )
 
-    def start(self, unit, *, lease_fd=None):
+    def start(self, unit, *, lease_fd=None, receipt_path=None, intent=None):
         if lease_fd is None:
             raise HelperError("start execution lease required")
         # The standard-library guard owns the inherited flock until systemctl
         # exits and is reaped, even if the daemon dies. Do not rely on systemctl
         # preserving an unknown fd. Its own timeout kills/reaps only its child.
-        guard = (
-            "import subprocess,sys; "
-            "r=subprocess.run(sys.argv[1:],timeout=120,check=False); "
-            "sys.exit(r.returncode)"
-        )
+        guard = """import json,os,subprocess,sys,tempfile
+from pathlib import Path
+receipt=Path(sys.argv[1]); intent=json.loads(sys.argv[2])
+try:
+    result=subprocess.run(sys.argv[3:],timeout=120,check=False)
+    code=result.returncode
+except subprocess.TimeoutExpired:
+    code=124
+value={"state":"sender_reaped","intent":intent,"returncode":code}
+fd,temporary=tempfile.mkstemp(prefix=".sender-",dir=receipt.parent)
+with os.fdopen(fd,"w") as stream:
+    json.dump(value,stream,sort_keys=True); stream.flush(); os.fsync(stream.fileno())
+os.link(temporary,receipt); os.unlink(temporary)
+fd=os.open(receipt.parent,os.O_RDONLY|os.O_DIRECTORY)
+os.fsync(fd); os.close(fd)
+sys.exit(code)
+"""
+        if receipt_path is None or intent is None:
+            raise HelperError("sender receipt target and intent required")
         subprocess.run(
-            [sys.executable, "-I", "-c", guard, self.executable, "start", unit],
+            [
+                sys.executable,
+                "-I",
+                "-c",
+                guard,
+                str(receipt_path),
+                json.dumps(intent),
+                self.executable,
+                "start",
+                unit,
+            ],
             check=True,
             capture_output=True,
             pass_fds=(lease_fd,),
@@ -432,8 +456,8 @@ class Helper:
                 stored_intent = (
                     json.loads(intent_path.read_text()) if intent_path.exists() else None
                 )
-                if stored_intent and stored_intent.get("execution_barrier") == 1:
-                    expected["execution_barrier"] = 1
+                if stored_intent and stored_intent.get("execution_barrier") in (1, 2):
+                    expected["execution_barrier"] = stored_intent["execution_barrier"]
                 if stored_intent != expected:
                     raise HelperError("matching start intent required for recovery")
                 if recovery_path.exists():
@@ -446,11 +470,22 @@ class Helper:
                 with (
                     _instance_service_lease(Path(record["root"])),
                     self._execution_lease(instance_id, existing=True)
-                    if expected.get("execution_barrier") == 1
+                    if expected.get("execution_barrier") in (1, 2)
                     else nullcontext(),
                 ):
+                    if expected.get("execution_barrier") == 2:
+                        receipt_path = self.registry / f"sender-{instance_id}-{operation_id}.json"
+                        if not receipt_path.exists():
+                            raise HelperError("sender completion receipt missing; remains unknown")
+                        _trusted(receipt_path)
+                        receipt = json.loads(receipt_path.read_text())
+                        if (
+                            receipt.get("state") != "sender_reaped"
+                            or receipt.get("intent") != expected
+                        ):
+                            raise HelperError("sender completion receipt mismatch; remains unknown")
                     if action == "resolve-stopped":
-                        if expected.get("execution_barrier") != 1:
+                        if expected.get("execution_barrier") != 2:
                             raise HelperError(
                                 "legacy intent has no sender barrier; manual reconciliation required"
                             )
@@ -520,12 +555,14 @@ class Helper:
                 "instance_id": instance_id,
                 "operation_id": operation_id,
                 "unit_sha256": record["unit_sha256"],
-                "execution_barrier": 1,
+                "execution_barrier": 2,
             }
             if intent_path.exists():
                 existing_intent = json.loads(intent_path.read_text())
                 if "execution_barrier" not in existing_intent:
                     intent.pop("execution_barrier")
+                else:
+                    intent["execution_barrier"] = existing_intent["execution_barrier"]
                 if existing_intent != intent:
                     raise HelperError("operation identity conflict")
                 return {
@@ -563,7 +600,13 @@ class Helper:
                 if snapshot["ActiveState"] != "active":
                     try:
                         with _instance_service_lease(Path(record["root"])):
-                            self.adapter.start(record["unit"], lease_fd=execution_fd)
+                            self.adapter.start(
+                                record["unit"],
+                                lease_fd=execution_fd,
+                                receipt_path=self.registry
+                                / f"sender-{instance_id}-{operation_id}.json",
+                                intent=intent,
+                            )
                             observation = self._snapshot(record)
                         outcome = {
                             "state": "started"

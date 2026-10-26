@@ -303,3 +303,13 @@ P1仍未通过：未知启动结果的明确收敛、旧工具完整互斥、批
 v11 DEB `build/native-packages-v11/ai-device-native-client_0.2.2-1_amd64.deb`，90,555,702字节，SHA256 `04ad241cf5f99a73e6af245006dbc0d0b05dedce9625964a2e65adab1128e1f1`；bundle `19370ee14fc6d8a98ebc97ac82e4babf24f7439a1a89d9252b091c2e4930f093`。源码基线1e99681加本轮dirty wheel；未签名，未重建RPM。实现/CLI/测试/文档联动，无数据库/中心/前端变化。
 
 重启前保存边界：本轮到此收敛，不启动后续工作。P1未完成；接续先核实工作区/HEAD，再复核guard进程异常退出和真实pending Job取消的故障覆盖、对齐最终RPM；旧工具完整互斥、受控更新卸载事务、glibc主线对齐、许可签名及实机恢复仍缺，不进入P2。
+
+## 14. 重启后复核：guard回收持久证据（2026-10-26）
+
+服务重启后确认原Worktree HEAD f9041f0、工作区干净、无native-p1运行测试实例；未重复已完成操作。发现guard异常退出会释放锁但不能证明其systemctl子进程退出，补execution_barrier=2：guard回收直接子进程后原子发布匹配intent的sender_reaped回执，fsync文件和目录。两恢复分支均要求执行锁及完整回执；缺失/不匹配继续阻塞，版本1旧意图拒绝未运行自动恢复。
+
+验证：helper69项，完整Device **785 passed in 41.59s**，ruff/diff检查通过；v12准确DEB真实隔离systemd两恢复分支、失败后新ID重试与稳定PID通过。测试实例已回收。缺回执模拟guard异常终态，未执行实际guard强杀实验；真实pending Job取消仅有适配器竞态测试，不能标实机通过。RPM未对齐恢复动作。
+
+v12 DEB `build/native-packages-v12/ai-device-native-client_0.2.2-1_amd64.deb` 90,500,774字节，SHA256 `928f9a4debe0078423b5483d02509efdb3a99c7fad41b9bcd7b2d92c8f8682e1`。基线f9041f0＋本轮dirty wheel，未签名。本轮只修改helper、测试/故障脚本及文档，无前端/中心/数据库影响。
+
+仍在P1：后续真实排队Job取消与guard异常退出故障覆盖、最终RPM对齐；旧工具完整互斥、受控更新卸载、glibc主线、许可签名及实机恢复门禁未完成，不进入P2。

@@ -95,3 +95,9 @@ resolve-stopped在实例管理锁、安装/监督共享锁和执行锁内保存�
 并发前提仍是登记helper管理路径及既有维护锁契约；此恢复不是对不遵循锁的外部管理员任意操作提供独占保证。Job取消不证明历史上从未启动过，只证明当前屏障后没有该请求的延迟发送者和已观察残留Job；业务健康另行验证。
 
 v11 DEB在真实隔离systemd中验证已运行丢响应恢复及明确失败后恢复：测试专用ExecStartPre=false/Restart=no制造失败，原unknown/提前重试阻塞，confirmed_stopped后移除测试故障，用新ID启动成功并同ID PID稳定。真实子进程测试验证父fd关闭后guard仍持锁。helper65项、Device781项通过。v11 RPM未重建，v9 RPM不包含这些恢复动作。
+
+## 回收屏障修正：execution_barrier=2
+
+重启后复核发现版本1仅凭执行锁释放不足以证明guard异常退出时其子进程已退出。新版本guard在systemctl退出/超时回收后，原子no-replace发布 `sender-<instance>-<operation>.json`（sender_reaped、准确intent及返回码），文件与父目录fsync。新intent版本2；resolve-running/resolve-stopped均要求匹配的完整回执及独占执行锁。guard崩溃、回执缺失/不匹配仍unknown，不能仅凭锁释放恢复。版本1或无版本旧意图不允许未运行自动恢复。
+
+guard回执证明直接systemctl子进程已经回收，不宣称任意后代/外部管理者也已终结；随后仍必须核对systemd Job与服务状态。回执写入失败保守阻塞，不自动伪造回执。v12 DEB实际systemd两恢复分支通过，helper69项/Device785项通过；真实排队Job取消尚未实测，RPM尚未对齐本轮恢复实现。
