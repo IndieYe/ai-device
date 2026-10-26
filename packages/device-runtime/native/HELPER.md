@@ -73,3 +73,13 @@ serve与recover-socket共用root登记目录内的daemon锁。recover-socket仅L
 CLI call在响应ok=false时返回非零退出码；包级验收发现并修复了此前错误返回0的问题，已补成功/失败退出码回归。
 
 验证入口：`../scripts/accept-packaged-helper.py`（独立bootstrap、真实socket/UID及显式遗留恢复），`../scripts/accept-native-systemd.sh`（全新隔离systemd内真实普通用户启动、自启链接、同ID PID稳定、非owner拒绝）。v9 DEB实测通过；helper39项、Device755项通过。v8 RPM离线安装/依赖/独立helper通过，但不代表其包含后补的socket恢复。隔离环境是Apple container的amd64/Rosetta，systemd255、cgroupv2，启动需要cap-add ALL和container=apple；不是目标实机或glibc最低基线证明。中心健康、配对、宿主重启恢复、unknown收敛及更新/卸载仍未验证。
+
+## Unknown显式收敛：resolve-running
+
+请求action新增 `resolve-running`，仍只允许action/instance_id/operation_id。用原启动operation_id调用；query/reconcile保持只读，现同时返回原result和独立recovery。原start同ID仍返回原结果，并附恢复记录，不再次执行。
+
+resolve-running要求匹配当前unit摘要的原start intent，原结果缺失或unknown、登记/实际systemd绑定均有效、安装和监督维护锁允许观察，并确认active/running、MainPID>1且Job为空或0。保存不可覆盖的 `recovery-<instance>-<operation>.json`，state=confirmed_running、start_replayed=false，原intent/result不改。恢复记录成功发布后才解除该旧unknown对新启动ID的阻塞；新ID仍需经过全部现有启动/维护检查，active不会重启。
+
+此记录只证明恢复时服务处于已运行状态，不证明原调用因果成功，也不证明业务健康或未来持续运行。重复恢复返回已保存证据和当前观察，不刷新旧证据。inactive/failed/过渡态、PID或Job证据缺失、维护锁冲突、持久化失败均不解除unknown。尚无“确认未运行后重新启动”入口；需要明确终结旧systemd job的独立契约后再实现，不能换ID绕过。
+
+故障注入脚本 `../scripts/accept-native-unknown.py` 在一次性systemd实例先启动后模拟完成响应丢失，重建Helper并对账，验证原unknown保留、新ID事前阻塞、恢复后already_active、PID不变、实际start仅1次。v10 DEB验证通过，helper51项、Device767项通过。v9 RPM不包含此新增动作，未重建v10 RPM。

@@ -281,3 +281,13 @@ P1仍进行中。本轮把运行时准备接到真实离线应用安装，未完
 最终v9 RPM已重建并通过无源码离线安装、依赖/普通UID导入、独立helper和recover-socket命令、拒绝覆盖/卸载及数据保留检查。文件 `build/native-packages-v9/ai-device-native-client-0.2.2-1.x86_64.rpm`，91,744,776 bytes，SHA256 `86f64b7094580195346845bdfff7d2a3b3f03325982fa45e33ff813100dc46a5`。未在Rocky重复真实systemd启动，相关证据来自v9 DEB隔离systemd。
 
 P1仍未通过：未知启动结果的明确收敛、旧工具完整互斥、批准更新/卸载事务与故障恢复、glibc主线对齐、完整许可/SBOM/签名、目标实机及宿主重启恢复均仍缺；P2—P5未开始。后续继续P1，不把本地检查点作为整个任务完成。
+
+## 12. P1 unknown启动已运行分支收敛（2026-10-26）
+
+按用户先补unknown收敛与恢复要求，增加有限action resolve-running。匹配原start意图与unit摘要，在当前绑定、维护共享锁、active/running、有效PID及无pending Job证据下，no-replace/fsync发布独立recovery confirmed_running；原unknown或缺失result保持不变。query/reconcile返回原结果及恢复证据，仍只读；同ID不重放，原unknown只有在恢复证据已持久保存后才不再阻塞新ID。不会因响应丢失假设启动未发生，也不会把确认运行说成原操作成功。
+
+验证：helper51项通过，完整Device **767 passed in 42.20s**；ruff通过。新增持久化失败继续阻塞、维护锁、权限/绑定漂移、缺失result恢复、无intent/已完成拒绝、非running/PID/Job证据不足等回归。首次测试误用了op-1而fixture默认one，已修测试，不涉及产品错误。
+
+构建v10 DEB并在全新一次性systemd实例复验基础服务链，再以真实systemctl start成功后抛TimeoutExpired模拟丢完成响应：unknown保留，新ID事前拒绝，重建Helper后resolve-running成功，原文件字节不变，后续新IDalready_active，PID217未变，实际start调用恰1次。故障注入入口 `packages/device-runtime/scripts/accept-native-unknown.py`。仅临时隔离实例，不操作真实服务；无中心连接，无配对或业务健康证明。v10 bundle SHA `1ba3b4197faf8a40cf4ade59f81cbb3e61ce30b54c68925761d3c0c35616b3d0`；v9 RPM不含新增动作，本轮未重建RPM。
+
+实现/CLI/观察字段Job/测试/原生契约已联动；无前端、中心API、数据库或用户配置变更。仍在P1。未运行/失败的unknown仍阻塞，后续需设计旧job终结和显式重试的权限/竞态闭环，不得仅凭inactive放行。更新卸载、glibc对齐、许可签名和实机恢复门禁保持未完成。

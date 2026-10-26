@@ -1,6 +1,6 @@
 """Linux native service helper: administrator registration and bounded local IPC.
 
-Only query/start/reconcile are implemented. No stop, arbitrary argv, installation,
+Only query/start/reconcile/resolve-running are implemented. No stop, arbitrary argv, installation,
 package activation or automatic replay. Run the daemon via its dedicated root unit.
 """
 
@@ -23,7 +23,7 @@ from pathlib import Path
 
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
 MAX_REQUEST = 4096
-ACTIONS = {"query", "start", "reconcile"}
+ACTIONS = {"query", "start", "reconcile", "resolve-running"}
 RUNTIME_ROOT = Path("/run")
 
 
@@ -285,7 +285,7 @@ class Systemd:
                 "show",
                 unit,
                 "--no-pager",
-                "--property=ActiveState,SubState,MainPID,User,Group,FragmentPath,ExecStart",
+                "--property=ActiveState,SubState,MainPID,Job,User,Group,FragmentPath,ExecStart",
             ],
             check=True,
             text=True,
@@ -351,7 +351,7 @@ class Helper:
             or match[2].strip() != expected + " client"
         ):
             raise HelperError("loaded systemd binding differs from registered unit")
-        return {k: snapshot.get(k) for k in ("ActiveState", "SubState", "MainPID")}
+        return {k: snapshot.get(k) for k in ("ActiveState", "SubState", "MainPID", "Job")}
 
     @contextmanager
     def _lease(self, instance_id):
@@ -384,9 +384,55 @@ class Helper:
                 "operation_id": operation_id,
                 "observation": snapshot,
             }
+            recovery_path = self.registry / f"recovery-{instance_id}-{operation_id}.json"
+            if action == "resolve-running":
+                intent_path = self.registry / f"op-{instance_id}-{operation_id}.json"
+                result_path = self.registry / f"result-{instance_id}-{operation_id}.json"
+                expected = {
+                    "action": "start",
+                    "instance_id": instance_id,
+                    "operation_id": operation_id,
+                    "unit_sha256": record["unit_sha256"],
+                }
+                if not intent_path.exists() or json.loads(intent_path.read_text()) != expected:
+                    raise HelperError("matching start intent required for recovery")
+                if recovery_path.exists():
+                    return {**result, "recovery": json.loads(recovery_path.read_text())}
+                if (
+                    result_path.exists()
+                    and json.loads(result_path.read_text()).get("state") != "unknown"
+                ):
+                    raise HelperError("only an unknown start requires recovery")
+                with _instance_service_lease(Path(record["root"])):
+                    observation = self._snapshot(record)
+                    if (
+                        observation["ActiveState"] != "active"
+                        or observation["SubState"] != "running"
+                        or not str(observation["MainPID"]).isdigit()
+                        or int(observation["MainPID"]) <= 1
+                        or observation["Job"] not in ("", "0")
+                    ):
+                        raise HelperError(
+                            "stable running service without a pending job required; remains unknown"
+                        )
+                    recovery = {
+                        "state": "confirmed_running",
+                        "intent": expected,
+                        "observation": observation,
+                        "start_replayed": False,
+                    }
+                    _save_new(recovery_path, recovery)
+                return {**result, "recovery": recovery}
             if action != "start":
                 path = self.registry / f"op-{instance_id}-{operation_id}.json"
                 result["intent"] = json.loads(path.read_text()) if path.exists() else None
+                stored_result = self.registry / f"result-{instance_id}-{operation_id}.json"
+                result["result"] = (
+                    json.loads(stored_result.read_text()) if stored_result.exists() else None
+                )
+                result["recovery"] = (
+                    json.loads(recovery_path.read_text()) if recovery_path.exists() else None
+                )
                 return result
             intent_path = self.registry / f"op-{instance_id}-{operation_id}.json"
             result_path = self.registry / f"result-{instance_id}-{operation_id}.json"
@@ -405,6 +451,9 @@ class Helper:
                     if result_path.exists()
                     else {"state": "unknown"},
                     "replayed": False,
+                    "recovery": json.loads(recovery_path.read_text())
+                    if recovery_path.exists()
+                    else None,
                 }
             for pending in self.registry.glob(f"op-{instance_id}-*.json"):
                 result_file = pending.with_name(pending.name.replace("op-", "result-", 1))
@@ -412,7 +461,16 @@ class Helper:
                     not result_file.exists()
                     or json.loads(result_file.read_text()).get("state") == "unknown"
                 ):
-                    raise HelperError("unconfirmed operation blocks a new start; reconcile first")
+                    recovered = pending.with_name(pending.name.replace("op-", "recovery-", 1))
+                    if not recovered.exists():
+                        raise HelperError(
+                            "unconfirmed operation blocks a new start; reconcile first"
+                        )
+                    recovery = json.loads(recovered.read_text())
+                    if recovery.get("state") != "confirmed_running" or recovery.get(
+                        "intent"
+                    ) != json.loads(pending.read_text()):
+                        raise HelperError("invalid recovery evidence")
             if snapshot["ActiveState"] not in {"inactive", "failed", "active"}:
                 raise HelperError("service transition requires read-only reconciliation")
             _save_new(intent_path, intent)

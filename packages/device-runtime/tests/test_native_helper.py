@@ -24,6 +24,7 @@ class FakeSystemd:
             "ActiveState": self.active,
             "SubState": "running",
             "MainPID": "123",
+            "Job": "",
             "User": str(self.record["uid"]),
             "Group": str(self.record["gid"]),
             "FragmentPath": self.record["unit_path"],
@@ -438,3 +439,111 @@ def test_recover_socket_requires_administrator(recovery, monkeypatch):
     monkeypatch.setattr(nh.os, "geteuid", lambda: 12345)
     with pytest.raises(nh.HelperError, match="administrator"):
         nh.recover_socket(*recovery)
+
+
+def test_resolve_unknown_running_without_replay(helper):
+    service, adapter, record = helper
+    adapter.failure = True
+    service.handle(req("start"), peer_uid=record["uid"])
+    original = (service.registry / "result-probe-one.json").read_bytes()
+    adapter.failure = False
+    adapter.active = "active"
+    recovered = service.handle(req("resolve-running"), peer_uid=record["uid"])
+    assert recovered["recovery"]["state"] == "confirmed_running"
+    assert recovered["recovery"]["start_replayed"] is False
+    assert (service.registry / "result-probe-one.json").read_bytes() == original
+    assert (
+        service.handle(req("resolve-running"), peer_uid=record["uid"])["recovery"]
+        == recovered["recovery"]
+    )
+    assert (
+        service.handle(req("reconcile"), peer_uid=record["uid"])["recovery"]
+        == recovered["recovery"]
+    )
+    service.handle(req("start", "next"), peer_uid=record["uid"])
+    assert sum(a == "start" for a, _ in adapter.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("ActiveState", "inactive"),
+        ("ActiveState", "failed"),
+        ("SubState", "auto-restart"),
+        ("MainPID", "0"),
+        ("Job", "42 start"),
+        ("Job", None),
+    ],
+)
+def test_unknown_recovery_requires_running_evidence(helper, field, value):
+    service, adapter, record = helper
+    adapter.failure = True
+    service.handle(req("start"), peer_uid=record["uid"])
+    adapter.active = "active"
+    adapter.override[field] = value
+    with pytest.raises(nh.HelperError, match="remains unknown"):
+        service.handle(req("resolve-running"), peer_uid=record["uid"])
+    assert not (service.registry / "recovery-probe-one.json").exists()
+
+
+def test_recovery_missing_result_and_missing_intent(helper):
+    service, adapter, record = helper
+    with pytest.raises(nh.HelperError, match="intent"):
+        service.handle(req("resolve-running"), peer_uid=record["uid"])
+    adapter.failure = True
+    service.handle(req("start"), peer_uid=record["uid"])
+    (service.registry / "result-probe-one.json").unlink()
+    adapter.active = "active"
+    service.handle(req("resolve-running"), peer_uid=record["uid"])
+    assert not (service.registry / "result-probe-one.json").exists()
+
+
+def test_recovery_persistence_failure_still_blocks_new_start(helper, monkeypatch):
+    service, adapter, record = helper
+    adapter.failure = True
+    service.handle(req("start"), peer_uid=record["uid"])
+    adapter.active = "active"
+    original_save = nh._save_new
+
+    def fail_save(path, value):
+        if path.name.startswith("recovery-"):
+            raise OSError("injected storage failure")
+        original_save(path, value)
+
+    monkeypatch.setattr(nh, "_save_new", fail_save)
+    with pytest.raises(OSError, match="storage failure"):
+        service.handle(req("resolve-running"), peer_uid=record["uid"])
+    with pytest.raises(nh.HelperError, match="unconfirmed"):
+        service.handle(req("start", "next"), peer_uid=record["uid"])
+    assert sum(a == "start" for a, _ in adapter.calls) == 1
+
+
+def test_recovery_maintenance_lock_blocks(helper):
+    service, adapter, record = helper
+    adapter.failure = True
+    service.handle(req("start"), peer_uid=record["uid"])
+    adapter.active = "active"
+    with (Path(record["root"]) / ".installation.lock").open("rb") as lease:
+        nh.fcntl.flock(lease, nh.fcntl.LOCK_EX | nh.fcntl.LOCK_NB)
+        with pytest.raises(nh.HelperError, match="installation"):
+            service.handle(req("resolve-running"), peer_uid=record["uid"])
+    assert not (service.registry / "recovery-probe-one.json").exists()
+
+
+def test_completed_start_cannot_be_reclassified(helper):
+    service, _adapter, record = helper
+    service.handle(req("start"), peer_uid=record["uid"])
+    with pytest.raises(nh.HelperError, match="only an unknown"):
+        service.handle(req("resolve-running"), peer_uid=record["uid"])
+
+
+def test_recovery_authorization_and_binding(helper):
+    service, adapter, record = helper
+    adapter.failure = True
+    service.handle(req("start"), peer_uid=record["uid"])
+    adapter.active = "active"
+    with pytest.raises(nh.HelperError, match="peer"):
+        service.handle(req("resolve-running"), peer_uid=999999)
+    adapter.override["User"] = "0"
+    with pytest.raises(nh.HelperError, match="loaded systemd"):
+        service.handle(req("resolve-running"), peer_uid=record["uid"])
