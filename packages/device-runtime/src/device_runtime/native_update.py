@@ -100,7 +100,9 @@ class Updates:
             # become the durable fence observed by the next helper process.
             with nh._directory_fd(self.registry) as fd:
                 os.fsync(fd)
-            stem = directory / f"{instance_id}--{operation_id}"
+            # IDs permit '--'; length-prefix the first component so distinct
+            # (instance, operation) pairs cannot alias the same transaction.
+            stem = directory / f"{len(instance_id)}-{instance_id}--{operation_id}"
             yield record, stem
 
     def prepare(self, instance_id, operation_id, package_path, *, sha256, version):
@@ -294,7 +296,11 @@ class Updates:
         with self._transaction(instance_id, operation_id) as (binding, stem):
             value = self._prepared(binding, stem)
             with self._apply_lease(self.registry / "package-manager", existing=True):
-                intent = json.loads(stem.with_suffix(".apply-intent.json").read_text())
+                intent_path = stem.with_suffix(".apply-intent.json")
+                nh._trusted(intent_path)
+                intent = json.loads(intent_path.read_text())
+                if intent != {"prepared_sha256": nh._digest(stem.with_suffix(".prepared.json"))}:
+                    raise UpdateError("apply intent differs from approved preparation")
                 sender = stem.with_suffix(".sender.json")
                 nh._trusted(sender)
                 completion = json.loads(sender.read_text())

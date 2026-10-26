@@ -74,14 +74,14 @@ def update(tmp_path, monkeypatch):
     helper = Helper(root)
     manager = nu.Updates(registry, packages=packages, helper=helper)
     manager.prepare("probe", "one", package, sha256=nh._digest(package), version="2")
-    prepared = registry / "updates/probe--one.prepared.json"
+    prepared = registry / "updates/5-probe--one.prepared.json"
     manager.approve("probe", "one", prepared_sha256=nh._digest(prepared))
     return manager, packages, helper, package
 
 
 def test_apply_requires_approval(update):
     manager, packages, _, _ = update
-    (manager.registry / "updates/probe--one.approved.json").unlink()
+    (manager.registry / "updates/5-probe--one.approved.json").unlink()
     with pytest.raises(FileNotFoundError):
         manager.apply("probe", "one")
     assert packages.calls == 0
@@ -149,7 +149,7 @@ def test_partial_database_recovery_refused(update):
     packages.observation["status"] = "install ok half-configured"
     with pytest.raises(nu.UpdateError, match="partial"):
         manager.recover("probe", "one")
-    assert not (manager.registry / "updates/probe--one.recovery.json").exists()
+    assert not (manager.registry / "updates/5-probe--one.recovery.json").exists()
 
 
 def test_new_id_cannot_bypass_unknown(update):
@@ -157,7 +157,7 @@ def test_new_id_cannot_bypass_unknown(update):
     packages.mode = "failure"
     manager.apply("probe", "one")
     manager.prepare("probe", "two", package, sha256=nh._digest(package), version="2")
-    prepared = manager.registry / "updates/probe--two.prepared.json"
+    prepared = manager.registry / "updates/5-probe--two.prepared.json"
     manager.approve("probe", "two", prepared_sha256=nh._digest(prepared))
     with pytest.raises(nu.UpdateError, match="existing package"):
         manager.apply("probe", "two")
@@ -170,7 +170,7 @@ def test_multi_instance_shared_package_refused(update):
     with pytest.raises(nu.UpdateError, match="exactly one"):
         manager.apply("probe", "one")
     assert packages.calls == 0
-    assert not (manager.registry / "updates/probe--one.apply-intent.json").exists()
+    assert not (manager.registry / "updates/5-probe--one.apply-intent.json").exists()
 
 
 def test_unknown_start_blocks_update_even_when_service_is_inactive(update):
@@ -189,3 +189,27 @@ def test_shared_start_sender_lease_blocks_package_apply(update):
     ):
         manager.apply("probe", "one")
     assert packages.calls == 0
+
+
+def test_transaction_key_has_no_separator_alias(update):
+    manager, _, _, _ = update
+    # These pairs had the same raw concatenation: a--b--c.
+    with manager._transaction("a--b", "c") as (_, first):
+        pass
+    with manager._transaction("a", "b--c") as (_, second):
+        pass
+    assert first != second
+
+
+def test_recovery_rejects_intent_not_bound_to_preparation(update):
+    manager, packages, _, _ = update
+    packages.mode = "failure"
+    manager.apply("probe", "one")
+    intent = manager.registry / "updates/5-probe--one.apply-intent.json"
+    intent.write_text('{"prepared_sha256":"changed"}')
+    # Even a matching sender receipt cannot authorize a changed preparation.
+    sender = manager.registry / "updates/5-probe--one.sender.json"
+    sender.write_text('{"state":"sender_reaped","intent":{"prepared_sha256":"changed"}}')
+    with pytest.raises(nu.UpdateError, match="approved preparation"):
+        manager.recover("probe", "one")
+    assert packages.calls == 1
