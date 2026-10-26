@@ -25,9 +25,9 @@ class LostCompletion(nh.Systemd):
         super().__init__()
         self.starts = 0
 
-    def start(self, name):
+    def start(self, name, *, lease_fd=None):
         self.starts += 1
-        super().start(name)
+        super().start(name, lease_fd=lease_fd)
         raise subprocess.TimeoutExpired("injected lost completion", 120)
 
 
@@ -74,6 +74,58 @@ print(
             "new_helper_recovered": True,
             "pid_unchanged": pid,
             "actual_start_calls": adapter.starts,
+        }
+    )
+)
+
+# Model an independently failed client in this disposable instance. Disable its
+# automatic restart only for this fixture so failure is terminal and observable.
+subprocess.run(["systemctl", "stop", unit], check=True)
+dropin = Path("/etc/systemd/system") / (unit + ".d")
+dropin.mkdir()
+(dropin / "failure.conf").write_text("[Service]\nRestart=no\nExecStartPre=/usr/bin/false\n")
+subprocess.run(["systemctl", "daemon-reload"], check=True)
+failed_request = {**request, "operation_id": "failed-completion"}
+failed = restarted.handle(failed_request, peer_uid=12345)
+assert failed["result"]["state"] == "unknown"
+try:
+    restarted.handle({**request, "operation_id": "premature-retry"}, peer_uid=12345)
+except nh.HelperError:
+    pass
+else:
+    raise AssertionError("failed unknown allowed premature retry")
+failed_result = registry / "result-package-probe-failed-completion.json"
+failed_bytes = failed_result.read_bytes()
+quiescent = nh.Helper(registry).handle(
+    {**failed_request, "action": "resolve-stopped"}, peer_uid=12345
+)
+assert quiescent["recovery"]["state"] == "confirmed_stopped"
+assert failed_result.read_bytes() == failed_bytes
+assert restarted.handle(failed_request, peer_uid=12345)["result"]["state"] == "unknown"
+# Remove the test-only failure cause; recovery itself never starts the service.
+(dropin / "failure.conf").unlink()
+subprocess.run(["systemctl", "daemon-reload"], check=True)
+retry_request = {**request, "operation_id": "explicit-safe-retry"}
+retried = restarted.handle(retry_request, peer_uid=12345)
+assert retried["result"]["state"] == "started"
+retry_pid = subprocess.check_output(
+    ["systemctl", "show", unit, "-p", "MainPID", "--value"], text=True
+).strip()
+assert int(retry_pid) > 1
+restarted.handle(retry_request, peer_uid=12345)
+assert (
+    subprocess.check_output(
+        ["systemctl", "show", unit, "-p", "MainPID", "--value"], text=True
+    ).strip()
+    == retry_pid
+)
+print(
+    json.dumps(
+        {
+            "confirmed_stopped": quiescent["recovery"],
+            "explicit_retry": "started",
+            "retry_same_id_pid_unchanged": retry_pid,
+            "original_unknown_preserved": True,
         }
     )
 )

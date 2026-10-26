@@ -291,3 +291,15 @@ P1仍未通过：未知启动结果的明确收敛、旧工具完整互斥、批
 构建v10 DEB并在全新一次性systemd实例复验基础服务链，再以真实systemctl start成功后抛TimeoutExpired模拟丢完成响应：unknown保留，新ID事前拒绝，重建Helper后resolve-running成功，原文件字节不变，后续新IDalready_active，PID217未变，实际start调用恰1次。故障注入入口 `packages/device-runtime/scripts/accept-native-unknown.py`。仅临时隔离实例，不操作真实服务；无中心连接，无配对或业务健康证明。v10 bundle SHA `1ba3b4197faf8a40cf4ade59f81cbb3e61ce30b54c68925761d3c0c35616b3d0`；v9 RPM不含新增动作，本轮未重建RPM。
 
 实现/CLI/观察字段Job/测试/原生契约已联动；无前端、中心API、数据库或用户配置变更。仍在P1。未运行/失败的unknown仍阻塞，后续需设计旧job终结和显式重试的权限/竞态闭环，不得仅凭inactive放行。更新卸载、glibc对齐、许可签名和实机恢复门禁保持未完成。
+
+## 13. P1未运行unknown安全恢复与显式重试（2026-10-26）
+
+新增resolve-stopped：准确原start intent、当前登记绑定和维护锁下，先要求inactive/failed且PID0，再取消该unit观察到的准确Job，复核dead/failed、PID0、无Job后发布独立confirmed_stopped恢复记录。原unknown不改、不自动start；后续新ID经过所有启动门禁显式重试，原ID不重放。取消失败/过渡态/运行中/记录写失败仍阻塞。
+
+新intent含execution_barrier=1，发布前持执行锁，独立标准库guard继承锁直到systemctl退出回收，内部120秒超时。helper丢失时guard仍持锁，阻止旧发送者迟到与恢复竞态。resolve-running对新意图也要求发送屏障。旧意图缺少屏障或执行锁文件缺失均拒绝未运行自动收敛，需要明确管理员核实；不凭inactive放行。
+
+验证：helper65项，Device完整 **781 passed in 40.89s**，ruff通过。真实子进程测试父描述符关闭后仍被guard持锁；新增Job取消竞态/超时、写入失败、缺锁、旧意图拒绝与显式新ID重试。v11 DEB在新建隔离systemd中通过原已运行恢复，再以测试drop-in ExecStartPre=false/Restart=no制造失败：unknown及提前重试阻塞，重建Helper确认stopped，原文件保留，移除测试故障后新ID启动且重复ID PID268不变。隔离环境已回收，无真实服务操作。
+
+v11 DEB `build/native-packages-v11/ai-device-native-client_0.2.2-1_amd64.deb`，90,555,702字节，SHA256 `04ad241cf5f99a73e6af245006dbc0d0b05dedce9625964a2e65adab1128e1f1`；bundle `19370ee14fc6d8a98ebc97ac82e4babf24f7439a1a89d9252b091c2e4930f093`。源码基线1e99681加本轮dirty wheel；未签名，未重建RPM。实现/CLI/测试/文档联动，无数据库/中心/前端变化。
+
+重启前保存边界：本轮到此收敛，不启动后续工作。P1未完成；接续先核实工作区/HEAD，再复核guard进程异常退出和真实pending Job取消的故障覆盖、对齐最终RPM；旧工具完整互斥、受控更新卸载事务、glibc主线对齐、许可签名及实机恢复仍缺，不进入P2。

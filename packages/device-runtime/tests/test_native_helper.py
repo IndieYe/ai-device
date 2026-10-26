@@ -32,7 +32,7 @@ class FakeSystemd:
             **self.override,
         }
 
-    def start(self, unit):
+    def start(self, unit, *, lease_fd=None):
         self.calls.append(("start", unit))
         if self.failure:
             raise subprocess.TimeoutExpired("systemctl", 120)
@@ -547,3 +547,175 @@ def test_recovery_authorization_and_binding(helper):
     adapter.override["User"] = "0"
     with pytest.raises(nh.HelperError, match="loaded systemd"):
         service.handle(req("resolve-running"), peer_uid=record["uid"])
+
+
+def stopped_unknown(helper):
+    service, adapter, record = helper
+    adapter.failure = True
+    service.handle(req("start"), peer_uid=record["uid"])
+    adapter.failure = False
+    adapter.override.update(SubState="dead", MainPID="0")
+    return service, adapter, record
+
+
+def test_resolve_stopped_then_explicit_new_start(helper):
+    service, adapter, record = stopped_unknown(helper)
+    original = (service.registry / "result-probe-one.json").read_bytes()
+    recovery = service.handle(req("resolve-stopped"), peer_uid=record["uid"])
+    assert recovery["recovery"]["state"] == "confirmed_stopped"
+    assert (service.registry / "result-probe-one.json").read_bytes() == original
+    assert sum(a == "start" for a, _ in adapter.calls) == 1
+    assert service.handle(req("start"), peer_uid=record["uid"])["result"]["state"] == "unknown"
+    adapter.override.clear()
+    assert (
+        service.handle(req("start", "explicit-retry"), peer_uid=record["uid"])["result"]["state"]
+        == "started"
+    )
+    service.handle(req("start", "explicit-retry"), peer_uid=record["uid"])
+    assert sum(a == "start" for a, _ in adapter.calls) == 2
+
+
+def test_stopped_recovery_sender_lock_blocks(helper):
+    service, _adapter, record = stopped_unknown(helper)
+    with service._execution_lease("probe"), pytest.raises(nh.HelperError, match="sender"):
+        service.handle(req("resolve-stopped"), peer_uid=record["uid"])
+    assert not (service.registry / "recovery-probe-one.json").exists()
+
+
+def test_stopped_recovery_legacy_refused(helper):
+    service, _adapter, record = stopped_unknown(helper)
+    path = service.registry / "op-probe-one.json"
+    intent = json.loads(path.read_text())
+    intent.pop("execution_barrier")
+    path.write_text(json.dumps(intent))
+    with pytest.raises(nh.HelperError, match="legacy"):
+        service.handle(req("resolve-stopped"), peer_uid=record["uid"])
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("ActiveState", "active"), ("MainPID", "123"), ("SubState", "auto-restart"), ("Job", None)],
+)
+def test_stopped_recovery_uncertain_refused(helper, field, value):
+    service, adapter, record = stopped_unknown(helper)
+    adapter.override[field] = value
+    with pytest.raises(nh.HelperError):
+        service.handle(req("resolve-stopped"), peer_uid=record["uid"])
+    assert not (service.registry / "recovery-probe-one.json").exists()
+
+
+def test_stopped_recovery_cancel_known_job_and_recheck(helper):
+    service, adapter, record = stopped_unknown(helper)
+    adapter.override["Job"] = "42 start"
+    cancelled = []
+
+    def cancel(job):
+        cancelled.append(job)
+        adapter.override["Job"] = ""
+
+    adapter.cancel_job = cancel
+    result = service.handle(req("resolve-stopped"), peer_uid=record["uid"])
+    assert cancelled == ["42"]
+    assert result["recovery"]["state"] == "confirmed_stopped"
+
+
+def test_stopped_recovery_cancel_race_refuses(helper):
+    service, adapter, record = stopped_unknown(helper)
+    adapter.override["Job"] = "42 start"
+
+    def cancel(_job):
+        adapter.override.update(Job="", ActiveState="active", MainPID="123", SubState="running")
+
+    adapter.cancel_job = cancel
+    with pytest.raises(nh.HelperError, match="not quiescent"):
+        service.handle(req("resolve-stopped"), peer_uid=record["uid"])
+    assert not (service.registry / "recovery-probe-one.json").exists()
+
+
+def test_systemd_guard_inherits_sender_lock(tmp_path):
+    import threading
+    import time
+
+    executable = tmp_path / "systemctl-fixture"
+    ready = tmp_path / "ready"
+    release = tmp_path / "release"
+    executable.write_text(
+        f"#!/bin/sh\ntouch '{ready}'\nwhile [ ! -e '{release}' ]; do sleep 0.02; done\n"
+    )
+    executable.chmod(0o755)
+    lock = tmp_path / "execution.lock"
+    errors = []
+    with lock.open("a+b") as lease:
+        nh.fcntl.flock(lease, nh.fcntl.LOCK_EX)
+
+        def run():
+            try:
+                nh.Systemd(str(executable)).start("fixture.service", lease_fd=lease.fileno())
+            except (OSError, subprocess.SubprocessError, nh.HelperError) as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        try:
+            for _ in range(100):
+                if ready.exists():
+                    break
+                time.sleep(0.02)
+            assert ready.exists()
+            # Closing the parent descriptor models the daemon losing ownership.
+            lease.close()
+            with lock.open("rb") as probe, pytest.raises(BlockingIOError):
+                nh.fcntl.flock(probe, nh.fcntl.LOCK_EX | nh.fcntl.LOCK_NB)
+        finally:
+            release.touch()
+            thread.join(timeout=5)
+        assert not thread.is_alive() and not errors
+    with lock.open("rb") as probe:
+        nh.fcntl.flock(probe, nh.fcntl.LOCK_EX | nh.fcntl.LOCK_NB)
+
+
+def test_stopped_cancel_failure_keeps_unknown(helper):
+    service, adapter, record = stopped_unknown(helper)
+    adapter.override["Job"] = "42 start"
+
+    def fail(_job):
+        raise subprocess.TimeoutExpired("cancel", 30)
+
+    adapter.cancel_job = fail
+    with pytest.raises(subprocess.TimeoutExpired):
+        service.handle(req("resolve-stopped"), peer_uid=record["uid"])
+    with pytest.raises(nh.HelperError, match="unconfirmed"):
+        service.handle(req("start", "next"), peer_uid=record["uid"])
+    assert not (service.registry / "recovery-probe-one.json").exists()
+
+
+def test_stopped_recovery_storage_failure_keeps_unknown(helper, monkeypatch):
+    service, _adapter, record = stopped_unknown(helper)
+    original = nh._save_new
+
+    def fail(path, value):
+        if path.name.startswith("recovery-"):
+            raise OSError("storage failed")
+        original(path, value)
+
+    monkeypatch.setattr(nh, "_save_new", fail)
+    with pytest.raises(OSError, match="storage failed"):
+        service.handle(req("resolve-stopped"), peer_uid=record["uid"])
+    with pytest.raises(nh.HelperError, match="unconfirmed"):
+        service.handle(req("start", "next"), peer_uid=record["uid"])
+
+
+def test_running_recovery_also_requires_sender_exit(helper):
+    service, adapter, record = stopped_unknown(helper)
+    adapter.override.clear()
+    adapter.active = "active"
+    with service._execution_lease("probe"), pytest.raises(nh.HelperError, match="sender"):
+        service.handle(req("resolve-running"), peer_uid=record["uid"])
+
+
+def test_stopped_recovery_missing_sender_lock_refused(helper):
+    service, _adapter, record = stopped_unknown(helper)
+    (service.registry / "execution-probe.lock").unlink()
+    with pytest.raises(FileNotFoundError):
+        service.handle(req("resolve-stopped"), peer_uid=record["uid"])
+    assert not (service.registry / "recovery-probe-one.json").exists()

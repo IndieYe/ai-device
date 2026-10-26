@@ -18,12 +18,12 @@ import struct
 import subprocess
 import sys
 import tempfile
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
 MAX_REQUEST = 4096
-ACTIONS = {"query", "start", "reconcile", "resolve-running"}
+ACTIONS = {"query", "start", "reconcile", "resolve-running", "resolve-stopped"}
 RUNTIME_ROOT = Path("/run")
 
 
@@ -295,17 +295,52 @@ class Systemd:
         ).stdout
         return dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
 
-    def start(self, unit):
+    def cancel_job(self, job):
+        if not str(job).isdigit() or int(job) <= 0:
+            raise HelperError("invalid systemd job")
         subprocess.run(
-            [self.executable, "start", unit],
+            [self.executable, "cancel", str(job)],
             check=True,
             capture_output=True,
-            timeout=120,
+            timeout=30,
+            env={"PATH": "/usr/bin:/bin", "LANG": "C"},
+        )
+
+    def start(self, unit, *, lease_fd=None):
+        if lease_fd is None:
+            raise HelperError("start execution lease required")
+        # The standard-library guard owns the inherited flock until systemctl
+        # exits and is reaped, even if the daemon dies. Do not rely on systemctl
+        # preserving an unknown fd. Its own timeout kills/reaps only its child.
+        guard = (
+            "import subprocess,sys; "
+            "r=subprocess.run(sys.argv[1:],timeout=120,check=False); "
+            "sys.exit(r.returncode)"
+        )
+        subprocess.run(
+            [sys.executable, "-I", "-c", guard, self.executable, "start", unit],
+            check=True,
+            capture_output=True,
+            pass_fds=(lease_fd,),
             env={"PATH": "/usr/bin:/bin", "LANG": "C"},
         )
 
 
 class Helper:
+    @contextmanager
+    def _execution_lease(self, instance_id, *, existing=False):
+        path = self.registry / f"execution-{instance_id}.lock"
+        fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW | (0 if existing else os.O_CREAT), 0o600)
+        try:
+            _trusted(path)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise HelperError("old start sender is still active") from exc
+            yield fd
+        finally:
+            os.close(fd)
+
     def __init__(self, registry, *, adapter=None):
         self.registry = _path(registry)
         _trusted(self.registry, directory=True)
@@ -385,7 +420,7 @@ class Helper:
                 "observation": snapshot,
             }
             recovery_path = self.registry / f"recovery-{instance_id}-{operation_id}.json"
-            if action == "resolve-running":
+            if action in {"resolve-running", "resolve-stopped"}:
                 intent_path = self.registry / f"op-{instance_id}-{operation_id}.json"
                 result_path = self.registry / f"result-{instance_id}-{operation_id}.json"
                 expected = {
@@ -394,7 +429,12 @@ class Helper:
                     "operation_id": operation_id,
                     "unit_sha256": record["unit_sha256"],
                 }
-                if not intent_path.exists() or json.loads(intent_path.read_text()) != expected:
+                stored_intent = (
+                    json.loads(intent_path.read_text()) if intent_path.exists() else None
+                )
+                if stored_intent and stored_intent.get("execution_barrier") == 1:
+                    expected["execution_barrier"] = 1
+                if stored_intent != expected:
                     raise HelperError("matching start intent required for recovery")
                 if recovery_path.exists():
                     return {**result, "recovery": json.loads(recovery_path.read_text())}
@@ -403,7 +443,46 @@ class Helper:
                     and json.loads(result_path.read_text()).get("state") != "unknown"
                 ):
                     raise HelperError("only an unknown start requires recovery")
-                with _instance_service_lease(Path(record["root"])):
+                with (
+                    _instance_service_lease(Path(record["root"])),
+                    self._execution_lease(instance_id, existing=True)
+                    if expected.get("execution_barrier") == 1
+                    else nullcontext(),
+                ):
+                    if action == "resolve-stopped":
+                        if expected.get("execution_barrier") != 1:
+                            raise HelperError(
+                                "legacy intent has no sender barrier; manual reconciliation required"
+                            )
+                        observation = self._snapshot(record)
+                        if (
+                            observation["ActiveState"] not in {"inactive", "failed"}
+                            or observation["MainPID"] != "0"
+                        ):
+                            raise HelperError(
+                                "nonrunning service required; no running client will be stopped"
+                            )
+                        job = observation["Job"]
+                        if job not in ("", "0"):
+                            if not isinstance(job, str) or not job.strip():
+                                raise HelperError("unknown systemd job; remains unknown")
+                            self.adapter.cancel_job(job.split()[0])
+                        observation = self._snapshot(record)
+                        if (
+                            observation["ActiveState"] not in {"inactive", "failed"}
+                            or observation["SubState"] not in {"dead", "failed"}
+                            or observation["MainPID"] != "0"
+                            or observation["Job"] not in ("", "0")
+                        ):
+                            raise HelperError("service or job not quiescent; remains unknown")
+                        recovery = {
+                            "state": "confirmed_stopped",
+                            "intent": expected,
+                            "observation": observation,
+                            "start_replayed": False,
+                        }
+                        _save_new(recovery_path, recovery)
+                        return {**result, "recovery": recovery}
                     observation = self._snapshot(record)
                     if (
                         observation["ActiveState"] != "active"
@@ -441,9 +520,13 @@ class Helper:
                 "instance_id": instance_id,
                 "operation_id": operation_id,
                 "unit_sha256": record["unit_sha256"],
+                "execution_barrier": 1,
             }
             if intent_path.exists():
-                if json.loads(intent_path.read_text()) != intent:
+                existing_intent = json.loads(intent_path.read_text())
+                if "execution_barrier" not in existing_intent:
+                    intent.pop("execution_barrier")
+                if existing_intent != intent:
                     raise HelperError("operation identity conflict")
                 return {
                     **result,
@@ -467,27 +550,31 @@ class Helper:
                             "unconfirmed operation blocks a new start; reconcile first"
                         )
                     recovery = json.loads(recovered.read_text())
-                    if recovery.get("state") != "confirmed_running" or recovery.get(
-                        "intent"
-                    ) != json.loads(pending.read_text()):
+                    if recovery.get("state") not in {
+                        "confirmed_running",
+                        "confirmed_stopped",
+                    } or recovery.get("intent") != json.loads(pending.read_text()):
                         raise HelperError("invalid recovery evidence")
             if snapshot["ActiveState"] not in {"inactive", "failed", "active"}:
                 raise HelperError("service transition requires read-only reconciliation")
-            _save_new(intent_path, intent)
-            outcome = {"state": "already_active"}
-            if snapshot["ActiveState"] != "active":
-                try:
-                    with _instance_service_lease(Path(record["root"])):
-                        self.adapter.start(record["unit"])
-                        observation = self._snapshot(record)
-                    outcome = {
-                        "state": "started" if observation["ActiveState"] == "active" else "unknown",
-                        "observation": observation,
-                    }
-                except (OSError, subprocess.SubprocessError, HelperError):
-                    outcome = {"state": "unknown"}
-            _save_new(result_path, outcome)
-            return {**result, "result": outcome, "replayed": False}
+            with self._execution_lease(instance_id) as execution_fd:
+                _save_new(intent_path, intent)
+                outcome = {"state": "already_active"}
+                if snapshot["ActiveState"] != "active":
+                    try:
+                        with _instance_service_lease(Path(record["root"])):
+                            self.adapter.start(record["unit"], lease_fd=execution_fd)
+                            observation = self._snapshot(record)
+                        outcome = {
+                            "state": "started"
+                            if observation["ActiveState"] == "active"
+                            else "unknown",
+                            "observation": observation,
+                        }
+                    except (OSError, subprocess.SubprocessError, HelperError):
+                        outcome = {"state": "unknown"}
+                _save_new(result_path, outcome)
+                return {**result, "result": outcome, "replayed": False}
 
 
 @contextmanager

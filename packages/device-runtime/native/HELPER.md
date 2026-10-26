@@ -83,3 +83,15 @@ resolve-running要求匹配当前unit摘要的原start intent，原结果缺失�
 此记录只证明恢复时服务处于已运行状态，不证明原调用因果成功，也不证明业务健康或未来持续运行。重复恢复返回已保存证据和当前观察，不刷新旧证据。inactive/failed/过渡态、PID或Job证据缺失、维护锁冲突、持久化失败均不解除unknown。尚无“确认未运行后重新启动”入口；需要明确终结旧systemd job的独立契约后再实现，不能换ID绕过。
 
 故障注入脚本 `../scripts/accept-native-unknown.py` 在一次性systemd实例先启动后模拟完成响应丢失，重建Helper并对账，验证原unknown保留、新ID事前阻塞、恢复后already_active、PID不变、实际start仅1次。v10 DEB验证通过，helper51项、Device767项通过。v9 RPM不包含此新增动作，未重建v10 RPM。
+
+## 未运行unknown：resolve-stopped与显式重试
+
+新增action `resolve-stopped`，参数仍为原instance_id/operation_id，不接受任意job、服务、路径或命令。它不是stop操作：当前必须inactive/failed且MainPID=0，才可取消该已登记unit观察到的准确Job ID；随后重新核对inactive/dead或failed/failed、PID=0、Job为空/0。过渡态、auto-restart、已运行、取消失败或状态竞态均不收敛，不停止客户端。
+
+新start意图包含execution_barrier=1；在发布intent之前持有实例执行锁。独立标准库guard继承锁并等待systemctl start退出/回收；systemctl子进程120秒超时由guard回收。即便helper退出而guard仍在发送/等待，锁仍阻止恢复和新启动。不能只给systemctl传fd，因为不能依赖它保留未知描述符。恢复要求已有执行锁可独占获取；缺锁拒绝，不重建证据。resolve-running对新意图也增加此发送者退出屏障。
+
+resolve-stopped在实例管理锁、安装/监督共享锁和执行锁内保存不可覆盖confirmed_stopped恢复记录，原unknown不改、不调用start。只有记录持久成功后，新操作ID才可经原有全部门禁显式启动；旧ID永不重放。取消Job超时或记录写入失败仍unknown，按同ID重新对账。旧格式意图没有发送屏障，不允许resolve-stopped自动收敛，需管理员核实旧进程/job；不自动修改旧记录。
+
+并发前提仍是登记helper管理路径及既有维护锁契约；此恢复不是对不遵循锁的外部管理员任意操作提供独占保证。Job取消不证明历史上从未启动过，只证明当前屏障后没有该请求的延迟发送者和已观察残留Job；业务健康另行验证。
+
+v11 DEB在真实隔离systemd中验证已运行丢响应恢复及明确失败后恢复：测试专用ExecStartPre=false/Restart=no制造失败，原unknown/提前重试阻塞，confirmed_stopped后移除测试故障，用新ID启动成功并同ID PID稳定。真实子进程测试验证父fd关闭后guard仍持锁。helper65项、Device781项通过。v11 RPM未重建，v9 RPM不包含这些恢复动作。
