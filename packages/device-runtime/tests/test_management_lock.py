@@ -1,6 +1,7 @@
 """Cooperative ownership and legacy/native mutual exclusion."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -73,7 +74,11 @@ def test_symlink_lock_refused(tmp_path):
         pass
 
 
-def test_registration_fence_published_before_unit_and_record(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "scenario",
+    ["record-missing", "marker-only", "unit-conflict", "drift", "legacy", "record-conflict"],
+)
+def test_registration_fence_published_before_unit_and_record(tmp_path, monkeypatch, scenario):
     root = tmp_path / "instance"
     (root / "config").mkdir(parents=True)
     (root / ".installation.lock").touch()
@@ -100,6 +105,7 @@ def test_registration_fence_published_before_unit_and_record(tmp_path, monkeypat
     # On a root runner the fixture instance owner must still be non-root.
     if os.getuid() == 0:
         os.chown(root, account.pw_uid, account.pw_gid)
+    monkeypatch.setattr(native_helper, "_trusted_marker", lambda path: None)
     real_save = native_helper._save_new
 
     def save(path, value):
@@ -124,6 +130,37 @@ def test_registration_fence_published_before_unit_and_record(tmp_path, monkeypat
     with pytest.raises(ValueError, match="native-managed"), management_lease(root):
         pass
     assert not (registry / "probe.json").exists()
+    monkeypatch.setattr(native_helper, "_save_new", real_save)
+    unit = units / "ai-device-client-probe.service"
+    if scenario == "marker-only":
+        unit.unlink()
+    if scenario == "unit-conflict":
+        unit.write_text("conflicting unit")
+    if scenario == "drift":
+        (root / "config/roles.json").write_text('{"changed":true}')
+    if scenario == "legacy":
+        (root / MARKER).write_text('{"schema_version":1}')
+    if scenario == "record-conflict":
+        (registry / "probe.json").write_text('{"conflict":true}')
+    kwargs = {
+        "instance_id": "probe",
+        "root": root,
+        "username": "fixture",
+        "environment_file": environment,
+        "recover": True,
+    }
+    if scenario in {"unit-conflict", "drift", "legacy", "record-conflict"}:
+        before = {str(p): p.read_bytes() for p in [root / MARKER, unit] if p.exists()}
+        with pytest.raises(native_helper.HelperError):
+            native_helper.register(registry, units, **kwargs)
+        assert all(Path(p).read_bytes() == value for p, value in before.items())
+    else:
+        result = native_helper.register(registry, units, **kwargs)
+        assert result["started"] is False and result["enabled"] is False
+        before = (registry / "probe.json").read_bytes()
+        native_helper.register(registry, units, **kwargs)
+        assert (registry / "probe.json").read_bytes() == before
+        assert unit.exists()
 
 
 def test_registration_lock_blocks_other_process(tmp_path):
@@ -145,3 +182,27 @@ except ValueError: sys.exit(17)
         [sys.executable, "-c", code, str(tmp_path)], check=False, capture_output=True
     )
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    "uid,mode,accepted",
+    [
+        (0, 0o100600, True),
+        (0, 0o100644, True),
+        (501, 0o100600, False),
+        (0, 0o100660, False),
+        (0, 0o120777, False),
+    ],
+)
+def test_marker_trust_checks_file_not_user_owned_ancestors(uid, mode, accepted):
+    from types import SimpleNamespace
+
+    class Marker:
+        def lstat(self):
+            return SimpleNamespace(st_uid=uid, st_mode=mode)
+
+    if accepted:
+        native_helper._trusted_marker(Marker())
+    else:
+        with pytest.raises(native_helper.HelperError, match="management marker"):
+            native_helper._trusted_marker(Marker())

@@ -10,7 +10,7 @@ MARKER = ".native-management.json"
 
 
 @contextmanager
-def management_lease(root, *, registration=False):
+def management_lease(root, *, registration=False, recovery=False):
     root = Path(root).resolve()
     path = root / ".management.lock"
     fd = os.open(path, os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW, 0o644)
@@ -23,7 +23,7 @@ def management_lease(root, *, registration=False):
                 "instance management registration or legacy maintenance is active"
             ) from exc
         marker = root / MARKER
-        if marker.exists() or marker.is_symlink():
+        if not (registration and recovery) and (marker.exists() or marker.is_symlink()):
             raise ValueError("native-managed instance requires the native lifecycle manager")
         yield
     finally:

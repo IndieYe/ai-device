@@ -119,3 +119,13 @@ v12 RPM已对齐：与DEB helper源码和bundle manifest逐字节一致，Rocky9
 这是同版本可信本机工具的协作协议，不是OS安全边界；不承诺阻止旧二进制、手工改文件或不遵循锁的管理员操作。受管实例当前未实现更新卸载，所以旧工具拒绝不是更新能力完成。
 
 验证：新增管理锁13项、helper70项，完整Device799项通过；登记中断、路径别名/跨进程争用、标记漂移和旧入口无副作用拒绝覆盖。v13 DEB真实隔离systemd验证登记后旧prepare/监督拒绝、helper正常启动及全套unknown/Job/guard故障链通过。v13 RPM未构建，v12 RPM不含管理标记门禁。
+
+## 显式登记恢复：recover-registration
+
+新登记标记schema_version=2包含完整预期binding（路径、UID/GID、unit/runner/identity/roles摘要、凭证文件路径），先于unit/registry发布。unit改为临时文件fsync后hardlink no-replace发布，避免部分unit被恢复误接管。
+
+管理员使用 `ai-device-native-helper recover-registration`，参数与register相同。持管理独占锁及安装独占锁，重新核验实例普通owner、凭证权限、解释器、单client身份、无旧升级记录；标记须root-owned普通文件、组/其他不可写，但允许实例祖先为普通用户owner。完整基准须一致，已有unit/record逐项一致才补缺失成果。先检查全部已有成果再写，冲突不覆盖。完整恢复可重复，无start/enable/reload，登记失败仍保留封锁。
+
+schema1标记、无标记旧登记、漂移/损坏unit及不匹配record拒绝，不提供自动迁移、删除或重新绑定；需明确管理员审核方案。此处不把拒绝称作旧登记迁移已完成。
+
+v15 DEB真实隔离验收marker发布后注入中断、公开CLI幂等恢复和冲突unit保持通过，原helper/unknown/Job/guard故障链通过。管理测试23项、helper70项、Device809项通过。v15 RPM已携带同一helper/management模块，离线安装/普通UID依赖/恢复CLI及manifest一致通过；未在Rocky复跑实际systemd。详见实施记录第17节。

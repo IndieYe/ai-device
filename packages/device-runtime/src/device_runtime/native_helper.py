@@ -206,12 +206,18 @@ def _instance_service_lease(root):
                 raise HelperError("upgrade state changed during service action; reconcile")
 
 
-def register(registry, unit_dir, *, instance_id, root, username, environment_file):
+def _trusted_marker(path):
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+        raise HelperError("administrator-owned non-writable management marker required")
+
+
+def register(registry, unit_dir, *, instance_id, root, username, environment_file, recover=False):
     if os.geteuid() != 0:
         raise HelperError("registration requires administrator privileges")
     root = _path(root)
     with (
-        management_lease(root, registration=True),
+        management_lease(root, registration=True, recovery=recover),
         (root / ".installation.lock").open("rb") as lease,
     ):
         try:
@@ -225,10 +231,11 @@ def register(registry, unit_dir, *, instance_id, root, username, environment_fil
             root=root,
             username=username,
             environment_file=environment_file,
+            recover=recover,
         )
 
 
-def _register(registry, unit_dir, *, instance_id, root, username, environment_file):
+def _register(registry, unit_dir, *, instance_id, root, username, environment_file, recover=False):
     if os.geteuid() != 0:
         raise HelperError("registration requires administrator privileges")
     _identifier(instance_id)
@@ -259,7 +266,7 @@ def _register(registry, unit_dir, *, instance_id, root, username, environment_fi
     unit_name = f"ai-device-client-{instance_id}.service"
     unit_path = unit_dir / unit_name
     record_path = registry / (instance_id + ".json")
-    if unit_path.exists() or record_path.exists():
+    if not recover and (unit_path.exists() or record_path.exists()):
         raise HelperError("registration already exists; explicit reconciliation required")
     content = render_client_unit(
         instance_id=instance_id,
@@ -268,35 +275,59 @@ def _register(registry, unit_dir, *, instance_id, root, username, environment_fi
         gid=account.pw_gid,
         environment_file=environment_file,
     )
-    marker = {
+    baseline = {
         "schema_version": 1,
-        "instance_id": instance_id,
-        "registry": str(registry),
-        "unit": unit_name,
-    }
-    _save_new(root / MARKER, marker)
-    # Record is published last. Orphan unit after interruption is never auto-adopted.
-    descriptor = os.open(unit_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-    with os.fdopen(descriptor, "w") as stream:
-        stream.write(content)
-        stream.flush()
-        os.fsync(stream.fileno())
-    record = {
-        "schema_version": 1,
-        "management_sha256": _digest(root / MARKER),
         "instance_id": instance_id,
         "root": str(root),
         "uid": account.pw_uid,
         "gid": account.pw_gid,
         "unit": unit_name,
         "unit_path": str(unit_path),
-        "unit_sha256": _digest(unit_path),
+        "unit_sha256": hashlib.sha256(content.encode()).hexdigest(),
         "runner_sha256": _digest(runner),
         "identity_sha256": _digest(root / "instance.json"),
         "roles_sha256": _digest(root / "config/roles.json"),
         "environment_file": str(environment_file),
     }
-    _save_new(record_path, record)
+    marker = {
+        "schema_version": 2,
+        "instance_id": instance_id,
+        "registry": str(registry),
+        "unit": unit_name,
+        "binding": baseline,
+    }
+    marker_path = root / MARKER
+    if recover:
+        _trusted_marker(marker_path)
+        if json.loads(marker_path.read_text()) != marker:
+            raise HelperError(
+                "registration recovery baseline differs or is legacy; explicit adoption required"
+            )
+    else:
+        _save_new(marker_path, marker)
+    record = {**baseline, "management_sha256": _digest(marker_path)}
+    # Verify every existing artifact before adding any missing artifact.
+    for path, expected in ((unit_path, content), (record_path, record)):
+        if path.exists() or path.is_symlink():
+            _trusted(path)
+            actual = path.read_text() if path == unit_path else json.loads(path.read_text())
+            if actual != expected:
+                raise HelperError("registration artifact conflict; no overwrite permitted")
+    if not unit_path.exists():
+        fd, temporary = tempfile.mkstemp(prefix=".registration-unit-", dir=unit_dir)
+        try:
+            with os.fdopen(fd, "w") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fchmod(stream.fileno(), 0o644)
+                os.fsync(stream.fileno())
+            os.link(temporary, unit_path)
+            with _directory_fd(unit_dir) as directory_fd:
+                os.fsync(directory_fd)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+    if not record_path.exists():
+        _save_new(record_path, record)
     return {
         "instance_id": instance_id,
         "unit": unit_name,
@@ -779,11 +810,12 @@ def call_helper(socket_path, request):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_subparsers(dest="mode", required=True)
-    provision = modes.add_parser("register")
-    for name in ("registry", "unit-dir", "root", "environment-file"):
-        provision.add_argument("--" + name, type=Path, required=True)
-    provision.add_argument("--instance-id", required=True)
-    provision.add_argument("--username", required=True)
+    for command in ("register", "recover-registration"):
+        provision = modes.add_parser(command)
+        for name in ("registry", "unit-dir", "root", "environment-file"):
+            provision.add_argument("--" + name, type=Path, required=True)
+        provision.add_argument("--instance-id", required=True)
+        provision.add_argument("--username", required=True)
     deploy = modes.add_parser("deploy")
     for name in ("bootstrap-python", "registry", "unit-dir", "runtime-dir"):
         deploy.add_argument("--" + name, type=Path, required=True)
@@ -803,8 +835,10 @@ def main():
     args = vars(parser.parse_args())
     mode = args.pop("mode")
     try:
-        if mode == "register":
-            print(json.dumps(register(**args), sort_keys=True))
+        if mode in {"register", "recover-registration"}:
+            print(
+                json.dumps(register(**args, recover=mode == "recover-registration"), sort_keys=True)
+            )
         elif mode == "deploy":
             print(json.dumps(deploy_helper(**args), sort_keys=True))
         elif mode == "recover-socket":

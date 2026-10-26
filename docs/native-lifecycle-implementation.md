@@ -339,3 +339,18 @@ guard故障：准确Popen句柄启动产品guard，fixture发送进程有界等�
 v13 DEB真实一次性systemd环境：管理员登记UID12345，普通用户旧prepare/监督入口拒绝且upgrades未创建，helper启动及已运行/未运行unknown、Job取消、guard异常阻塞全链通过。独立bootstrap包含management_lock。实例已回收，无真实服务操作。制品 `build/native-packages-v13/ai-device-native-client_0.2.2-1_amd64.deb`，90,491,778字节，SHA256 `6c60ec3f0fe1f9026729b4ae10d3880998bc50d3fe8f95cf65691a2e962cca0d`；bundle `2783fa24eac0e436020a65af84f2fb00cb262d9207f8a199de4cebc9485ff1ca`。基线a1a421f加dirty wheel。v13 RPM未建，v12 RPM无本轮门禁。
 
 实现/共享标准库模块/旧工具入口/包bootstrap/测试/契约已联动；前端/中心API/数据库/用户配置无变化。仍在P1，后续对齐RPM，处理受控更新卸载及失败恢复、glibc主线、许可签名和实机重启恢复门禁，P2未开始。
+
+## 17. P1登记中断恢复及RPM再对齐（2026-10-27）
+
+新增管理员recover-registration，与register同参数，管理独占/安装独占锁内重新验证全部实例前置条件。新schema2 marker预存完整binding，恢复仅补一致缺失unit/record，不覆盖冲突；unit改临时文件fsync+hardlink无覆盖发布。旧schema1标记或无marker旧登记缺少固定基准，明确拒绝自动迁移，不伪称旧登记接管完成。
+
+回归：管理锁/登记恢复23项、helper70项，完整Device **809 passed in 42.29s**；ruff/diff通过。覆盖marker-only、unit后缺record、重复恢复、unit/record冲突、身份配置漂移、旧标记拒绝及root marker权限。v14实测发现marker位于普通用户实例目录，不应使用root全祖先校验；修正为marker本体root-owned常规文件不可组/其他写，保留普通owner实例及完整基准校验，v15重建复验通过。
+
+v15 DEB实际隔离systemd：新实例marker发布后注入中断，函数恢复、公开CLI重复恢复、冲突unit不覆盖通过；普通用户运行、旧工具拒绝、unknown两分支/真实Job取消/guard崩溃拒绝链路通过。全部测试实例已回收，无真实服务操作。脚本 `packages/device-runtime/scripts/accept-native-registration.py`。
+
+v15 DEB/RPM准确同源：helper SHA256 `ab716baaa822496a25f737c2291d1d993b2511b32c8b9f8dc9be32730ed78254`，manifest与同一payload逐字节一致，SHA256 `6e8e36bd48f60fbbd1b3335c2a51651e95bf5d24504c01f2d36020e70e73ea19`。RPM Rocky9无源码离线安装、12包依赖、普通UID、独立management模块、recover-registration帮助及拒绝覆盖卸载保数据通过；未在Rocky复跑实际systemd。
+
+- DEB `build/native-packages-v15/ai-device-native-client_0.2.2-1_amd64.deb` 90,508,578字节，SHA256 `da0fadb10d904e48a1d80669cae9eb6d61c8751668e62b9585d093cf9a73e7b0`。
+- RPM `build/native-packages-v15/ai-device-native-client-0.2.2-1.x86_64.rpm` 91,748,117字节，SHA256 `d5595450b10fa77658fa100e69eaf6bb6cc71992c4eda647e386b16487f752ac`。
+
+基线f0ce9fa加本轮dirty wheel，未签名不发布。实现/CLI/模块/测试/包/契约联动；无前端、中心、数据库、用户配置变化。P1仍缺受控更新卸载及恢复、旧登记审核迁移、glibc对齐、许可签名和实机重启恢复，不进入P2。
