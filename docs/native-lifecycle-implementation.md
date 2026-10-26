@@ -119,7 +119,7 @@ uv run --no-sync python -m pytest -q \
 | 阶段 | 当前状态 | 剩余门禁 |
 | --- | --- | --- |
 | P0 | 设计完成 | D01—D10已冻结，静态覆盖与自审通过；非产品实现或独立第三方审核 |
-| P1 | 未开始 | P0 通过，协调 glibc 在途改动后实现原生包及共用核心 |
+| P1 | 进行中 | 已实现离线运行时准备子模块和包门禁实验；完整包构建、helper、共用安装接入及实机验收仍缺 |
 | P2 | 未开始 | P1 通过，在线配对完整实现与 Linux 安装上线 |
 | P3 | 未开始 | 中心单设备远程升级、本机和中心验证及故障恢复 |
 | P4 | 未开始 | macOS 原生包、自启与远程升级平台验收 |
@@ -128,7 +128,7 @@ uv run --no-sync python -m pytest -q \
 接续动作：
 
 1. 核对本记录、P0设计与实际分支状态，保留当前 Worktree 和依赖环境。
-2. 本轮用户限定先完成P0，止于设计交付，不在本轮进入P1。
+2. P0轮次已止于设计交付；用户随后明确要求在当前Worktree推进P1，现按下述P1记录接续。
 3. 后续获准推进P1时，先核对 glibc 在途工作集成状态，再固定准确CPython构建输入及许可，验证可重定位和各包系写入前钩子门禁。
 4. 依P0设计先补契约／回归测试，再实现共用核心和原生包；验证失败先修正设计，不跳到P2/P3伪装进展。
 5. 每阶段在本记录追加准确基线和验证索引；不在主仓库直接开发，不推送，不触碰真实设备。
@@ -143,3 +143,46 @@ uv run --no-sync python -m pytest -q \
 - 设计自审补充：包管理器可能移除旧包文件，独立job需事务目录运行副本；首次bootstrap无旧管理器时需包内preflight；配对回执AES-GCM加密、原兑换秘密恢复、落盘后ack。
 - 验证：文档静态覆盖、API/状态/权限和失败路径自审；不声称第三方独立审核或新产品动态测试。此前347项是起始代码基线测试，本轮文档修改不把它扩称新接口测试。
 - 本轮未改产品代码、未构建原生包、未启动服务、未连接真实设备。P1—P5均未完成。
+
+## 8. P1 首个实现检查点（2026-10-26）
+
+当前为 **P1进行中，未通过阶段验收**；本节仅记录已完成的运行时准备子模块与包门禁可行性实验。没有进入P2/P3，没有操作真实设备或服务。
+
+### 8.1 本轮实现
+
+- `packages/device-runtime/native/runtime-lock.json`：固定python-build-standalone 20261021、CPython3.13.17的darwin-arm64与linux-x86_64准确URL、大小、SHA256及来源。
+- `native_runtime.py`：离线锁校验、平台/大小/摘要检查、受限tar解包、真实解释器版本及ssl/sqlite3/ctypes探测、目录移动后二次探测、文件锁内拒绝覆盖发布、失败清理；提供独立模块CLI，无网络、服务或active写入。
+- `test_native_runtime.py`：21项测试，包含锁与目标拒绝、解包逃逸、正常内部链接、竞态保留已有目的目录、探测失败/超时/错误版本和清理。
+- `probe-native-deb-gate.sh`、`probe-native-rpm-gate.sh`：显式opt-in的一次性fixture实验，不是正式Device包或helper。
+- `native/README.md`：实际使用入口、许可边界、构建来源与实验局限。
+
+没有改动 `installation.py` 和 `dependencies.py`：glibc217-ses14203仍有在途未提交修改，本轮只读核验，不复制或覆盖。下次修改共用核心前重新协调集成状态。
+
+### 8.2 本轮实际验证
+
+| 验证 | 结果 | 不能推断的能力 |
+| --- | --- | --- |
+| 新增运行时单元测试 | 21 passed | 不代替准确Linux二进制探测 |
+| 新增模块及现有安装/升级/中心连接联合回归 | 368 passed in 21.26s | 不代替全仓Bash/FS、发布和实机 |
+| 新增Python文件ruff check/format、两个sh脚本语法 | 通过 | 不等于包构建完成 |
+| Ubuntu24.04 amd64容器dpkg实验 | preinst拒绝更新保留旧payload/包版本，dpkg audit干净，旧版本重试收敛 | 不是Device包、systemd或真实机器恢复 |
+| Rocky9 amd64容器rpm实验 | pretrans拒绝保留旧payload/包版本，rpm校验通过，旧版本重试收敛 | 不是helper、签名或真实机器恢复 |
+| 准确macOS运行时制品 | SHA256匹配；提取后及移动目录后CPython3.13.17、ssl/sqlite3/ctypes均通过 | 不等于完整依赖、macOS pkg或Linux运行时 |
+
+包门禁实验创建并自动移除的本任务容器：`native-p1-deb-probe-ses14204`、`native-p1-deb-gate-ses14204`、`native-p1-rpm-tools-ses14204`、`native-p1-rpm-gate-ses14204`。未触碰其他任务运行中的容器，无端口映射或真实配置挂载；只读挂载本任务实验脚本。容器root仅用于沙箱包事务，不代表真实设备提权授权。
+
+macOS准确制品与探测输出位于忽略目录：`build/native-inputs/cpython-darwin-arm64.tar.gz`、`build/native-runtime-probe-macos/`、`build/native-runtime-probe-result.json`，不纳入提交。该结果是原生arm64本机探测，不是Linux仿真。
+
+Linux制品首次下载和一次有限续传均因网络吞吐低而超时；部分文件保留于 `build/native-inputs/cpython-linux-x86_64.tar.gz`。最终大小不足锁定的35,356,674字节，**未解包、未用于执行、未宣称校验通过**。后台下载已终止，无待回收任务。恢复只能续传同URL并重新核对完整大小及摘要，不能更换版本或降低校验。
+
+许可核查发现：上游构建项目LICENSE是MPL-2.0，不能当成整个CPython分发的唯一许可。原归档含CPython/pip及vendored许可；完整运行时原生依赖的再分发清单仍需关联完整构建元数据，在正式包发布前收口。
+
+### 8.3 尚缺的P1主路径与接续顺序
+
+1. 完成准确Linux制品下载及大小/摘要验证，在Ubuntu/Rocky各自隔离环境执行提取、重定位和动态依赖探测，记录结果。
+2. 收口完整运行时及第三方依赖许可、锁定离线Device/Bash/FS精确依赖闭包；不能因解释器可启动而宣称应用可运行。
+3. 核对glibc在途修改，设计并接入共用安装核心的自带运行时/离线工具链；不依赖用户PATH、系统Python或uv。
+4. 实现包构建器、内容清单、bootstrap、有限权限helper、单实例事务锁和准确systemd绑定；把本轮钩子实验转换为真实包前置检查而不是直接发布fixture。
+5. 补完整包安装、更新、失败恢复、卸载与数据保持测试，最后完成P1声明平台实机验收。签名、公网发布及真实操作仍独立授权。
+
+本检查点只形成可独立测试的运行时准备子模块，P1未完成，不能进入依赖其验收的P2。后续继续复用本Worktree，不因下载失败清空环境或重建任务。
