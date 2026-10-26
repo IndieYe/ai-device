@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "distribution": "uv",
+  "version": "0.13.5",
+  "target": "linux-x86_64",
+  "filename": "uv-0.13.5-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+  "sha256": "fa8d26e08e34c29c0c4e820cf3181757086d547240b4f4d31ff1d8bd810ca946",
+  "size": 17211825,
+  "source": "https://pypi.org/project/uv/0.13.5/",
+  "license": "MIT OR Apache-2.0"
+}

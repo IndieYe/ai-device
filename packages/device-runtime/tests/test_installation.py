@@ -775,3 +775,38 @@ def test_runner_client_concurrency_config(tmp_path, delivery, fake_uv, invalid):
             ("--max-active-tasks", "16"),
         ]:
             assert argv[argv.index(flag) + 1] == value
+
+
+def test_native_runner_is_written_before_active(tmp_path, delivery, fake_uv, monkeypatch):
+    root = tmp_path / "native-instance"
+    python = module.Path(sys.executable).resolve()
+    original = module._json
+
+    def save(path, value):
+        if path == root / "active.json":
+            assert (root / "run").read_text().splitlines()[0] == f"#!{python}"
+        return original(path, value)
+
+    monkeypatch.setattr(module, "_json", save)
+    install_instance(
+        delivery,
+        root=root,
+        instance_id="native",
+        roles=["client"],
+        server_url="https://example.invalid",
+        runner_python=python,
+    )
+
+
+def test_invalid_native_runner_rejected_before_instance(tmp_path, delivery, fake_uv):
+    root = tmp_path / "native-instance"
+    with pytest.raises(InstallationError, match="shebang"):
+        install_instance(
+            delivery,
+            root=root,
+            instance_id="native",
+            roles=["client"],
+            server_url="https://example.invalid",
+            runner_python="relative/python",
+        )
+    assert not root.exists()

@@ -186,3 +186,52 @@ Linux制品首次下载和一次有限续传均因网络吞吐低而超时；部
 5. 补完整包安装、更新、失败恢复、卸载与数据保持测试，最后完成P1声明平台实机验收。签名、公网发布及真实操作仍独立授权。
 
 本检查点只形成可独立测试的运行时准备子模块，P1未完成，不能进入依赖其验收的P2。后续继续复用本Worktree，不因下载失败清空环境或重建任务。
+
+## 9. P1 离线应用安装与DEB/RPM开发包（2026-10-26）
+
+P1仍进行中。本轮把运行时准备接到真实离线应用安装，未完成helper、systemd和完整更新／卸载，不进入P2。
+
+### 9.1 当前代码与构建入口
+
+- `native_install.py`：包内解释器＋包内uv，调用现有install_instance，只允许新client实例，拒绝root、错误解释器、缺工具、在线bundle和已有目录。PATH限于包内工具并在失败后恢复，不启动服务、不配对。
+- `installation.py`：新增可选runner_python；在发布active.json前校验并写绝对解释器shebang。旧调用默认行为不变。新增直接回归覆盖runner时序和写入前拒绝。
+- `assemble-native-payload.py`：三包准确wheel、锁定client依赖和约束组装现有format3离线bundle；内置uv匹配tool-lock.json。开发输入记录基线source_commit及准确wheel摘要，标为dirty开发构建，不宣称准确正式源码发布。
+- `build-native-linux.sh`：在amd64构建容器生成真实DEB/RPM开发包，内置CPython3.13.17、离线三包及9个第三方依赖、uv0.13.5；运行时执行前校验固定大小及SHA256。版本和布局为0.2.2-native1开发固定值，不是通用发布器。
+- `accept-native-package.sh`：只挂包和验收脚本，不挂源码，容器root安装系统包后，由显式UID12345普通用户创建实例、校验依赖／导入／稳定入口，拒绝重复包安装及删除已存在实例，验证用户数据保留。
+- `native/README.md`：更新开发包操作边界与剩余限制。
+
+当前包策略为fail-closed：helper事务未实现时拒绝已有payload/实例的更新；有实例时拒绝卸载。这不是“更新／卸载已完成”。首次安装失败保留现场，不提供盲目删除目录恢复。
+
+### 9.2 本轮实际验证
+
+- Linux运行时归档已完整：35,356,674字节，SHA256与runtime-lock一致。首次失败下载已通过原URL有限续传完成，无后台遗留。
+- Ubuntu24.04 amd64一次性容器：runtime离线提取、两次路径探测和第三次最终移动后ssl/sqlite3/ctypes加载通过。
+- client约束从uv.lock导出，仅client extra无dev；三包轮子本地构建。目标下载必须包含manylinux2.17/2014/2.28兼容标签，初次只给2.28标签找不到pydantic-core，补标签后同版本下载成功，未放宽版本。
+- 最终v5 DEB/RPM均在干净目标包系容器完成真实安装；无源码PYTHONPATH，无系统Python/uv依赖，所有依赖来自包内。包内uv检查12个应用包兼容，client/Bash/FS/Pillow/psutil及Executor导入通过。
+- 普通用户验收明确验证UID12345；系统包安装由容器root完成，不是客户端root运行。早期root实验不用于最终权限结论。
+- 相同包覆盖和存在实例时卸载均拒绝，实例状态内的user-file保留，原解释器仍可运行。
+- 新增原生安装拒绝／PATH恢复／root门禁、内置uv锁拒绝、runner时序测试；相关联合回归 **378 passed in 21.42s**。
+- 最终Device包完整回归 **716 passed in 42.47s**；新增和修改Python文件ruff通过，native shell语法通过，git diff空白检查通过。未运行Bash/FS各自全量与正式制品验证。
+
+准确v5开发包（忽略目录，不提交或分发）：
+
+| 文件 | 大小 | SHA256 |
+| --- | --- | --- |
+| build/native-packages-v5/ai-device-native-client_0.2.2-1_amd64.deb | 63521358 | 9d4d619b03b7aedfea36daebc26d362f3aedc3735fc5e4463fb4c60a5c1c5f0a |
+| build/native-packages-v5/ai-device-native-client-0.2.2-1.x86_64.rpm | 64291883 | 3a0ae7cc06e5d2b147e2f1a6032decee3890816395d1d1c0f0ebb415a240a801 |
+
+实际v5 payload包含最终权限改动；随后v6组装用于验证新增uv锁，组件wheel内容相同。构建脚本在v4/v5均重新验证归档摘要。RPM构建等待仓库下载后成功，均已回收结果，无遗留后台构建。容器名称以native-p1-开头、ses14204结尾，全部本任务新建且--rm；没有修改其他任务容器或真实服务。
+
+### 9.3 glibc集成与剩余缺口
+
+本轮发现glibc补丁已作为 `d0a7940a0e224f6f123e549434b6ff9da74c94cc` 进入独立仓库main；原Worktree只剩未跟踪logs。本任务没有自动合并主线，仍以本任务基线开发，installation仅改install_instance局部，与glibc的_check_target区段不重叠。集成前必须合并最新main并重跑依赖平台和安装测试，不能宣称本任务已包含glibc补丁。
+
+剩余优先序：
+
+1. 独立bootstrap/helper、准确实例／运行用户/systemd绑定、事务锁和显式策略；不能以shell任意argv代替有限权限接口。
+2. 现有包fail-closed更新改为批准后的准备／收口／apply／activate事务，补检查点故障恢复；卸载区分程序、身份撤销与数据保留。
+3. 下载源认证、签名release清单、离线完整许可/SBOM、通用版本与平台参数、稳定的构建锁/来源审计。本地开发包中许可证声明包含review-pending，不能对外发布。
+4. 合并glibc当前主线、补第三方/角色缺失依赖测试，按P1清单做完整构建验证；本轮只是部分应用闭包/包事务验收。
+5. Linux systemd与登录/机器恢复、用户工作区、安装失败接续等实机验证。容器包安装不替代这些。
+
+当前P1不得标为通过，也不因已有可安装包进入P2。后续继续当前Worktree，先核查本节的准确包及源码状态。

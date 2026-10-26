@@ -38,3 +38,17 @@ macOS 将 target 改为 `darwin-arm64`，使用对应归档。目的目录必须
 `../scripts/probe-native-deb-gate.sh` 与 `probe-native-rpm-gate.sh` 只用于显式选择的一次性测试容器，探测 preinst/pretrans 的拒绝时序。实验只安装名称为 `ai-device-p1-transaction-probe` 的无服务 fixture 包，测试失败更新不覆盖旧文件、不改变旧版本，原版本重试可收敛。脚本要求 `DEVICE_NATIVE_DISPOSABLE_PROBE=yes` 和容器 root，不能在宿主或正式机器运行。
 
 实验不等于正式 helper、Device 包构建、实例锁和签名发布已完成，也没有证明 systemd、登录／机器重启或中心升级。当前阶段状态和准确结果见仓库 `docs/native-lifecycle-implementation.md`。
+
+## P1 Linux开发包主路径（进行中）
+
+新增 `native_install.py` 调用现有 `install_instance`，不复制release生命周期。安装器必须由选定普通用户执行，拒绝root创建实例；包内自带runtime、uv及离线client依赖。`installation.install_instance(runner_python=...)` 在发布active前写入绝对解释器shebang，旧调用不传参时行为保持。
+
+构建入口：`../scripts/assemble-native-payload.py` 从三包wheel、client锁定约束和依赖wheel目录组装bundle，验证 `tool-lock.json` 内uv准确文件名/大小/摘要；`../scripts/build-native-linux.sh` 在独立amd64 Linux构建环境产出DEB/RPM。运行时归档在执行前验证锁定大小和SHA256。包是**未签名开发试制品**，固定开发版本布局，尚不支持更新/卸载已存在实例，未实现系统helper与systemd配置。
+
+开发包当前安装入口 `ai-device-native-install --root <new-instance> --instance-id <id> --server-url <https-center>` 必须由普通用户运行，父目录须事先授予该用户。它不启动服务、不配对、不要求输入长期Token。`--server-url` 目前只写入连接配置；实际配对由P2实现。
+
+包更新在实例或原payload已存在时拒绝，包卸载在实例存在时拒绝，避免helper未实现时破坏现有环境。此拒绝行为不能当作已经完成“更新和卸载”；后续必须用准确事务和显式数据保留语义替换。直接实例安装失败仍保留现场，不承诺删除目录重试可恢复。
+
+构建产物位于忽略目录 `build/native-packages-v5/`，不推送或分发。构建中source_commit仅指本地基线，dirty开发wheel以组件SHA256标识，不当作正式准确源码发布。第三方运行时许可证、签名清单和完整SBOM仍未收口，禁止据此开发包宣称正式交付。
+
+`accept-native-package.sh` 只挂载包和验收脚本，不挂源码；以容器root安装系统包，再由UID12345的明确普通用户创建实例并检查离线依赖与数据保持。不等于真实systemd、自启或主机恢复验收。`accept-native-payload.sh` 为无包组装调试入口，使用当前v5本地fixture，不用于用户安装。

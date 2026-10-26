@@ -379,8 +379,22 @@ def _prepare(root, bundle, manifest, roles, *, required_output_map_format=None):
 
 
 @with_dependencies
-def install_instance(bundle, *, instance_id, roles, root=None, server_url=None, port=8765):
+def install_instance(
+    bundle, *, instance_id, roles, root=None, server_url=None, port=8765, runner_python=None
+):
     _supported_host()
+    runner_content = RUNNER
+    if runner_python is not None:
+        runner_python = Path(runner_python)
+        if (
+            not runner_python.is_absolute()
+            or not runner_python.is_file()
+            or not os.access(runner_python, os.X_OK)
+            or any(char.isspace() for char in str(runner_python))
+            or len(str(runner_python).encode()) > 120
+        ):
+            raise InstallationError("runner Python must be an executable absolute shebang path")
+        runner_content = f"#!{runner_python}\n" + RUNNER.split("\n", 1)[1]
     instance_id = _identity(instance_id)
     roles = sorted(set(roles))
     if not roles or any(r not in ROLES for r in roles):
@@ -426,7 +440,7 @@ def install_instance(bundle, *, instance_id, roles, root=None, server_url=None, 
             _json(root / "config" / "roles.json", config)
             _json(root / "instance.json", {"format_version": 1, "instance_id": instance_id})
             runner = root / "run"
-            runner.write_text(RUNNER, encoding="utf-8")
+            runner.write_text(runner_content, encoding="utf-8")
             runner.chmod(0o755)
             _json(root / "active.json", active)
         return {"instance_root": str(root), **active}
