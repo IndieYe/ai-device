@@ -15,6 +15,7 @@ from pathlib import Path
 from . import installation as install
 from . import lifecycle as life
 from .bundle import inspect_bundle
+from .management_lock import legacy_operation
 
 
 class UpgradeError(ValueError):
@@ -127,6 +128,7 @@ def _pending(root, own):
             raise UpgradeError("another nonterminal upgrade requires reconciliation")
 
 
+@legacy_operation
 def prepare(root, bundle, upgrade_id):
     """Online candidate build; never mutate active/config/state or take runtime lease."""
     bundle = Path(bundle).resolve()
@@ -202,6 +204,7 @@ def _publication_pointer(record):
     return pointer
 
 
+@legacy_operation
 def activate(root, upgrade_id, *, stopped=False, _supervised=False, _recovery=False):
     """Publish once after an external supervisor has stopped/drained the instance.
 
@@ -258,6 +261,7 @@ def activate(root, upgrade_id, *, stopped=False, _supervised=False, _recovery=Fa
         return record
 
 
+@legacy_operation
 def reconcile(root, upgrade_id):
     """Reconcile pointer publication only; never restart services or replay a switch."""
     with _control(root, upgrade_id) as (instance, path):

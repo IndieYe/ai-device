@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 from packaging.requirements import Requirement
 
 from .bundle import COMPONENTS, ROLES, inspect_bundle, with_dependencies
+from .management_lock import management_lease
 
 
 class InstallationError(ValueError):
@@ -123,7 +124,7 @@ def _json(path, value):
 
 @contextmanager
 def _lock(root):
-    with (root / ".installation.lock").open("a+b") as stream:
+    with management_lease(root), (root / ".installation.lock").open("a+b") as stream:
         try:
             fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:

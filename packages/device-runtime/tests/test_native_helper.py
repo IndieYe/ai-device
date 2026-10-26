@@ -65,7 +65,9 @@ def helper(tmp_path, monkeypatch):
     unit.write_text("fixture unit\n")
     environment = tmp_path / "token.env"
     environment.write_text("PRIVATE=never-return-this\n")
+    (root / nh.MARKER).write_text("fixture management binding")
     record = {
+        "management_sha256": nh._digest(root / nh.MARKER),
         "schema_version": 1,
         "instance_id": "probe",
         "root": str(root),
@@ -767,3 +769,11 @@ def test_old_barrier_without_receipt_not_safe_for_stopped(helper):
     path.write_text(json.dumps(value))
     with pytest.raises(nh.HelperError, match="legacy"):
         service.handle(req("resolve-stopped"), peer_uid=record["uid"])
+
+
+def test_native_management_marker_drift_blocks_helper(helper):
+    service, adapter, record = helper
+    (Path(record["root"]) / nh.MARKER).write_text("changed")
+    with pytest.raises(nh.HelperError, match="management binding"):
+        service.handle(req("start"), peer_uid=record["uid"])
+    assert not adapter.calls

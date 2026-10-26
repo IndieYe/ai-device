@@ -13,6 +13,7 @@ from pathlib import Path
 
 from . import upgrader as up
 from .maintenance import request
+from .management_lock import legacy_operation
 
 
 class Systemd:
@@ -108,6 +109,7 @@ def profile(root):
     return value
 
 
+@legacy_operation
 def reconcile_supervision(root, upgrade_id, *, adapter=None):
     """Evidence-only recovery: never stop/start, publish, or replay unknown work."""
     instance = up.life._root(root)
@@ -164,6 +166,7 @@ def reconcile_supervision(root, upgrade_id, *, adapter=None):
         return record
 
 
+@legacy_operation
 def recover(root, upgrade_id, *, action, expected_record_sha256, confirmed=False, adapter=None):
     """One explicitly approved recovery step, pinned to an inspected record.
 
@@ -270,6 +273,7 @@ def recover(root, upgrade_id, *, action, expected_record_sha256, confirmed=False
         return record
 
 
+@legacy_operation
 def resume_admission(root, upgrade_id, *, confirmed=False, adapter=None):
     """Recover only a durable drain intent; never replay stop/start/publication."""
     if not confirmed:
@@ -312,6 +316,7 @@ def resume_admission(root, upgrade_id, *, confirmed=False, adapter=None):
         return record
 
 
+@legacy_operation
 def supervise(root, upgrade_id, *, confirmed=False, adapter=None, timeout=60):
     if not confirmed:
         raise up.UpgradeError("explicit service-change confirmation required")

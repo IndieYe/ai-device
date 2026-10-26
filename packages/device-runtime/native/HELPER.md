@@ -107,3 +107,15 @@ guard回执证明直接systemctl子进程已经回收，不宣称任意后代/�
 `../scripts/accept-native-recovery-faults.py` 在一次性systemd实例验证：依赖屏障产生实际排队Job，准确取消后confirmed_stopped再新ID启动；准确终止测试guard且fixture子进程自行退出，无回执仍阻止恢复和重试。排队场景使用测试发送适配器--no-block注入丢完成，不冒充生产guard超时路径。所有测试实例已回收。
 
 v12 RPM已对齐：与DEB helper源码和bundle manifest逐字节一致，Rocky9离线安装、普通UID依赖/独立bootstrap和恢复动作检查通过。RPM SHA256 `1d02abd52d0339401804dea7c4f81abd81b4091200bdb5e1f8055905884d57fd`。实际systemd故障运行在DEB隔离实例，未在Rocky复跑。完整Device785项通过。更新卸载、旧工具完整互斥、签名许可和实机恢复仍缺，P1未完成。
+
+## 旧工具与受管实例的协作互斥
+
+新增标准库 `management_lock.py`，以resolve后的实例路径使用 `.management.lock`：旧写工具持共享管理锁，native register持独占管理锁并获取安装独占锁。锁序为管理协调→旧监督/升级锁→安装锁；登记只在已有普通用户实例停止且无升级记录时允许。新包bootstrap同步携带该模块。
+
+登记在发布unit/registry记录前no-replace保存 `.native-management.json`；记录保存标记摘要，helper每次核验。标记存在或异常symlink时，旧安装独占写锁、生命周期准备/激活/回退/备份、旧upgrade prepare/activate/reconcile及监督supervise/recover/resume-admission/reconcile入口拒绝，不允许先创建upgrades再失败。只读status/inspect不因标记自动变为修改授权；恢复到新目录不携带受管身份。
+
+中断可能留下封锁标记或unit，必须显式核实后恢复，不自动删除、覆盖或接管。旧登记缺management摘要时helper拒绝并要求明确接管；本轮不实现迁移。客户端run继续使用安装共享锁，不因管理标记禁止正常运行。
+
+这是同版本可信本机工具的协作协议，不是OS安全边界；不承诺阻止旧二进制、手工改文件或不遵循锁的管理员操作。受管实例当前未实现更新卸载，所以旧工具拒绝不是更新能力完成。
+
+验证：新增管理锁13项、helper70项，完整Device799项通过；登记中断、路径别名/跨进程争用、标记漂移和旧入口无副作用拒绝覆盖。v13 DEB真实隔离systemd验证登记后旧prepare/监督拒绝、helper正常启动及全套unknown/Job/guard故障链通过。v13 RPM未构建，v12 RPM不含管理标记门禁。

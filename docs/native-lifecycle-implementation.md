@@ -327,3 +327,15 @@ guard故障：准确Popen句柄启动产品guard，fixture发送进程有界等�
 最终RPM `build/native-packages-v12/ai-device-native-client-0.2.2-1.x86_64.rpm`，91,750,067字节，SHA256 `1d02abd52d0339401804dea7c4f81abd81b4091200bdb5e1f8055905884d57fd`；DEB摘要见第14节未变化。二进制未提交，未签名，不是发布品。RPM未在Rocky复跑真实systemd启动，故障证据来自Apple container amd64/Rosetta的DEB实例。
 
 本轮交付仅故障脚本和说明，产品/API/CLI/数据库/前端无新增变化，不修改全局运行配置。P1仍未完成：旧工具完整互斥、批准更新卸载与失败恢复、glibc主线对齐、完整许可/SBOM/签名、目标实机和宿主重启恢复。下轮先对照P1验收逐项梳理剩余生命周期工作，不把故障门禁或RPM对齐当整个P1完成。
+
+## 16. P1旧工具协作互斥与管理绑定（2026-10-27）
+
+定位缺口：旧安装/监督锁不表达实例已交native管理，旧prepare可先创建升级目录。新增management_lock.py，按规范实例路径管理锁，旧写共享/native登记独占；登记另取安装独占锁，拒绝运行中客户端/维护。登记前发布不可覆盖.native-management.json，unit/record后发，record保存marker摘要；中断后保留封锁，不自动接管。旧登记无摘要拒绝，迁移另做。
+
+覆盖旧安装/rebuild及生命周期修改/回退/备份的安装写锁；旧upgrade prepare/activate/reconcile、监督supervise/recover/resume-admission/reconcile持完整操作管理共享锁并先拒绝受管实例，避免创建upgrades或先执行服务动作。读status/inspect保持可用，恢复到新目录不继承管理身份。协作门禁不防旧二进制/手工改文件，不是OS沙箱；不是更新卸载功能替代品。
+
+验证：管理锁13项、helper70项，完整Device **799 passed in 41.58s**；ruff、shell语法、diff检查通过。包含登记与旧维护互斥、跨进程与路径别名、symlink锁拒绝、marker漂移、登记record发布失败保留marker、旧入口无创建升级目录副作用。初次登记中断测试预期marker拒绝但实际更早命中独占管理锁，改测试为准确active原因；未放松产品。
+
+v13 DEB真实一次性systemd环境：管理员登记UID12345，普通用户旧prepare/监督入口拒绝且upgrades未创建，helper启动及已运行/未运行unknown、Job取消、guard异常阻塞全链通过。独立bootstrap包含management_lock。实例已回收，无真实服务操作。制品 `build/native-packages-v13/ai-device-native-client_0.2.2-1_amd64.deb`，90,491,778字节，SHA256 `6c60ec3f0fe1f9026729b4ae10d3880998bc50d3fe8f95cf65691a2e962cca0d`；bundle `2783fa24eac0e436020a65af84f2fb00cb262d9207f8a199de4cebc9485ff1ca`。基线a1a421f加dirty wheel。v13 RPM未建，v12 RPM无本轮门禁。
+
+实现/共享标准库模块/旧工具入口/包bootstrap/测试/契约已联动；前端/中心API/数据库/用户配置无变化。仍在P1，后续对齐RPM，处理受控更新卸载及失败恢复、glibc主线、许可签名和实机重启恢复门禁，P2未开始。

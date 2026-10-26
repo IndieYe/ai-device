@@ -21,6 +21,8 @@ import tempfile
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
+from .management_lock import MARKER, management_lease
+
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
 MAX_REQUEST = 4096
 ACTIONS = {"query", "start", "reconcile", "resolve-running", "resolve-stopped"}
@@ -207,6 +209,28 @@ def _instance_service_lease(root):
 def register(registry, unit_dir, *, instance_id, root, username, environment_file):
     if os.geteuid() != 0:
         raise HelperError("registration requires administrator privileges")
+    root = _path(root)
+    with (
+        management_lease(root, registration=True),
+        (root / ".installation.lock").open("rb") as lease,
+    ):
+        try:
+            fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise HelperError("instance is running or maintenance is active") from exc
+        return _register(
+            registry,
+            unit_dir,
+            instance_id=instance_id,
+            root=root,
+            username=username,
+            environment_file=environment_file,
+        )
+
+
+def _register(registry, unit_dir, *, instance_id, root, username, environment_file):
+    if os.geteuid() != 0:
+        raise HelperError("registration requires administrator privileges")
     _identifier(instance_id)
     registry, unit_dir, root = map(_path, (registry, unit_dir, root))
     _trusted(registry, directory=True)
@@ -244,6 +268,13 @@ def register(registry, unit_dir, *, instance_id, root, username, environment_fil
         gid=account.pw_gid,
         environment_file=environment_file,
     )
+    marker = {
+        "schema_version": 1,
+        "instance_id": instance_id,
+        "registry": str(registry),
+        "unit": unit_name,
+    }
+    _save_new(root / MARKER, marker)
     # Record is published last. Orphan unit after interruption is never auto-adopted.
     descriptor = os.open(unit_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
     with os.fdopen(descriptor, "w") as stream:
@@ -252,6 +283,7 @@ def register(registry, unit_dir, *, instance_id, root, username, environment_fil
         os.fsync(stream.fileno())
     record = {
         "schema_version": 1,
+        "management_sha256": _digest(root / MARKER),
         "instance_id": instance_id,
         "root": str(root),
         "uid": account.pw_uid,
@@ -383,6 +415,13 @@ class Helper:
         if _digest(unit) != record["unit_sha256"]:
             raise HelperError("unit changed; administrator reconciliation required")
         root = _path(record["root"])
+        if (
+            record.get("management_sha256") is None
+            or _digest(root / MARKER) != record["management_sha256"]
+        ):
+            raise HelperError(
+                "native management binding missing or changed; explicit adoption required"
+            )
         if root.stat().st_uid != record["uid"] or record["uid"] <= 0:
             raise HelperError("instance owner changed")
         for relative, key in [

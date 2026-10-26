@@ -21,6 +21,22 @@ ai-device-native-helper deploy \
 ai-device-native-helper register --registry /var/lib/ai-device/manager \
  --unit-dir /etc/systemd/system --root /opt/ai-device/instances/probe \
  --instance-id package-probe --username nativeprobe --environment-file /opt/ai-device/fixture.env
+# Legacy writer must refuse before creating upgrades or invoking any supervisor.
+python=/opt/ai-device/packages/0.2.2-native1/runtime/bin/python3.13
+runuser -u nativeprobe -- "$python" -I -c '
+from pathlib import Path
+from device_runtime import upgrader, installation, upgrade_supervisor
+root=Path("/opt/ai-device/instances/probe")
+for action in (
+ lambda: upgrader.prepare(root,"/missing-bundle","legacy-probe"),
+ lambda: upgrade_supervisor.supervise(root,"legacy-probe",confirmed=True),
+):
+ try: action()
+ except ValueError as exc: assert "native-managed" in str(exc), str(exc)
+ else: raise AssertionError("legacy entrypoint accepted managed instance")
+assert not (root/"upgrades").exists()
+print("legacy managed mutation entrypoints refused before side effects")
+'
 systemd-analyze verify /etc/systemd/system/ai-device-native-helper.service \
  /etc/systemd/system/ai-device-client-package-probe.service
 systemctl daemon-reload
