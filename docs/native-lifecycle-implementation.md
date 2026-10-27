@@ -947,3 +947,10 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 在独立 pytest 进程内 fork，分别让 start、apply、dormant job 的子进程在真实 `_save_new` 完成文件与目录 fsync 后、外部动作之前 `os._exit`。父进程确认 intent 仍可见且 sender/包管理器/runner 替身未调用，原 ID 不重放；start 和 apply 的新 ID 被未确认事务阻塞。job gate 仅在测试中替换，生产仍默认拒绝。针对性193通过，ruff通过，完整1052通过3跳过（`20261027-213220-dcd223.log`）。首次完整运行有多线程 fork 警告；改为独立 pytest 子进程后重跑无该警告。
 
 这是本机文件系统上的进程退出测试，不是宿主断电、文件系统持久性承诺、真实 systemd/dpkg/生产监督或全参与者测试；apply 与 job 使用部分替身，不能证明真实外部动作完整闭环。进程退出发生于 intent 成功返回后，并不覆盖成功前掉电或动作已发生后的结果丢失。生产派发仍关闭。
+
+
+## 118. 已记录 job intent 的重入一致性校验
+
+`dispatch_job` 的已有 intent 分支在既有 `_prepared` 授权校验之后，验证 runtime snapshot，并逐字段精确比对 schema（严格整数）、state、close 协议、确定性 unit、instance/operation ID、prepared 与 snapshot 摘要；畸形、多字段、证据变化或快照验证失败均拒绝，不修改 intent、不调用 runner。准确记录仍可在生产新派发门禁关闭时只读返回 `dispatch_already_recorded`，不重派。新增12种字段/内容漂移负向用例；相关205项通过，ruff通过，完整1064通过3跳过（`20261027-213718-f18965.log`）。
+
+这是已记录路径的一致性检查，不是跨进程身份认证、持锁授权、恢复或新派发许可；快照不可用/漂移会拒绝观察分支，不能由此推断动作未执行或删除封锁。首次派发仍 default-deny。未构建新包或进行真实 systemd 验收；旧测试helper继续手动退休，不自动迁移。

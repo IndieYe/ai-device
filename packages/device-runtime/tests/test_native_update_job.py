@@ -253,6 +253,60 @@ def test_dispatch_process_exit_after_durable_intent_does_not_replay(transaction,
     assert not runner_marker.exists()
 
 
+@pytest.mark.parametrize(
+    "change",
+    ["instance_id", "operation_id", "unit", "prepared_sha256", "runtime_snapshot_sha256",
+     "schema_version", "close_protocol", "state", "extra", "not_object", "prepared", "snapshot"],
+)
+def test_recorded_dispatch_rejects_identity_or_evidence_drift(transaction, monkeypatch, change):
+    import hashlib
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from device_runtime import native_update as update
+
+    monkeypatch.setattr(job.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(__import__("sys"), "platform", "linux")
+    snapshot = transaction.with_suffix(".bootstrap") / "snapshot.json"
+    prepared = transaction.with_suffix(".prepared.json")
+    intent = {
+        "schema_version": 1,
+        "state": "job_dispatch_intent",
+        "close_protocol": "package-lease-v1",
+        "unit": "ai-device-package-" + hashlib.sha256(str(transaction).encode()).hexdigest()
+        + ".service",
+        "instance_id": "probe",
+        "operation_id": "one",
+        "prepared_sha256": job.helper._digest(prepared),
+        "runtime_snapshot_sha256": job.helper._digest(snapshot),
+    }
+    if change == "not_object":
+        intent = []
+    elif change == "schema_version":
+        intent[change] = True  # bool must not stand in for the integer schema version.
+    elif change == "extra":
+        intent["extra"] = "unexpected"
+    elif change == "prepared":
+        prepared.write_text("changed prepared")
+    elif change == "snapshot":
+        snapshot.write_text("changed snapshot")
+    else:
+        intent[change] = "changed"
+    path = transaction.with_suffix(".job-intent.json")
+    path.write_text(json.dumps(intent))
+    before = path.read_bytes()
+
+    @contextmanager
+    def txn(*args):
+        yield {}, transaction
+
+    manager = SimpleNamespace(packages=update.Debian(), _transaction=txn, _prepared=lambda *a: {})
+    calls = []
+    with pytest.raises(job.JobError, match="recorded job intent differs"):
+        job.dispatch_job(manager, "probe", "one", runner=lambda *a, **kw: calls.append(a))
+    assert path.read_bytes() == before and not calls
+
+
 def test_dispatch_rejected_by_real_shared_start_sender_lock(transaction, monkeypatch):
     from contextlib import contextmanager
     from types import SimpleNamespace
@@ -438,6 +492,7 @@ def test_new_dispatch_fails_closed_without_cross_version_fence(transaction, monk
 
 
 def test_existing_job_observation_survives_dispatch_gate(transaction, monkeypatch):
+    import hashlib
     from contextlib import contextmanager
     from types import SimpleNamespace
 
@@ -445,7 +500,20 @@ def test_existing_job_observation_survives_dispatch_gate(transaction, monkeypatc
 
     monkeypatch.setattr(job.os, "geteuid", lambda: 0)
     monkeypatch.setattr(__import__("sys"), "platform", "linux")
-    transaction.with_suffix(".job-intent.json").write_text('{"state":"job_dispatch_intent"}')
+    intent = {
+        "schema_version": 1,
+        "state": "job_dispatch_intent",
+        "close_protocol": "package-lease-v1",
+        "unit": "ai-device-package-" + hashlib.sha256(str(transaction).encode()).hexdigest()
+        + ".service",
+        "instance_id": "probe",
+        "operation_id": "one",
+        "prepared_sha256": job.helper._digest(transaction.with_suffix(".prepared.json")),
+        "runtime_snapshot_sha256": job.helper._digest(
+            transaction.with_suffix(".bootstrap") / "snapshot.json"
+        ),
+    }
+    transaction.with_suffix(".job-intent.json").write_text(json.dumps(intent))
 
     @contextmanager
     def txn(*args):

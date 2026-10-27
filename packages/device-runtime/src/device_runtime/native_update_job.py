@@ -117,9 +117,25 @@ def dispatch_job(manager, instance_id, operation_id, *, runner=None):
         path = stem.with_suffix(".job-intent.json")
         if path.exists():
             helper._trusted(path)
+            intent = json.loads(path.read_bytes())
+            snapshot = stem.with_suffix(".bootstrap")
+            bootstrap.validate_snapshot(snapshot)
+            expected = {
+                "schema_version": 1,
+                "state": "job_dispatch_intent",
+                "close_protocol": "package-lease-v1",
+                "unit": "ai-device-package-" + hashlib.sha256(str(stem).encode()).hexdigest()
+                + ".service",
+                "instance_id": instance_id,
+                "operation_id": operation_id,
+                "prepared_sha256": helper._digest(stem.with_suffix(".prepared.json")),
+                "runtime_snapshot_sha256": helper._digest(snapshot / "snapshot.json"),
+            }
+            if intent != expected or type(intent.get("schema_version")) is not int:
+                raise JobError("recorded job intent differs from current transaction")
             return {
                 "state": "dispatch_already_recorded",
-                "intent": json.loads(path.read_bytes()),
+                "intent": intent,
                 "replayed": False,
             }
         _require_proven_job_fence()
