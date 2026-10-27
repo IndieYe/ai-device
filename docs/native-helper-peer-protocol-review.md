@@ -57,6 +57,21 @@
 - `dispatch_job` 先实例事务，再无条件 `_require_proven_job_fence` 拒绝；其当前不可达的新派发路径在包独占锁下检查 pending intents、保存 job intent，释放租约之后才调用 systemd。`_save_new` 对文件及父目录 fsync 并 hardlink no-replace，发布/持久化异常仍需按 unknown 对账。
 - `Updates.apply` 取得实例事务、包独占锁与实例 service lease 后核查 job/close、其他 intent、批准与 snapshot 等；这不证明其他入口无遗漏，也不证明实际运行的 helper 是理解围栏的版本。除非独立启动、实例与身份绑定及全入口动态验收通过，不能据此更改 default-deny。
 
+## 真实 bootstrap 的受控启动交接：实现级设计草案
+
+现有 `run_verified_helper_candidate` 按独立 bootstrap 身份检查、完整 snapshot 校验、将三个模块源码读取到内存并二次校验，再在**同一进程**建立模块、执行字节并调用候选 `serve`。不能仅在该函数外包 `fork` 宣称父进程证明了子进程代码：若 fork 发生在校验前，则证据由子进程产生；若 fork 在校验后，须显式控制子进程继承的内存、锁和启动通道。以下仅为待实现、待独立验证的设计，不开放派发。
+
+1. 独立 bootstrap 监督器在单线程、确定独立解释器路径、固定 snapshot 摘要及无缓存条件下，对当前代码同等的证据做全部检查，将 `__init__`、`management_lock`、`native_helper` 的实际字节和相应源码路径保存在内存。最终检查失败不得 fork；不得将调用方提供的 PID/摘要/版本自报代替证据。若抽取校验函数，必须保持所有现有拒绝条件和二次校验，不新增可被外部传入伪造内容后直接执行的公开入口。
+2. 监督器持有 daemon 锁后创建私有 SEQPACKET 通道与关闭的启动门闩，再 fork 唯一受控子进程。子进程在收到许可之前不得 bind 服务 socket、执行候选或派生后代；父进程在自身直接子进程未被其他线程/处理器回收的前提下获取 pidfd，核对由内核产生的逐记录凭据、所持 fd 的进程身份和启动实例。若获取失败、子进程先退出、凭据不符或控制通道异常，则拒绝就绪并在可证归属范围内有界回收。不能单凭 fork 返回值、整数 PID 或消息自报证明对外连接身份。
+3. 父进程许可后，子进程从 fork 时继承的**已校验内存字节**创建模块、编译执行，不从可变候选路径再次 import 三个模块；其他依赖与运行时均必须证明来自独立 bootstrap 的可信路径。子进程自己创建并 bind 对外 socket；并对监听、已接受连接和私有端点的 fork/exec/传递做明确 FD 生命周期约束。实际对外 peer 和消息处理者还必须分别验证，不以 socket 创建者代替实际处理者。就绪前完成必要锁及 intent 检查，证据无效则不接受变更请求。
+4. 守护锁交接须新增明确契约：现有 `serve()` 会自行调用 `_daemon_lease` 打开并加锁，父进程持锁后 fork 的子进程若再次独立 open/flock 可能与原 open-file description 冲突。不得将已持有 FD 的 inode 匹配当作持锁证明，也不能直接绕过 `serve()` 授权检查。需要专门的内部入口及明确所有权/回收测试，使父和子持有同一个已加锁的 open-file description、明确关闭时机与额外继承者；旧 guard 持有的是 execution/package 锁，不能假定代持 daemon 锁。父退出但子存活时，锁不能因父关闭而过早释放；反之若残留后代意外继承可导致锁永久占用，必须拒绝自动恢复并诊断。该选择仍待实验和安全评审。
+5. 动作准入仍须连接上的活 peer 与受控启动实例、当前监督器 invocation 和策略关联；只靠子进程自行检查父 pidfd 不足，因为父可在检查后死亡。start 和 job 在既定锁序下以持久 intent 与 guard 回执处理后续并发：发布成功以文件、目录 fsync 为前提；结果不确定按同 ID 对账，任何缺失证据为 unknown。监督器退出时失效的是新动作准入，不可据此认为已开始动作未发生或清除持久 intent；新实例在锁内检查既有 intent 并保留围栏。
+
+
+**锁交接语义实验**：`scripts/probe-native-daemon-lock-handoff.py` 在无网络 Linux 6.18.15 amd64/Rosetta 容器中对临时普通文件验证：独立 open 的描述不能取得已持有的排他 flock；父 fork 后关闭自己的 FD，子进程继承的同一 open-file description 仍保持锁；子进程关闭后独立 open 可取得锁。`DAEMON_FLOCK_HANDOFF_OK`，日志 `20261027-202218-ee55c4.log`，ruff 通过。实验未调用 `LOCK_UN`，未验证异常后代继承、锁文件替换、崩溃后 systemd 行为或实际 daemon 实现；特别注意任一共享描述上的显式解锁可能影响其他持有者，不能把实验结论推广为必然安全的租约交接。
+
+实施前需完成：真实 bootstrap 字节快照提取的既有功能及漂移回归；fork 前后验证字节与原路径替换对照；受控子进程提前退出、超时、父退出、遗留子进程及描述符泄漏/锁保持测试；systemd invocation/peer 绑定与 PID namespace 核对；start/job 在释放包锁间隙的真实并发和崩溃验收。系统不承诺对可信本机 root 的故意绕过提供 OS 沙箱。即使这些局部测试通过，正式信任根和 P1 其他门禁仍须独立完成。
+
 ## 后续验收门禁
 
 1. 对监督器父进程的实际 fork/exec 与候选内存字节执行顺序给出实现级设计，定义在子进程获得运行许可前监督器已验证的证据；证明验证后不从可变路径重新加载。

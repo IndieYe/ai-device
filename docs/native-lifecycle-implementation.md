@@ -845,3 +845,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 101. 受控父子进程与监督器退出原型
 
 新增隔离脚本 `scripts/probe-native-supervised-start.py`：监督器 fork 子进程、持有子 pidfd、核对 ready 的 SCM_CREDENTIALS 与直接子进程，子进程检查继承的监督器 pidfd；监督器存活时报告 A、先退出后报告 R。Linux 6.18.15 amd64/Rosetta 无网络容器 `SUPERVISED_START_PROBE_OK`，日志 `20261027-201815-c7ac14.log`，ruff通过。仅验证固定时序，不执行真实候选、不使用 systemd 或事务锁；一次存活检查不能防检查后死亡，不能证明真实身份或失败关闭。详见 `native-helper-peer-protocol-review.md`。生产派发保持拒绝，完整回归本轮未跑。
+
+
+## 102. 实际 bootstrap 字节交接设计和 flock 实验
+
+基于实际 `run_verified_helper_candidate`、`serve`、start/dispatch 代码，在 `native-helper-peer-protocol-review.md` 描述父校验内存字节、受控 fork、pidfd/消息身份、daemon 锁、外部连接及持久 intent 的拟议交接和明确验收门禁；尚未实现或独立评审。`scripts/probe-native-daemon-lock-handoff.py` 在隔离 Linux 6.18.15 amd64/Rosetta 验证：独立 open 冲突；父关闭后子继承 FD 保持排他 flock；子关闭后锁释放。`DAEMON_FLOCK_HANDOFF_OK`，日志 `20261027-202218-ee55c4.log`，ruff通过。未验证显式解锁、真实 daemon、systemd、崩溃或锁文件漂移；原生包保护和生产派发不变，P1未完成。
