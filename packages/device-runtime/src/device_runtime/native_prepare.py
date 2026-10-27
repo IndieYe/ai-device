@@ -164,9 +164,7 @@ def prepare_runtime_candidate(
     helper._trusted(uv.resolve())
     helper._trusted(Path(sys.executable).resolve())
     envelope = Path(envelope)
-    if envelope.stat().st_size > 256000:
-        raise PreparationError("release envelope too large")
-    signed = candidate._json(envelope.read_bytes())
+    signed = candidate._read_envelope(envelope)
     payload = candidate.verify_release(
         signed,
         trusted_keys,

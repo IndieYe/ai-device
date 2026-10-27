@@ -24,6 +24,7 @@ from .protocol import canonical
 MAX_PACKAGE = 1_000_000_000
 MAX_EXPANDED = 4_000_000_000
 MAX_MEMBERS = 100000
+MAX_ENVELOPE = 256000
 
 
 class CandidateError(ValueError):
@@ -48,6 +49,15 @@ def _json(data):
 
 def _invalid():
     raise CandidateError("non-finite JSON number")
+
+
+def _read_envelope(path):
+    # Bound the read itself: a prior stat does not constrain concurrent writes.
+    with Path(path).open("rb") as stream:
+        data = stream.read(MAX_ENVELOPE + 1)
+    if len(data) > MAX_ENVELOPE:
+        raise CandidateError("release envelope too large")
+    return _json(data)
 
 
 def _digest(path):
@@ -370,9 +380,7 @@ def prepare_candidate(
 ):
     """Prepare authenticated extracted payload only; no venv, script or active write."""
     package, envelope_path, destination = map(Path, (package, envelope_path, destination))
-    if envelope_path.stat().st_size > 256000:
-        raise CandidateError("release envelope too large")
-    envelope = _json(envelope_path.read_bytes())
+    envelope = _read_envelope(envelope_path)
     payload = verify_release(
         envelope,
         trusted_keys,

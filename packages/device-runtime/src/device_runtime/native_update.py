@@ -284,9 +284,7 @@ class Updates:
         envelope_path = nh._path(envelope_path)
         nh._trusted(package_path)
         nh._trusted(envelope_path)
-        if envelope_path.stat().st_size > 256000:
-            raise UpdateError("release envelope exceeds budget")
-        envelope = nc._json(envelope_path.read_bytes())
+        envelope = nc._read_envelope(envelope_path)
         # Recheck binding under the instance lease; prepare() takes it again
         # after verification and compares the complete source evidence.
         with self._transaction(instance_id, operation_id) as (binding, stem):

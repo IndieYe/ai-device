@@ -186,6 +186,23 @@ def test_manifest_tamper_in_signed_package_refused(candidate):
     assert not candidate[2].exists()
 
 
+def test_envelope_read_is_bounded_and_accepts_exact_limit(tmp_path):
+    envelope = tmp_path / "release.json"
+    envelope.write_bytes(b"{}" + b" " * (nc.MAX_ENVELOPE - 2))
+    assert nc._read_envelope(envelope) == {}
+    with envelope.open("ab") as stream:
+        stream.write(b" ")
+    with pytest.raises(nc.CandidateError, match="envelope too large"):
+        nc._read_envelope(envelope)
+
+
+def test_oversized_envelope_refused_before_candidate_creation(candidate):
+    candidate[1].write_bytes(b"{}" + b" " * nc.MAX_ENVELOPE)
+    with pytest.raises(nc.CandidateError, match="envelope too large"):
+        prepare(candidate)
+    assert not candidate[2].exists()
+
+
 def test_duplicate_json_refused(candidate):
     candidate[1].write_text('{"key_id":"test","key_id":"test"}')
     with pytest.raises(nc.CandidateError, match="duplicate"):
