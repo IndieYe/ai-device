@@ -111,3 +111,10 @@
 
 
 `probe-native-pidfd-check-race.py` 在真实 daemon 租约和 pidfd 上安排受控次序：子先检查父存活，父退出并由观察者回收，再允许子写入模拟动作标记；此时子同时观察到父 pidfd 已就绪，标记仍可写出。输出 `PIDFD_CHECK_THEN_ACTION_RACE_CONFIRMED`，日志 `20261027-212744-292f64.log`。模拟只写管道，不执行真实操作；证明先前活性检查与稍后动作不是原子事件，不意味着真实实现一定发生该次序。生产协议仍须处理意图先持久化、动作进行中父死亡及 unknown 对账，不能仅用 pidfd 预检查当成动作授权。
+
+
+## 已验证候选与父死亡的组合实验
+
+`accept-native-verified-parent-exit.sh` 在无网络一次性 Linux amd64/Rosetta 容器安装经 SHA 校验的旧 0dbcf8d DEB，仅在容器内覆盖并逐字节核对当前 bootstrap/helper 四模块；不是当前 commit 准确制品。独立 bootstrap 发布并验证候选字节，随后篡改候选路径，监督父在实际 daemon 双锁内 fork；子从已验证内存字节加载候选并直接调用内部 `_serve`（绕过生产 `serve` 获取锁，仅限实验），由子 bind socket。观察者确认 socket peer PID 为子、畸形请求被拒绝、完整租约冲突。父退出后，子内实验 watchdog 观察父 pidfd 并 `os._exit`；观察者确认子 pidfd 就绪、双锁可再次取得，旧 socket 文件仍存在且连接拒绝。输出 `VERIFIED_PARENT_EXIT_PIDFD_FIXTURE_OK`，日志 `20261027-214658-bd5b5d.log`。
+
+这里的 watchdog、锁交接和直接 `_serve` 均非生产实现；无 systemd invocation、逐消息处理者认证、已开始动作的取消/unknown 对账、线程挂死或 supervisor 失联完整策略。父死亡到子退出之间仍有竞态；socket peer 证明 bind 关联而非所有响应处理者。实验不开放派发，不解除陈旧 socket 或意图保护。

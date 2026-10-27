@@ -961,3 +961,10 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 在独立 pytest 进程内使用 fork，让 start sender、apply 包操作与 dormant job runner 测试替身分别先写入已开始标记，再在进程内 `os._exit`，不产生结果或 sender 回执。父进程确认持久 intent 存在：start 返回 unknown、同 ID 不重放、新 ID 阻塞；apply 同 ID 只观察、无 outcome，新 ID 被未终态事务阻塞；job 返回已记录且不重派。job 的 default-deny 仅在测试中替换。针对性208项、ruff通过；完整1067通过3跳过，日志 `20261027-214219-dd9bf9.log`。
 
 此处“动作已开始”是写测试标记，不是真实 systemctl、dpkg 或 systemd-run；未验证真实后代存活、动作完成与回执丢失、systemd重启或宿主断电。unknown 必须保持封锁并经准确证据显式对账，不因本测试推定动作失败、已完成或可重试；生产派发仍关闭。
+
+
+## 120. 已验证候选与监督父退出的隔离组合实验
+
+无网络 Linux 6.18 amd64/Rosetta 一次性容器，用 SHA 校验旧 0dbcf8d DEB 并仅在容器覆盖当前 bootstrap/helper 模块；独立 bootstrap 发布及校验候选内存字节后篡改磁盘候选，父持 daemon 双锁 fork，子使用验证字节并直接调用内部 `_serve`。观察者确认 socket peer 为子、畸形请求拒绝、双锁阻止并发租约。父退出后，子内实验 watchdog 观察父 pidfd 并退出；观察者确认子退出、双锁释放、socket 文件保留且连接被拒绝。`VERIFIED_PARENT_EXIT_PIDFD_FIXTURE_OK`，日志 `20261027-214658-bd5b5d.log`；Python ruff及shell语法检查通过。
+
+仅为旧包加当前源码覆盖的单次机制实验，不是当前准确包、真实 systemd 或生产监督器；内部 `_serve` 绕过生产租约入口，watchdog 不证明处理者身份、无竞态或动作回收，残留 socket 不自动清理。生产派发仍关闭，未操作真实服务。
