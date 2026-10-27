@@ -379,7 +379,16 @@ print('PRODUCTION_JOB_RECOVERY_GATE_REFUSED_WITHOUT_WRITES',flush=True)
 # Test-only substitute to exercise the historical paths after verifying the
 # unmodified production fence. Never used as evidence of production permission.
 update._require_proven_job_recovery_fence=lambda: None
-print('DISPOSABLE_RECOVERY_FENCE_SUBSTITUTE',flush=True)
+try:
+ manager.recover('probe','job-one',job_intent_sha256=helper._digest(stem.with_suffix('.job-intent.json')))
+except update.UpdateError as error:
+ assert 'process tree completion unproven' in str(error)
+else:
+ raise AssertionError('direct-child package receipt accepted as full tree completion')
+assert {p.name:p.read_bytes() for p in stem.parent.iterdir() if p.is_file()}==before
+print('PRODUCTION_PACKAGE_TREE_GATE_REFUSED_WITHOUT_WRITES',flush=True)
+update._require_proven_package_tree_reaped=lambda: None
+print('DISPOSABLE_RECOVERY_AND_TREE_FENCE_SUBSTITUTES',flush=True)
 # Only the disposable fixture's receipt is temporarily hidden and restored.
 # Test this before any recovery receipt is written.
 sender_path=stem.with_suffix('.sender.json')

@@ -31,6 +31,11 @@ def _require_proven_job_recovery_fence():
     raise UpdateError("job recovery disabled: worker completion fence unproven")
 
 
+def _require_proven_package_tree_reaped():
+    """Direct-child sender receipts do not prove all package descendants exited."""
+    raise UpdateError("package recovery disabled: process tree completion unproven")
+
+
 def _verify_job_intent(stem, instance_id, operation_id, expected_digest):
     """Revalidate a job under the caller's instance and package leases."""
     path = stem.with_suffix(".job-intent.json")
@@ -601,6 +606,10 @@ class Updates:
                 intent_path = stem.with_suffix(".apply-intent.json")
                 nh._trusted(intent_path)
                 intent = json.loads(intent_path.read_text())
+                if isinstance(self.packages, Debian) or (
+                    isinstance(intent, dict) and "runtime_snapshot_sha256" in intent
+                ):
+                    _require_proven_package_tree_reaped()
                 expected = {"prepared_sha256": nh._digest(stem.with_suffix(".prepared.json"))}
                 if "runtime_snapshot_sha256" in intent:
                     directory = stem.with_suffix(".bootstrap")

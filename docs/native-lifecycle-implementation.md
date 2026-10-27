@@ -1292,3 +1292,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 使用准确 `19b7065` DEB 的独立 bootstrap，在无网络一次性 Linux amd64/Rosetta 容器运行扩展 `probe-native-verified-parent-exit.py`。父持双锁，子加载验证过的候选内存字节并调用实际 `_serve`；客户端在一次拒绝请求上检查内核 `SCM_CREDENTIALS`，响应发送 PID 与受控 fixture 子进程一致；随后父退出触发测试 watchdog，子退出、双锁释放，stale socket 保留。`VERIFIED_HELPER_REFUSAL_RESPONSE_SENDER_MATCHES_FIXTURE_CHILD` 与 `VERIFIED_PARENT_EXIT_PIDFD_FIXTURE_OK`（`20261028-010539-fe692b.log`），ruff 通过。
 
 仅覆盖单次拒绝响应与该 fixture，不能证明生产 systemd invocation、消息执行者对副作用的因果归属或检查后活性，未开放 dispatch/job 恢复。详细边界见 `docs/native-helper-peer-protocol-review.md`。
+
+
+## 164. Debian 包 sender 直接子进程退出不证明进程树退出
+
+`probe-native-package-descendant.py` 在无网络一次性 Linux amd64/Rosetta 容器安装准确 `19b7065` DEB，仅容器内将 `/usr/bin/dpkg` 替换为有限寿命 fixture；通过包内真实 `Debian.apply`、独立 snapshot guard 和 package EX 运行该替身，不执行真实包更新。直接替身进程退出后，guard 已发布 `sender_reaped`，其后代仍运行，且包锁可再次取得：`PACKAGE_DIRECT_CHILD_RECEIPT_WITH_DESCENDANT_ALIVE_AND_LOCK_FREE`（`20261028-010851-03d7d6.log`）。fixture 后代自然有限退出，容器随实验结束。此证明所测守卫只等待直接进程，不声称真实 dpkg 必然留下后代。
+
+当前恢复新增临时默认拒绝：Debian 适配器或含 `runtime_snapshot_sha256` 的包事务，不以旧直接子进程回执推导安全恢复；既有记录及围栏不改。真实 job 恢复仍先由独立 job 默认拒绝门禁阻断；测试替身只用于验证既有逻辑。源码回归 1143 通过、4 跳过（`20261028-011109-b2fdfc.log`），新包及真实隔离验收待完成。后续需要版本化 subreaper/进程树回执、退出到 ECHILD、崩溃和锁生命周期验证，旧回执不可升级，生产派发保持关闭。

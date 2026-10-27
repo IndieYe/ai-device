@@ -680,6 +680,13 @@ def test_snapshot_intent_recovery_checks_target_and_receipt(update, monkeypatch)
     sender = json.loads(stem.with_suffix(".sender.json").read_bytes())
     sender["intent"] = intent
     stem.with_suffix(".sender.json").write_text(json.dumps(sender))
+    baseline = {p.name: p.read_bytes() for p in stem.parent.iterdir() if p.is_file()}
+    with pytest.raises(nu.UpdateError, match="process tree completion unproven"):
+        manager.recover("probe", "one")
+    assert {p.name: p.read_bytes() for p in stem.parent.iterdir() if p.is_file()} == baseline
+    assert packages.calls == 1 and not stem.with_suffix(".recovery.json").exists()
+    # Preserve coverage of prior validation only via a test-only substitute.
+    monkeypatch.setattr(nu, "_require_proven_package_tree_reaped", lambda: None)
     assert (
         manager.recover("probe", "one")["recovery"]["state"] == "package_applied_pending_activation"
     )
@@ -809,6 +816,13 @@ def test_explicit_job_recovery_retains_fence_and_never_replays(update, monkeypat
     # The remaining assertions exercise the old reconciliation logic only as a
     # fixture; this substitute is never a production authorization.
     monkeypatch.setattr(nu, "_require_proven_job_recovery_fence", lambda: None)
+    # A legacy direct-child package receipt cannot prove tree completion.
+    with pytest.raises(nu.UpdateError, match="process tree completion unproven"):
+        manager.recover("probe", "one", job_intent_sha256=nh._digest(stem.with_suffix(".job-intent.json")))
+    assert not stem.with_suffix(".recovery.json").exists() and packages.calls == 1
+    assert {p.name: p.read_bytes() for p in stem.parent.iterdir() if p.is_file()} == baseline
+    # The historical logic below is exercised with both test-only substitutes.
+    monkeypatch.setattr(nu, "_require_proven_package_tree_reaped", lambda: None)
 
     # General update recovery must not bypass job-specific observation/binding.
     before_direct = {p.name: p.read_bytes() for p in stem.parent.iterdir() if p.is_file()}
