@@ -1,3 +1,4 @@
+import fcntl
 import json
 from pathlib import Path
 
@@ -215,3 +216,107 @@ def test_owner_binding_detects_marker_drift(tmp_path, monkeypatch):
     (root / "run").write_text("changed")
     with pytest.raises(np.PreparationError, match="binding changed"):
         np._binding(root)
+
+
+def test_administrator_retirement_requires_full_tree_and_preserves_old_id(preparation, monkeypatch):
+    root, _, _, _ = preparation
+    real_prepare = np.core._prepare
+
+    def failed(*a, **kw):
+        raise ValueError("injected failure")
+
+    monkeypatch.setattr(np.core, "_prepare", failed)
+    with pytest.raises(ValueError, match="injected"):
+        prepare(preparation)
+    request = json.loads((root / "native-candidates/one.intent.json").read_text())
+    # The production preparation fixture mocks binding; retirement separately
+    # validates its administrator marker/owner/source boundary.
+    (root / np.MARKER).write_text(
+        json.dumps({"schema_version": 2, "binding": {"root": str(root), "uid": root.stat().st_uid}})
+    )
+    request["binding_sha256"] = np.helper._digest(root / np.MARKER)
+    intent_path = root / "native-candidates/one.intent.json"
+    intent_path.write_text(json.dumps(request))
+    result_path = root / "native-candidates/one.result.json"
+    result_path.write_text(json.dumps({"state": "failed", "request": request}))
+    monkeypatch.setattr(np.sys, "platform", "linux")
+    monkeypatch.setattr(np.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(np.helper, "_trusted_marker", lambda _: None)
+    senders = root / "native-candidates/one.senders"
+    (senders / "execution.lock").touch()
+    with pytest.raises(np.PreparationError, match="process-tree"):
+        np.retire_preparation(str(root), "one")
+    intent = {"request": request, "sequence": 1, "barrier": "linux-subreaper-v1"}
+    (senders / "1.intent.json").write_text(json.dumps(intent))
+    # Missing completion, even with a free lock, cannot retire.
+    with pytest.raises(np.PreparationError, match="process-tree"):
+        np.retire_preparation(str(root), "one")
+    (senders / "1.reaped.json").write_text(
+        json.dumps(
+            {
+                "state": "process_tree_reaped",
+                "intent": intent,
+                "returncode": 1,
+                "descendants_confirmed": True,
+                "mechanism": "linux-subreaper-v1",
+            }
+        )
+    )
+    # Direct-child receipts never gain stronger meaning retrospectively.
+    full_receipt = (senders / "1.reaped.json").read_bytes()
+    old_intent = {**intent, "barrier": "direct-child-v1"}
+    (senders / "1.intent.json").write_text(json.dumps(old_intent))
+    (senders / "1.reaped.json").write_text(
+        json.dumps(
+            {
+                "state": "direct_child_reaped",
+                "intent": old_intent,
+                "returncode": 1,
+                "descendants_confirmed": False,
+            }
+        )
+    )
+    with pytest.raises(np.PreparationError, match="process-tree"):
+        np.retire_preparation(str(root), "one")
+    (senders / "1.intent.json").write_text(json.dumps(intent))
+    (senders / "1.reaped.json").write_bytes(full_receipt)
+    # Even a full receipt is insufficient while any sender still holds its lock.
+    with (senders / "execution.lock").open("rb") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(np.PreparationError, match="process-tree"):
+            np.retire_preparation(str(root), "one")
+    active_path = root / "active.json"
+    active = active_path.read_bytes()
+    active_path.write_bytes(active + b"\n")
+    with pytest.raises(np.PreparationError, match="source or binding"):
+        np.retire_preparation(str(root), "one")
+    active_path.write_bytes(active)
+    failed_result = result_path.read_bytes()
+    result_path.write_text(json.dumps({"state": "runtime_prepared", "request": request}))
+    with pytest.raises(np.PreparationError, match="only failed"):
+        np.retire_preparation(str(root), "one")
+    result_path.write_bytes(failed_result)
+    assert not (root / "native-candidates/one.retired.json").exists()
+    marker_path = root / np.MARKER
+    marker = marker_path.read_bytes()
+    registration = json.loads(marker)
+    registration["schema_version"] = 1
+    marker_path.write_text(json.dumps(registration))
+    with pytest.raises(np.PreparationError, match="matching native owner"):
+        np.retire_preparation(str(root), "one")
+    marker_path.write_bytes(marker)
+    receipt = np.retire_preparation(str(root), "one")
+    assert receipt["state"] == "retired_without_replay"
+    assert np.retire_preparation(str(root), "one") == receipt
+    assert result_path.exists() and senders.exists()
+    # Owner-side new requests remain explicit; the old ID never replays.
+    with pytest.raises(np.PreparationError, match="conflict|failed"):
+        prepare(preparation)
+    monkeypatch.setattr(np.core, "_prepare", real_prepare)
+    assert prepare(preparation, operation_id="two")["state"] == "runtime_prepared"
+
+
+def test_retirement_requires_linux_administrator(tmp_path, monkeypatch):
+    monkeypatch.setattr(np.os, "geteuid", lambda: 12345)
+    with pytest.raises(np.PreparationError, match="administrator"):
+        np.retire_preparation(str(tmp_path), "one")

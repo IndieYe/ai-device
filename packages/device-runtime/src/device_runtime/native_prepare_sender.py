@@ -11,28 +11,56 @@ from pathlib import Path
 from . import native_helper as helper
 from .protocol import canonical
 
-GUARD = """import json,os,subprocess,sys,tempfile
+# Explicit fragments keep both protocols aligned without text-rewriting Python.
+_GUARD_HEADER = """import json,os,subprocess,sys,tempfile
 from pathlib import Path
 receipt=Path(sys.argv[1]); intent=json.loads(sys.argv[2]); timeout=json.loads(sys.argv[3])
-try:
+"""
+_GUARD_COMMAND = """try:
  result=subprocess.run(sys.argv[4:],check=False,timeout=timeout)
  code=result.returncode
 except subprocess.TimeoutExpired:
  code=124
-value={'state':'direct_child_reaped','intent':intent,'returncode':code,'descendants_confirmed':False}
-fd,tmp=tempfile.mkstemp(prefix='.prepare-sender-',dir=receipt.parent)
+"""
+_GUARD_PUBLISH = """fd,tmp=tempfile.mkstemp(prefix='.prepare-sender-',dir=receipt.parent)
 with os.fdopen(fd,'w') as stream:
  json.dump(value,stream,sort_keys=True); stream.flush(); os.fsync(stream.fileno())
 os.link(tmp,receipt); os.unlink(tmp)
 fd=os.open(receipt.parent,os.O_RDONLY|os.O_DIRECTORY); os.fsync(fd); os.close(fd)
 sys.exit(code)
 """
+GUARD = (
+    _GUARD_HEADER
+    + _GUARD_COMMAND
+    + "value={'state':'direct_child_reaped','intent':intent,'returncode':code,'descendants_confirmed':False}\n"
+    + _GUARD_PUBLISH
+)
+
+# Adopt before spawning, then wait for ECHILD, including detached descendants.
+# A live descendant deliberately blocks completion; this does not kill the tree.
+TREE_GUARD = (
+    _GUARD_HEADER
+    + """import ctypes
+if sys.platform!='linux': raise RuntimeError('subreaper requires Linux')
+libc=ctypes.CDLL(None,use_errno=True)
+if libc.prctl(36,1,0,0,0)!=0: raise RuntimeError('subreaper unavailable')
+"""
+    + _GUARD_COMMAND
+    + """while True:
+ try: os.waitpid(-1,0)
+ except InterruptedError: continue
+ except ChildProcessError: break
+value={'state':'process_tree_reaped','intent':intent,'returncode':code,'descendants_confirmed':True,'mechanism':'linux-subreaper-v1'}
+"""
+    + _GUARD_PUBLISH
+)
 
 
 class PreparationSender:
-    def __init__(self, directory, request):
+    def __init__(self, directory, request, *, reap_descendants=False):
         self.directory = Path(directory)
         self.request = request
+        self.reap_descendants = reap_descendants
         self.sequence = 0
         self.fd = None
 
@@ -65,6 +93,7 @@ class PreparationSender:
             "sequence": self.sequence,
             "argv": [str(a) for a in argv],
             "cwd": str(cwd),
+            "barrier": "linux-subreaper-v1" if self.reap_descendants else "direct-child-v1",
         }
         helper._save_new(stem.with_suffix(".intent.json"), intent)
         result = subprocess.run(
@@ -72,7 +101,7 @@ class PreparationSender:
                 sys.executable,
                 "-I",
                 "-c",
-                GUARD,
+                TREE_GUARD if self.reap_descendants else GUARD,
                 str(stem.with_suffix(".reaped.json")),
                 canonical(intent),
                 canonical(timeout),
@@ -124,23 +153,34 @@ def observe_senders(directory, request):
                 if receipt_path.is_symlink() or receipt_path.stat().st_size > 256000:
                     raise ValueError("invalid sender receipt file")
                 receipt = json.loads(receipt_path.read_bytes())
+                full = intent.get("barrier") == "linux-subreaper-v1"
                 if (
                     receipt.get("intent") != intent
-                    or receipt.get("state") != "direct_child_reaped"
+                    or receipt.get("state")
+                    != ("process_tree_reaped" if full else "direct_child_reaped")
                     or type(receipt.get("returncode")) is not int
-                    or receipt.get("descendants_confirmed") is not False
+                    or receipt.get("descendants_confirmed") is not full
+                    or (full and receipt.get("mechanism") != "linux-subreaper-v1")
                 ):
-                    raise ValueError("matching direct-child receipt required")
-                state = "direct_child_reaped"
+                    raise ValueError("matching sender receipt required")
+                state = "process_tree_reaped" if full else "direct_child_reaped"
             report["commands"].append({"sequence": sequence, "state": state})
         if sorted(sequences) != list(range(1, len(sequences) + 1)):
             raise ValueError("sender sequence gap")
         report["commands"].sort(key=lambda item: item["sequence"])
+        all_trees = bool(paths) and all(
+            item["state"] == "process_tree_reaped" for item in report["commands"]
+        )
         return {
             **report,
-            "state": "unknown"
-            if not paths or any(item["state"] == "unknown" for item in report["commands"])
-            else "direct_children_reaped_descendants_unconfirmed",
+            "descendants_confirmed": all_trees,
+            "state": "process_trees_reaped"
+            if all_trees
+            else (
+                "unknown"
+                if not paths or any(item["state"] == "unknown" for item in report["commands"])
+                else "direct_children_reaped_descendants_unconfirmed"
+            ),
         }
     finally:
         os.close(fd)

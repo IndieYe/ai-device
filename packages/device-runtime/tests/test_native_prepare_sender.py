@@ -205,3 +205,85 @@ def test_observation_rejects_mismatched_receipt(tmp_path):
     path.write_text(json.dumps(receipt))
     with pytest.raises(ValueError, match="matching"):
         observe_senders(directory, {})
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux subreaper semantics")
+@pytest.mark.parametrize("detached", [False, True])
+def test_linux_tree_guard_waits_for_descendants(tmp_path, detached):
+    import time
+
+    from device_runtime.native_prepare_sender import observe_senders
+
+    directory = tmp_path / "tree"
+    done = tmp_path / "descendant-done"
+    descendant = (
+        "import time,sys; from pathlib import Path; time.sleep(.3); Path(sys.argv[1]).touch()"
+    )
+    command = f"import subprocess,sys; subprocess.Popen([sys.executable,'-c',sys.argv[1],sys.argv[2]],start_new_session={detached!r})"
+    with PreparationSender(directory, {"tree": True}, reap_descendants=True) as sender:
+        start = time.monotonic()
+        result = sender.run(
+            [sys.executable, "-c", command, descendant, str(done)],
+            cwd=tmp_path,
+            env=os.environ.copy(),
+            stdout=subprocess.DEVNULL,
+            timeout=10,
+        )
+        assert result.returncode == 0 and done.exists()
+        assert time.monotonic() - start >= 0.3
+    receipt = json.loads((directory / "1.reaped.json").read_text())
+    assert receipt["descendants_confirmed"] is True
+    assert receipt["state"] == "process_tree_reaped"
+    report = observe_senders(directory, {"tree": True})
+    assert report["state"] == "process_trees_reaped"
+    assert report["descendants_confirmed"] is True
+    assert report["retry_allowed"] is False
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux subreaper semantics")
+def test_linux_tree_receipt_not_published_while_detached_descendant_busy(tmp_path):
+    import time
+
+    from device_runtime.native_prepare_sender import TREE_GUARD, observe_senders
+
+    directory = tmp_path / "tree"
+    directory.mkdir()
+    ready, release, done = (tmp_path / name for name in ("ready", "release", "done"))
+    descendant = "from pathlib import Path; import time,sys; Path(sys.argv[1]).touch(); deadline=time.monotonic()+8\nwhile not Path(sys.argv[2]).exists() and time.monotonic()<deadline: time.sleep(.01)\nPath(sys.argv[3]).touch()"
+    command = "import subprocess,sys; subprocess.Popen([sys.executable,'-c',*sys.argv[1:]],start_new_session=True)"
+    intent = {"request": {}, "sequence": 1, "barrier": "linux-subreaper-v1"}
+    (directory / "1.intent.json").write_text(json.dumps(intent))
+    fd = os.open(directory / "execution.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    guard = subprocess.Popen(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            TREE_GUARD,
+            str(directory / "1.reaped.json"),
+            json.dumps(intent),
+            "null",
+            sys.executable,
+            "-c",
+            command,
+            descendant,
+            str(ready),
+            str(release),
+            str(done),
+        ],
+        pass_fds=(fd,),
+    )
+    os.close(fd)
+    try:
+        deadline = time.monotonic() + 5
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert ready.exists() and guard.poll() is None
+        assert not (directory / "1.reaped.json").exists()
+        assert observe_senders(directory, {})["state"] == "sender_busy"
+    finally:
+        release.touch()
+        guard.wait(timeout=15)
+    assert done.exists() and guard.returncode == 0
+    assert observe_senders(directory, {})["descendants_confirmed"] is True

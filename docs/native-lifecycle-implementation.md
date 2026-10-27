@@ -432,3 +432,21 @@ native_update新增prepare-signed及CLI，外部公钥重新认证准确发布�
 11项真实进程/上下文测试通过，完整Device **920 passed in 42.99s**，ruff/diff通过。覆盖正常/失败/超时直接子进程回执、限域发送者复原、生产_invoke使用guard、调用方fd关闭后guard持锁；异常guard自然os._exit后有限寿命子进程仍运行但锁可释放，无回执仍unknown；直接子进程退出且后代尚在活动，即使匹配回执也只报后代未确认。测试子进程按门闩或有限期限自行结束，无kill真实服务或遗留后台。未做本轮Linux完整venv/systemd/cgroup故障链，不把Mac本机隔离进程测试称Linux后代收口验收。
 
 本节与第24节原型一起保存检查点；发送者/安装限域接入、测试及HELPER文档更新，无数据库/前端/配置变化。下一缺口：可靠的准备后代生命周期归属（如独立受控job）及持久完成证据，再实现管理员显式收口/重试。缺此证据继续阻塞，不使用PID快照、锁释放或直接回执伪装全回收，不删除台账绕过。随后仍需包钩子许可、任务收口/准确停止、稳定bootstrap版本化布局与激活恢复终态。P1未完成，不进入P2。
+
+## 26. Linux准备进程树回收与显式退休
+
+新增linux-subreaper-v1强屏障：guard启动命令前prctl CHILD_SUBREAPER，等待直接子进程及收养后代至ECHILD才发布process_tree_reaped/descendants_confirmed=true；持久意图声明屏障类型，旧direct-child回执不升级。无限存活后代将持续阻塞；不主动kill，不以PID/锁释放推断全退出。observe仍retry_allowed=false。
+
+新增native_prepare retire --root --operation-id（Linux root显式）：管理EX/安装SH、准确schema2绑定与源active/marker、失败或缺完成、所有发送意图连续且强回执完整且发送锁空闲，才原子发布root0644退休记录。保留全部旧成果，旧ID永不重放，仅后续显式新ID可绕过已退休失败记录。无发送意图、旧屏障、guard丢回执、源变更仍阻塞；无通用崩溃修复或自动删除。当前退休证据面向可信本地协议，不是恶意owner安全隔离。
+
+隔离Linux UID12345发送者14项通过，含脱离会话后代及后代活动时不发布强回执；真实v15临时测试签名→最终venv→管理员批准仍通过。再注入实际命令exit7，强回执落盘→root退休→普通用户显式新ID准备成功、active不变。首次附加pytest因临时文件权限未收集，修正chmod后重跑通过。后台任务88589已完成，--rm容器退出，无遗留。依赖临时联网，不算离线新包或正式发布验收。宿主完整922 passed, 3 skipped in 45.74s（三项Linux专用已在Linux通过）；ruff/diff通过。
+
+此子阶段不覆盖guard自身崩溃后无回执的恢复；仍保持blocked。未接包钩子/任务收口/准确停止/稳定bootstrap版本化布局及激活健康终态，P1未完成、不进入P2。HELPER先前“完整回收尚缺”由本节修正为仅新强屏障操作可显式退休，旧记录不能推断。后续补正式验收脚本及缺回执管理员修复策略，再继续P1包事务前置。
+
+### 26.1 复核与可复现验收收口
+
+将guard字符串replace改为显式公共片段组合，避免重构静默丢失subreaper逻辑；管理员退休明确要求schema2。补直接拒绝断言：旧direct-child证据、发送锁busy、active漂移、runtime_prepared成功记录及旧schema都不写退休记录。HELPER补齐强屏障、无限后代等待和缺回执阻塞边界。
+
+新增纳入源码的 `packages/device-runtime/scripts/accept-native-retirement.py`（owner fail→管理员CLI retire→owner retry），在隔离amd64 Linux、真实v15临时开发签名包上执行通过；验证旧ID不重放、新ID完成及同ID稳定、旧失败证据保留、active不变。重构后发送者14项通过（4.37s），宿主完整922 passed/3 Linux skipped（43.43s）；后续schema2显式断言另有定向复核。未构建新包，临时联网依赖仍不是离线交付；未安装/激活或调用真实服务。包保护保持不变。
+
+交付联动：实现/CLI、测试、HELPER和实施记录已更新；数据迁移、宿主前端、workdir示例及AI资产不适用（独立Device仓内部准备流程）；发布制品与实机验证未完成，不扩大支持声明。下一项仍为P1包事务前置契约：任务收口/准确停止、稳定bootstrap布局、包钩子准确许可和激活恢复；缺回执现场保持阻塞，不自动修复。

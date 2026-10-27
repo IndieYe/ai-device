@@ -179,3 +179,29 @@ native_update新增`prepare-signed`，参数package-path/envelope-path/trusted-k
 `python -m device_runtime.native_prepare_sender --root ROOT --operation-id ID`限管理员，只读检查schema2标记与发送账本。返回sender_busy、unknown或direct_children_reaped_descendants_unconfirmed；**所有结果retry_allowed=false**，不是管理员恢复许可，不写恢复记录、不删除失败现场、不解除新ID门禁。缺回执、意图/请求不匹配、序号缺口拒绝或保持unknown；不能因锁已可独占就声称旧后代全部结束。命令可能派生后代，完整管理员收口仍缺可靠生命周期归属机制，暂不实现解除占用。
 
 真实有限寿命进程测试覆盖guard正常/失败/超时、调用方关闭fd后继承锁、guard异常退出缺回执但旧子进程仍运行、直接子进程退出而后代仍活动；后两种均不允许重试。发送者11项、Device920项通过；本轮无Linux完整准备链或真实cgroup归属回收验证，不沿用旧准备实验冒充新guard实机验收。
+
+## Linux 准备进程树强屏障与显式退休（P1 开发原型）
+
+本节修正早期“仅直接子进程回收、不能退休”的描述，仅适用于新 `linux-subreaper-v1` 操作。guard 在启动命令前设置 Linux child-subreaper，等待直接子进程和收养后代自然退出，直到 `waitpid` 返回 ECHILD 才持久发布 `process_tree_reaped`。改变 session/process group 不绕过收养。命令超时仍只按既有逻辑回收直接进程，后代未退出会继续占用发送锁；本机制不主动终止整棵树、不承诺等待有界。guard 崩溃、缺回执、旧 `direct-child-v1` 回执都不能升级为完整证据。
+
+`observe` 即使报告 `process_trees_reaped`，仍返回 `retry_allowed=false`。管理员必须显式执行：
+
+```bash
+python -m device_runtime.native_prepare retire --root <隔离实例绝对路径> --operation-id <失败操作ID>
+```
+
+仅 Linux root 可执行。核对实例 owner、可信 marker、源 active、管理独占与安装共享锁、失败/未完成状态、连续命令意图及全部强回执、发送锁空闲后，原子生成 root 所有的 0644 `.retired.json`（只含非秘密绑定/摘要）。成功候选拒绝退休。退休不删除旧 release 或台账、不重放旧 ID、不激活；新准备必须显式给新 ID。重复退休仅在同一源与证据下幂等。既有 0600 marker 不自动改权限。
+
+这是可信本地协作协议，不是防恶意 owner 篡改的 OS 隔离。管理员没有缺回执的通用强制恢复入口，不能删意图绕过阻塞。
+
+可复现验收脚本为 `packages/device-runtime/scripts/accept-native-retirement.py`，仅用于预登记、可丢弃的 Linux 测试实例，使用与 `accept-native-prepare.py` 相同的临时开发签名制品。依次由普通 owner 执行 `fail`、root 执行上述 retire、owner 执行 `retry`：
+
+```bash
+python packages/device-runtime/scripts/accept-native-retirement.py fail \
+  --root <实例> --package <开发DEB> --envelope <开发签名JSON> \
+  --keys <外部公钥映射JSON> --release-id <准确release> --uv <持久uv绝对路径>
+# root：retire --root <同一实例> --operation-id failed-tree
+# owner：同样参数，将 fail 改为 retry
+```
+
+脚本注入真实 exit(7) 准备命令并核对完整回执；退休后核对旧 ID 拒绝、新 ID 成功且稳定、失败成果保留、active 不变。它不安装包、不调用服务、不代表正式离线签名依赖交付、实机或宿主重启验收。完整 P1 更新/激活闭环仍未完成，原包钩子拒绝覆盖保护保持不变。

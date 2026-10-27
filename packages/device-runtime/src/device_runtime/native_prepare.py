@@ -15,7 +15,7 @@ from . import installation as core
 from . import native_candidate as candidate
 from . import native_helper as helper
 from .management_lock import MARKER, native_preparation_lease
-from .native_prepare_sender import PreparationSender
+from .native_prepare_sender import PreparationSender, observe_senders
 from .protocol import canonical
 
 
@@ -64,6 +64,78 @@ def _durable_tree(root):
     for path in sorted(directories, key=lambda p: len(p.parts), reverse=True) + [root]:
         with helper._directory_fd(path) as fd:
             os.fsync(fd)
+
+
+def _retired(stem, request):
+    path = stem.with_suffix(".retired.json")
+    if not path.exists():
+        return False
+    helper._trusted_marker(path)
+    receipt = candidate._json(path.read_bytes())
+    if receipt != {
+        "state": "retired_without_replay",
+        "request": request,
+        "intent_sha256": helper._digest(stem.with_suffix(".intent.json")),
+        "retry_requires_new_id": True,
+    }:
+        raise PreparationError("invalid administrator retirement evidence")
+    return True
+
+
+def retire_preparation(root, operation_id):
+    """Explicit administrator retirement; retains all artifacts, never reruns.
+
+    EX management proves the original preparation caller no longer owns its
+    lease. Full subreaper receipts plus a free sender lock prove its commands
+    have ended. Old direct-child evidence cannot qualify.
+    """
+    if sys.platform != "linux" or os.geteuid() != 0:
+        raise PreparationError("Linux administrator required")
+    root = helper._path(root)
+    helper._identifier(operation_id)
+    marker = root / MARKER
+    helper._trusted_marker(marker)
+    registration = candidate._json(marker.read_bytes())
+    binding = registration.get("binding", {})
+    if (
+        registration.get("schema_version") != 2
+        or binding.get("root") != str(root)
+        or binding.get("uid") != root.stat().st_uid
+        or root.stat().st_uid <= 0
+    ):
+        raise PreparationError("matching native owner required")
+    with native_preparation_lease(root), (root / ".installation.lock").open("rb") as lease:
+        fcntl.flock(lease, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        stem = root / "native-candidates" / operation_id
+        intent_path = stem.with_suffix(".intent.json")
+        if intent_path.is_symlink() or intent_path.stat().st_size > 256000:
+            raise PreparationError("invalid preparation intent")
+        request = candidate._json(intent_path.read_bytes())
+        if request.get("binding_sha256") != helper._digest(marker) or request.get(
+            "source_active_sha256"
+        ) != helper._digest(root / "active.json"):
+            raise PreparationError("retirement source or binding changed")
+        if _retired(stem, request):
+            return candidate._json(stem.with_suffix(".retired.json").read_bytes())
+        result = stem.with_suffix(".result.json")
+        if result.exists():
+            value = candidate._json(result.read_bytes())
+            if value.get("state") != "failed" or value.get("request") != request:
+                raise PreparationError("only failed or incomplete preparations may retire")
+        observation = observe_senders(stem.with_suffix(".senders"), request)
+        if (
+            observation["state"] != "process_trees_reaped"
+            or not observation["descendants_confirmed"]
+        ):
+            raise PreparationError("complete process-tree reaping required; remains blocked")
+        receipt = {
+            "state": "retired_without_replay",
+            "request": request,
+            "intent_sha256": helper._digest(intent_path),
+            "retry_requires_new_id": True,
+        }
+        helper._save_new(stem.with_suffix(".retired.json"), receipt, mode=0o644)
+        return receipt
 
 
 def prepare_runtime_candidate(
@@ -165,9 +237,12 @@ def prepare_runtime_candidate(
                 not previous.exists()
                 or candidate._json(previous.read_bytes()).get("state") != "runtime_prepared"
             ):
-                raise PreparationError(
-                    "incomplete or failed native preparation blocks new operation"
-                )
+                previous_request = candidate._json(pending.read_bytes())
+                previous_stem = pending.with_name(pending.name.removesuffix(".intent.json"))
+                if not _retired(previous_stem, previous_request):
+                    raise PreparationError(
+                        "incomplete or failed native preparation blocks new operation"
+                    )
         helper._save_new(intent, request)
         try:
             extracted = stem.with_suffix(".extracted")
@@ -186,7 +261,9 @@ def prepare_runtime_candidate(
             bundle = extracted / "root" / authentication["payload_root"] / "bundle"
             manifest = core.inspect_bundle(bundle)
             with (
-                PreparationSender(stem.with_suffix(".senders"), request) as sender,
+                PreparationSender(
+                    stem.with_suffix(".senders"), request, reap_descendants=True
+                ) as sender,
                 core.preparation_sender(sender),
             ):
                 prepared = core._prepare(root, bundle, manifest, ["client"], uv_executable=uv)
@@ -217,6 +294,16 @@ def prepare_runtime_candidate(
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "retire":
+        parser = argparse.ArgumentParser(
+            description="Explicit administrator retirement; no deletion or replay"
+        )
+        parser.add_argument("retire")
+        parser.add_argument("--root", required=True)
+        parser.add_argument("--operation-id", required=True)
+        args = parser.parse_args()
+        print(canonical(retire_preparation(args.root, args.operation_id)))
+        return
     parser = argparse.ArgumentParser(description=__doc__)
     for name in (
         "root",
