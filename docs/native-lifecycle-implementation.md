@@ -778,3 +778,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 88. 冻结源码的独立 bootstrap 开发制品来源验证
 
 以干净 `348dd5c35f633803d3e8f0b62da1c25c401bcbda` 离线构建三组件 wheel。Device wheel SHA256 `fa73bca3c46425a4ce39e1d371c8f99de5cd1f4f182486da4dcfe3673a89af7d`，Bash `aee883b74bb2fc816abb77ba428ed4339c6901726a9ac3098a3ba8737fa16dd3`，FS `b872aa775eaacc9836c0ec94a2abf1e41c8395ef725eecb37d05b521053ab626`；Device wheel 内 `__init__.py`、`native_helper.py`、`native_bootstrap.py`、`management_lock.py` 与冻结 Git 源码逐字节一致。使用已有锁定 CPython、uv 和本地依赖组装 `build/native-payload-p1-348dd5c`，在一次性无网络 amd64 Linux 容器构建未签名 DEB，SHA256 `b41021873d981c1dc224ee4ac05ae160e84d4b6e4f0b05bea985620bfa279225`，109773810 bytes；空容器实际 dpkg 安装后，四个独立 bootstrap 模块与冻结源码逐字节一致，安装 build-inputs 与组装清单一致，bootstrap 无字节码且 `-I -B` 导入路径正确。以该已安装 bootstrap 创建候选并启动测试 systemd daemon，真实 Unix socket peer 与 unit 观察通过；候选快照 SHA256 `1d945ccb4715e96e48220bf13e2b613eabe4e091234691faed3b0820c57e6dcf`，观察结果仍为代码未证明、派发未授权。首次 `--no-build-isolation` 因本机缺 hatchling 失败，改为使用本地缓存的离线隔离构建成功，无网络依赖。DEB 仅保存在容器、未签名未发布；容器正常关机请求超时后再次关机并确认不存在。本证据不覆盖 RPM、目标主机、正式信任根/发布签名、运行身份事务绑定或升级成功；原包保护及生产派发关闭不变。
+
+
+## 89. daemon 崩溃与 guard 继承锁的 systemd 对照
+
+在一次性无网络 amd64 systemd 容器，以历史 `9b37b30...` DEB 和 `cc01329` wheels、真实 helper IPC/start 及测试 `ExecStartPre=sleep 8` 制造启动窗口，只向该隔离测试 unit 核对过的 MainPID 注入 SIGKILL。默认 helper unit 的 systemd `KillMode=control-group` 场景中，daemon 退出后独占包锁已可取得，sender 回执缺失、启动意图保留，客户端处于 activating/auto-restart；实验未能证明 guard 在 daemon 崩溃后存活，原假设不能成立。对照实例仅在测试 unit 注入 `KillMode=process`：同样故障后 guard 持有包锁直至发送完成并产生匹配回执，显式恢复 socket 与重启测试 daemon 后，同 ID 不重放，resolve-running 记录 confirmed_running；生产派发默认拒绝未变。两个实例均关机后确认不存在；相关134项、shell 语法和 diff 检查通过。对照不是生产修复：改变 KillMode 还需定义正常停止、失控或残留 sender、重启与锁竞争、服务管理及异常恢复；当前生产 unit 未修改，正式派发保持关闭。两次使用历史制品，不代表当前 HEAD 制品或目标设备通过。
