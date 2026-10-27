@@ -380,10 +380,15 @@ def test_verified_helper_candidate_executes_checked_bytes(runtime, monkeypatch):
         "helper_sha256": hashlib.sha256((site / "native_helper.py").read_bytes()).hexdigest(),
     }
     monkeypatch.setattr(bootstrap, "read_helper_candidate", lambda *_: evidence)
+    independent = destination.parent / "independent/runtime"
+    bootstrap_site = independent / "lib/python3.13/site-packages/device_runtime"
+    monkeypatch.setattr(bootstrap, "TRUSTED_HELPER_BOOTSTRAP", independent)
+    monkeypatch.setattr(bootstrap, "__file__", str(bootstrap_site / "native_bootstrap.py"))
+    monkeypatch.setattr(bootstrap.helper, "__file__", str(bootstrap_site / "native_helper.py"))
     real_sys = bootstrap.sys
     monkeypatch.setattr(bootstrap, "sys", SimpleNamespace(
-        platform="linux", executable=str(candidate / "runtime/bin/python3.13"),
-        base_prefix=str(candidate / "runtime"), flags=SimpleNamespace(isolated=1),
+        platform="linux", executable=str(independent / "bin/python3.13"),
+        base_prefix=str(independent), flags=SimpleNamespace(isolated=1),
         dont_write_bytecode=True, modules=sys.modules,
     ))
     original = bootstrap.validate_snapshot
@@ -409,7 +414,7 @@ def test_verified_helper_candidate_executes_checked_bytes(runtime, monkeypatch):
     assert real_sys is sys
 
 
-@pytest.mark.parametrize("failure", ["interpreter", "not_isolated", "bytecode", "source_drift"])
+@pytest.mark.parametrize("failure", ["interpreter", "candidate_interpreter", "not_isolated", "bytecode", "source_drift"])
 def test_verified_helper_candidate_refuses_untrusted_launch(runtime, monkeypatch, failure):
     import hashlib
     import sys
@@ -427,10 +432,16 @@ def test_verified_helper_candidate_refuses_untrusted_launch(runtime, monkeypatch
         "helper_sha256": hashlib.sha256((site / "native_helper.py").read_bytes()).hexdigest(),
     }
     monkeypatch.setattr(bootstrap, "read_helper_candidate", lambda *_: evidence)
-    python = candidate / "runtime/bin/python3.13"
+    independent = destination.parent / "independent/runtime"
+    bootstrap_site = independent / "lib/python3.13/site-packages/device_runtime"
+    monkeypatch.setattr(bootstrap, "TRUSTED_HELPER_BOOTSTRAP", independent)
+    monkeypatch.setattr(bootstrap, "__file__", str(bootstrap_site / "native_bootstrap.py"))
+    monkeypatch.setattr(bootstrap.helper, "__file__", str(bootstrap_site / "native_helper.py"))
+    python = independent / "bin/python3.13"
     monkeypatch.setattr(bootstrap, "sys", SimpleNamespace(
         platform="linux", executable=str(python) if failure != "interpreter" else "/other/python",
-        base_prefix=str(candidate / "runtime"), flags=SimpleNamespace(isolated=failure != "not_isolated"),
+        base_prefix=str(candidate / "runtime" if failure == "candidate_interpreter" else independent),
+        flags=SimpleNamespace(isolated=failure != "not_isolated"),
         dont_write_bytecode=failure != "bytecode", modules=sys.modules,
     ))
     if failure == "source_drift":

@@ -19,6 +19,11 @@ class BootstrapError(ValueError):
     pass
 
 
+# This versioned bootstrap is installed separately from candidate snapshots.
+# Its package provenance and lifecycle still require independent verification.
+TRUSTED_HELPER_BOOTSTRAP = Path("/opt/ai-device/bootstrap/0.2.2-native1/runtime")
+
+
 def _digest(path):
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -268,11 +273,11 @@ def read_helper_candidate(candidates_dir, version):
 
 
 def run_verified_helper_candidate(candidates_dir, version, *, registry, socket_path, group):
-    """Execute verified candidate helper bytes in the candidate interpreter.
+    """Execute verified candidate helper bytes in the independent bootstrap.
 
     This experimental entry point does not provision a unit, prove the caller's
     identity, or authorize dispatch. The caller is trusted administrator code.
-    It must run under the candidate's own isolated interpreter with bytecode
+    It must run under the separately installed isolated interpreter with bytecode
     writes disabled. Modules are compiled from the exact bytes just checked,
     not imported again from mutable paths.
     """
@@ -280,17 +285,25 @@ def run_verified_helper_candidate(candidates_dir, version, *, registry, socket_p
 
     if sys.platform != "linux" or os.geteuid() != 0:
         raise BootstrapError("Linux administrator required")
-    evidence = read_helper_candidate(candidates_dir, version)
     candidate = helper._path(candidates_dir) / version
     runtime = candidate / "runtime"
-    python = runtime / "bin/python3.13"
+    bootstrap = TRUSTED_HELPER_BOOTSTRAP
+    python = bootstrap / "bin/python3.13"
+    site = bootstrap / "lib/python3.13/site-packages/device_runtime"
     if (
         Path(sys.executable) != python
-        or Path(sys.base_prefix) != runtime
+        or Path(sys.base_prefix) != bootstrap
+        or Path(__file__) != site / "native_bootstrap.py"
+        or Path(helper.__file__) != site / "native_helper.py"
+        or candidate.is_relative_to(bootstrap)
+        or bootstrap.is_relative_to(candidate)
         or not sys.flags.isolated
         or not sys.dont_write_bytecode
     ):
-        raise BootstrapError("candidate isolated interpreter required")
+        raise BootstrapError("independent isolated bootstrap required")
+    for path in (bootstrap, python, site / "native_bootstrap.py", site / "native_helper.py", site / "management_lock.py"):
+        helper._trusted(path, directory=path == bootstrap)
+    evidence = read_helper_candidate(candidates_dir, version)
     snapshot = validate_snapshot(candidate)
     if _digest(candidate / "snapshot.json") != evidence["snapshot_sha256"]:
         raise BootstrapError("candidate snapshot changed")

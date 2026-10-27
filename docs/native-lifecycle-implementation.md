@@ -768,3 +768,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 86. 真实候选 daemon 的 peer 作用域重启实验
 
 一次性无网络 amd64 Linux systemd 容器使用锁定 CPython 和当前 `2e843f7` 源码构建独立候选，快照 SHA256 `24828d48bcb1d9e07daf9a1ebe4c3782639462eca426200faac214d7fbbb90cf`，helper SHA256 `1430db765effeb7d5eb90d41f691ed1c7300d3bd57c7ac2abcca5094e5e644b9`。以真实候选 daemon 和固定测试 unit 建立 Unix socket，`scoped_helper_unit_peer` 对真实 SO_PEERPIDFD/systemd 状态正常通过；作用域内只停止并重启此隔离测试 unit，显式恢复遗留 socket，旧作用域因 unit invocation 改变而拒绝，新连接则取得不同 PID 并通过。实验确认进程身份漂移能被只读观察发现，不证明已加载源码、自举信任、不可逆动作内的互斥或生产派发安全。关机请求超时后再次正常关机，确认一次性实例不存在；未操作真实设备。
+
+
+## 87. 独立 bootstrap 执行候选源码
+
+候选启动原型不再允许候选 Python 在校验前导入候选验证器：入口要求固定独立 `/opt/ai-device/bootstrap/0.2.2-native1/runtime` 的 Python、base_prefix、bootstrap/helper 模块路径及管理员可信路径，使用 `-I -B`，且候选树与 bootstrap 互不包含；随后才校验候选并从校验过的内存字节执行。新增候选解释器自举拒绝回归。一次性无网络 amd64 systemd 容器使用锁定 CPython 和当前源码在该独立路径构造 bootstrap、独立快照；候选 Python 自举明确拒绝且不建 socket，独立 bootstrap 可启动候选，真实 peer pidfd/systemd 观察通过，测试 daemon 重启使旧作用域失效、新 peer 可观察。候选快照 SHA256 `76596ee7faeb02e7712e7476ac60dc66a4dea14314cbb26856081f70d4847ec1`。容器关机后确认不存在。完整 Device 1028 passed、3 skipped，ruff 和 diff 检查通过。此实验假设本机管理员可信、独立 bootstrap 安装可信；尚未建立正式制品来源及升级信任链，未将启动证据与 peer 连续身份作为可授权的事务闭环，测试 unit 非生产部署。生产派发保持关闭，原包保护不变。
