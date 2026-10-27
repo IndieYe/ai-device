@@ -135,6 +135,7 @@ def dispatch_job(manager, instance_id, operation_id, *, runner=None):
             intent = {
                 "schema_version": 1,
                 "state": "job_dispatch_intent",
+                "close_protocol": "package-lease-v1",
                 "unit": unit,
                 "instance_id": instance_id,
                 "operation_id": operation_id,
@@ -191,6 +192,64 @@ def dispatch_job(manager, instance_id, operation_id, *, runner=None):
     }
     helper._save_new(stem.with_suffix(".job-dispatch.json"), receipt)
     return receipt
+
+
+def close_before_apply(manager, instance_id, operation_id):
+    """Permanently close a compatible job before apply; retain every fence."""
+    import sys
+
+    if sys.platform != "linux" or os.geteuid() != 0:
+        raise JobError("Linux administrator required")
+    with (
+        manager._transaction(instance_id, operation_id) as (_binding, stem),
+        manager._apply_lease(manager.registry / "package-manager", existing=True),
+    ):
+        path = stem.with_suffix(".job-intent.json")
+        helper._trusted(path)
+        intent = json.loads(path.read_bytes())
+        unit = "ai-device-package-" + hashlib.sha256(str(stem).encode()).hexdigest() + ".service"
+        prepared = stem.with_suffix(".prepared.json")
+        approved = stem.with_suffix(".approved.json")
+        helper._trusted(prepared)
+        helper._trusted(approved)
+        digest = helper._digest(prepared)
+        if (
+            intent.get("schema_version") != 1
+            or intent.get("state") != "job_dispatch_intent"
+            or intent.get("close_protocol") != "package-lease-v1"
+            or intent.get("instance_id") != instance_id
+            or intent.get("operation_id") != operation_id
+            or intent.get("unit") != unit
+            or intent.get("prepared_sha256") != digest
+            or json.loads(approved.read_bytes())
+            != {"prepared_sha256": digest, "approved_by_uid": 0}
+        ):
+            raise JobError("close intent or approval differs")
+        snapshot = stem.with_suffix(".bootstrap")
+        bootstrap.validate_snapshot(snapshot)
+        if intent.get("runtime_snapshot_sha256") != helper._digest(snapshot / "snapshot.json"):
+            raise JobError("close snapshot differs")
+        worker = snapshot / "runtime/lib/python3.13/site-packages/device_runtime"
+        for module in ("native_update.py", "native_update_job.py", "native_helper.py"):
+            if helper._digest(worker / module) != helper._digest(Path(__file__).with_name(module)):
+                raise JobError("close protocol worker differs")
+        for suffix in (".apply-intent.json", ".sender.json", ".outcome.json"):
+            if os.path.lexists(stem.with_suffix(suffix)):
+                raise JobError("apply evidence exists; close refused")
+        receipt = {
+            "state": "closed_before_apply",
+            "job_intent_sha256": helper._digest(path),
+            "retry_allowed": False,
+            "fence_retained": True,
+        }
+        marker = stem.with_suffix(".job-closed.json")
+        if os.path.lexists(marker):
+            helper._trusted(marker)
+            if json.loads(marker.read_bytes()) != receipt:
+                raise JobError("close evidence differs")
+        else:
+            helper._save_new(marker, receipt)
+        return receipt
 
 
 def observe_job(manager, instance_id, operation_id, *, runner=None):

@@ -58,12 +58,12 @@ def diagnostic(expected):
  assert snapshot()==before,'diagnostic changed persistent files/directories'
  return report
 mode=os.environ.get('DEVICE_JOB_FAULT','none')
-assert mode in ('none','lost-response','source-drift')
+assert mode in ('none','lost-response','source-drift','close-before-apply')
 calls=[]
 real_run=subprocess.run
 def runner(argv,**kwargs):
  calls.append(argv)
- if mode=='source-drift':
+ if mode in ('source-drift','close-before-apply'):
   # Test-only bounded queue delay; production dispatch has no arbitrary properties.
   argv=[argv[0],'--no-block','--property=ExecStartPre=/usr/bin/sleep 8','--property=StandardError=file:/var/lib/ai-device/worker-test-error.log',*argv[1:]]
  result=real_run(argv,**kwargs)
@@ -75,20 +75,25 @@ assert first['state']==('dispatch_unknown' if mode=='lost-response' else 'dispat
 second=job.dispatch_job(manager,'probe','job-one')
 assert second['state']=='dispatch_already_recorded' and not second['replayed']
 assert len(calls)==1
-if mode=='source-drift':
+if mode in ('source-drift','close-before-apply'):
  deadline=time.monotonic()+10
  while True:
   queued=real_run(['/usr/bin/systemctl','show',first['unit'],'--property=SubState','--value'],check=True,capture_output=True,text=True).stdout.strip()
   if queued=='start-pre': break
   assert time.monotonic()<deadline,'test did not observe queued start-pre window'
   time.sleep(.05)
- value=json.loads(active); value['release_version']='0.0.0-test-drift'
- (root/'active.json').write_text(json.dumps(value))
+ if mode=='source-drift':
+  value=json.loads(active); value['release_version']='0.0.0-test-drift'
+  (root/'active.json').write_text(json.dumps(value))
+ else:
+  closed=job.close_before_apply(manager,'probe','job-one')
+  assert closed['state']=='closed_before_apply' and closed['fence_retained'] and not closed['retry_allowed']
+  assert job.close_before_apply(manager,'probe','job-one')==closed
 try: helper._assert_no_package_intent(registry)
 except helper.HelperError: pass
 else: raise AssertionError('queued job must fence starts')
 deadline=time.monotonic()+90
-if mode=='source-drift':
+if mode in ('source-drift','close-before-apply'):
  while True:
   status=real_run(['/usr/bin/systemctl','show',first['unit'],'--property=ActiveState','--value'],check=True,capture_output=True,text=True).stdout.strip()
   if status=='failed': break
@@ -99,10 +104,18 @@ if mode=='source-drift':
  assert not stem.with_suffix('.package.log').exists()
  assert stem.with_suffix('.job-intent.json').exists()
  error=Path('/var/lib/ai-device/worker-test-error.log').read_text()
- assert 'source active changed' in error,error
+ assert ('source active changed' if mode=='source-drift' else 'package job closed before execution') in error,error
  diagnostic('job_failed_requires_review')
- (root/'active.json').write_bytes(active)
- print(json.dumps({'state':'queued_source_drift_refused','dispatch_once':True,'package_executed':False,'persistent_fence_retained':True,'test_active_restored':True}))
+ if mode=='source-drift':
+  (root/'active.json').write_bytes(active)
+  print(json.dumps({'state':'queued_source_drift_refused','dispatch_once':True,'package_executed':False,'persistent_fence_retained':True,'test_active_restored':True}))
+ else:
+  assert stem.with_suffix('.job-closed.json').exists()
+  assert (root/'active.json').read_bytes()==active
+  try: helper._assert_no_package_intent(registry)
+  except helper.HelperError: pass
+  else: raise AssertionError('closed job must retain fence')
+  print(json.dumps({'state':'delayed_worker_refused_after_close','dispatch_once':True,'package_executed':False,'persistent_fence_retained':True}))
  raise SystemExit(0)
 while not stem.with_suffix('.outcome.json').exists():
  if time.monotonic()>deadline:

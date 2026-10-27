@@ -385,6 +385,12 @@ class Updates:
                 nh._instance_service_lease(Path(binding["root"])),
             ):
                 job_path = stem.with_suffix(".job-intent.json")
+                # A close marker is checked under the same package lease that
+                # protects publication of apply-intent. It never clears fences.
+                if job_intent_sha256 is not None and os.path.lexists(
+                    stem.with_suffix(".job-closed.json")
+                ):
+                    raise UpdateError("package job closed before execution")
                 for pending_job in stem.parent.glob("*.job-intent.json"):
                     if pending_job != job_path or job_intent_sha256 is None:
                         raise UpdateError("queued package job blocks direct apply")

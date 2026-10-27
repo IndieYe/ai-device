@@ -557,3 +557,95 @@ def test_explicit_job_recovery_retains_fence_and_never_replays(update, monkeypat
 
     with pytest.raises(job.JobError, match="completed job"):
         job.recover_job(manager, "probe", "one", runner=active_running)
+
+
+def test_close_before_apply_fences_delayed_worker(update, monkeypatch):
+    import hashlib
+
+    from device_runtime import native_update_job as job
+
+    manager, packages, _, _ = update
+    stem = manager.registry / "updates/5-probe--one"
+    snapshot = stem.with_suffix(".bootstrap")
+    snapshot.mkdir()
+    (snapshot / "snapshot.json").write_text("snapshot")
+    monkeypatch.setattr(job.bootstrap, "validate_snapshot", lambda *a: {})
+    original_digest = nh._digest
+
+    def digest(path):
+        if path.name in ("native_update.py", "native_update_job.py", "native_helper.py"):
+            return "same-worker"
+        return original_digest(path)
+
+    monkeypatch.setattr(nh, "_digest", digest)
+    intent = {
+        "schema_version": 1,
+        "state": "job_dispatch_intent",
+        "close_protocol": "package-lease-v1",
+        "instance_id": "probe",
+        "operation_id": "one",
+        "unit": "ai-device-package-" + hashlib.sha256(str(stem).encode()).hexdigest() + ".service",
+        "prepared_sha256": nh._digest(stem.with_suffix(".prepared.json")),
+        "runtime_snapshot_sha256": nh._digest(snapshot / "snapshot.json"),
+    }
+    path = stem.with_suffix(".job-intent.json")
+    path.write_text(json.dumps(intent))
+    with manager._apply_lease(manager.registry / "package-manager"):
+        pass
+    closed = job.close_before_apply(manager, "probe", "one")
+    assert closed["state"] == "closed_before_apply"
+    assert closed["fence_retained"] and not closed["retry_allowed"]
+    assert job.close_before_apply(manager, "probe", "one") == closed
+    with pytest.raises(nu.UpdateError, match="closed before execution"):
+        manager.apply("probe", "one", job_intent_sha256=nh._digest(path))
+    assert packages.calls == 0 and not stem.with_suffix(".apply-intent.json").exists()
+    with pytest.raises(nh.HelperError, match="blocks start"):
+        nh._assert_no_package_intent(manager.registry)
+    intent.pop("close_protocol")
+    path.write_text(json.dumps(intent))
+    with pytest.raises(job.JobError, match="intent or approval"):
+        job.close_before_apply(manager, "probe", "one")
+
+
+def test_close_refuses_busy_package_lease_and_prior_apply(update, monkeypatch):
+    import hashlib
+
+    from device_runtime import native_update_job as job
+
+    manager, packages, _, _ = update
+    stem = manager.registry / "updates/5-probe--one"
+    snapshot = stem.with_suffix(".bootstrap")
+    snapshot.mkdir()
+    (snapshot / "snapshot.json").write_text("snapshot")
+    monkeypatch.setattr(job.bootstrap, "validate_snapshot", lambda *a: {})
+    real_digest = nh._digest
+    monkeypatch.setattr(
+        nh,
+        "_digest",
+        lambda path: (
+            "same-worker"
+            if path.name in ("native_update.py", "native_update_job.py", "native_helper.py")
+            else real_digest(path)
+        ),
+    )
+    intent = {
+        "schema_version": 1,
+        "state": "job_dispatch_intent",
+        "close_protocol": "package-lease-v1",
+        "instance_id": "probe",
+        "operation_id": "one",
+        "unit": "ai-device-package-" + hashlib.sha256(str(stem).encode()).hexdigest() + ".service",
+        "prepared_sha256": nh._digest(stem.with_suffix(".prepared.json")),
+        "runtime_snapshot_sha256": nh._digest(snapshot / "snapshot.json"),
+    }
+    stem.with_suffix(".job-intent.json").write_text(json.dumps(intent))
+    with (
+        manager._apply_lease(manager.registry / "package-manager"),
+        pytest.raises(nu.UpdateError, match="still executing"),
+    ):
+        job.close_before_apply(manager, "probe", "one")
+    assert not stem.with_suffix(".job-closed.json").exists()
+    stem.with_suffix(".apply-intent.json").write_text("{}")
+    with pytest.raises(job.JobError, match="apply evidence exists"):
+        job.close_before_apply(manager, "probe", "one")
+    assert packages.calls == 0 and not stem.with_suffix(".job-closed.json").exists()

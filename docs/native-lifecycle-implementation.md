@@ -552,3 +552,9 @@ helper启动/登记和其他包apply被持久job意图阻断。worker从完整�
 以3d2d075为基线的v20 wheel首次真实对账发现成功oneshot被systemd回收，LoadState=not-found，原恢复门禁正确拒绝但无法观察成功退出；不得把unit缺失当作退出证明。新派发固定RemainAfterExit=yes，恢复除原loaded inactive/failed外，仅接受loaded active/exited、Result=success、MainPID=0且无Job；仍需apply、精确批准和sender证据，门禁不释放。旧已回收unit不会自动恢复。
 
 使用包含此未提交修复的v21 wheel，在一次性amd64 systemd容器中安装低版本0.2.1-1空源fixture，提取未修改v17 Device候选，真实派发故障模拟响应丢失；原Device preinst拒绝覆盖、源包保持原版本。隔离fixture短暂隐藏sender后对账拒绝且未产生恢复回执，恢复sender后显式对账重复幂等、调用systemd仅一次、job/apply意图和启动门禁保留、active不变；测试exec退出0。source-drift路径再次退出0，未执行包且门禁保留。此非真实设备或成功升级验收。首次只解包源导致dpkg从absent变not-installed，recover保守拒绝；同版本真实包安装实验由旧prerm拒绝，不作为目标差异证据。未修改包钩子。完整回归956 passed/3 Linux skipped（43.24s）。执行前失败job关闭证据、退休与新ID仍未实现；P1未完成。
+
+## 40. 执行前job持久关闭屏障（不退休）
+
+派发释放锁后systemd-run可能迟到，不能以failed或unit缺失证明未来不执行。新派发job意图声明package-lease-v1；管理员Python close_before_apply在实例锁与已有全局包EX锁下核验精确job身份、批准和完整快照，逐字节比对快照内三个worker模块及当前代码，仅在没有apply-intent/sender/outcome时无覆盖持久写job-closed，绑定job摘要。apply worker在同一包锁内检查任何closed标记，存在即拒绝；闭锁和apply意图发布互斥，崩溃缺标记不解锁。重复同证据幂等，旧无协议或代码不同快照拒绝。关闭只阻止本job，不删除意图、不解除启动门禁、不授权重试或新ID；不提供CLI。
+
+隔离v22 wheel真实systemd start-pre排队窗口先关闭，迟到worker报告closed before execution，未写apply/sender/package.log，包未执行、active不变、持久门禁保留，测试exec 0。fixture为低版本空源包，非真实升级。单测覆盖幂等、迟到worker、旧协议、包锁占用和已有apply拒绝；完整958 passed/3 Linux skipped（44.23s）。未来退休需单独设计与验证：确认所有路径认可精确关闭证据、旧job不能重放且新ID不绕过其他apply或unknown；当前未实现退休/解除占用，P1未完成。
