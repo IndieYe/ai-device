@@ -867,6 +867,8 @@ class Helper:
                     ):
                         raise HelperError("invalid start result blocks a new start")
                     state = stored["state"]
+                if state == "started":
+                    _require_proven_start_sender_tree()
                 if state in (None, "unknown"):
                     recovered = pending.with_name(pending.name.replace("op-", "recovery-", 1))
                     if not recovered.exists():

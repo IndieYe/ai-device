@@ -487,6 +487,11 @@ class Updates:
                         ):
                             raise UpdateError("invalid start result blocks package update")
                         state = stored["state"]
+                    if state == "started":
+                        try:
+                            nh._require_proven_start_sender_tree()
+                        except nh.HelperError as exc:
+                            raise UpdateError(str(exc)) from exc
                     if state in (None, "unknown"):
                         try:
                             start_intent = json.loads(pending.read_text())

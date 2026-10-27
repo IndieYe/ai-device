@@ -1481,3 +1481,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 原版本2直接回执可驱动 resolve-running 和 resolve-stopped 写确认，两个针对该默认拒绝的回归修复前失败（`20261028-025536-0ab86a.log`）。当前源码在已验证 execution_barrier 2 后，默认拒绝新的 start 恢复确认，并禁止已存在版本2恢复记录授权新的 start 或包 apply；query/reconcile 保持只读，原 intent、sender 和 recovery 保留。旧 barrier 仍按第185节拒绝。现有恢复机制内部测试明确使用 `legacy_start_recovery_mechanics` 替身，不代表生产开放；无替身测试覆盖两类 resolve、已有 recovery 的 start 和包 apply 均被拒绝。定向314通过1跳过及ruff通过（`20261028-025756-29c729.log`），完整1174通过10跳过（`20261028-025810-d1fb21.log`）。首次调整后旧机制测试58项失败，随后仅对明确列出的用例启用测试替身；不把替身当产品门禁。
 
 该收紧不处理已记录 `started`/`already_active` 的其他准入，也不证明真实 systemctl 后代、外部 systemd 工作、旧 helper/snapshot 或崩溃安全终态；这些仍待审计。旧记录与旧进程不自动迁移、清理。准确新包验收待完成。
+
+
+## 188. 已记录 started 的后续动作也需 sender 树证明
+
+第187节之后复核发现 `Updates.apply` 对旧 start 结果为 `started` 时绕过恢复检查，仅凭服务停止及包锁空闲即可继续；测试替身修复前未拒绝（`20261028-025956-e2ba78.log`）。真实 sender guard 只回收直接子进程，第187节证明替身后代可在回执和锁释放后继续动作，因此当前源码在已有 `started` 台账时，也对新 start 和包 apply 默认调用未证明的 sender 树门禁，拒绝新动作，不写新意图；原结果仍可只读查询。`already_active` 分支没有执行 sender，保持原行为；本修复不是对其全部故障场景的结论。
+
+定向316通过1跳过（`20261028-030052-8f519e.log`），完整1176通过10跳过、ruff通过（`20261028-030106-847ed3.log`）。这是一项明确的可用性收紧：直到可信进程树和外部动作终态协议完成，存在 `started` 台账的后续新启动/包更新可能保持阻塞；不自行删除台账或绕过。旧 helper/snapshot 不自动获得新门禁，真实 systemctl 后代与宿主故障未验证，准确新包验收待完成。

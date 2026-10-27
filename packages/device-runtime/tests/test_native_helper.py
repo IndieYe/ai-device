@@ -1539,6 +1539,18 @@ def test_existing_legacy_recovery_cannot_authorize_new_start(helper, barrier):
     assert not (service.registry / "op-probe-next.json").exists()
 
 
+def test_started_result_without_proven_sender_tree_blocks_new_start(helper):
+    service, adapter, record = helper
+    service.handle(req("start"), peer_uid=record["uid"])
+    assert json.loads((service.registry / "result-probe-one.json").read_text())["state"] == "started"
+    starts = sum(call[0] == "start" for call in adapter.calls)
+    with pytest.raises(nh.HelperError, match="sender process tree completion unproven"):
+        service.handle(req("start", "next"), peer_uid=record["uid"])
+    assert sum(call[0] == "start" for call in adapter.calls) == starts
+    assert not (service.registry / "op-probe-next.json").exists()
+    assert service.handle(req("query"), peer_uid=record["uid"])["result"]["state"] == "started"
+
+
 @pytest.mark.parametrize("action", ["resolve-running", "resolve-stopped"])
 def test_direct_sender_receipt_does_not_authorize_recovery(helper, action):
     service, adapter, record = stopped_unknown(helper)

@@ -288,3 +288,6 @@ job worker 执行前与显式恢复共用完整意图检查，在实例事务和
 
 
 当前源码对 unknown start 的 `resolve-running`、`resolve-stopped` 默认拒绝：版本2 `sender_reaped` 只覆盖直接 sender，不能证明其后代或外部工作终结。已有 recovery 仍可只读查询，但不能据此授权新 start 或包 apply；记录不删除。旧 helper 和冻结快照不自动受此门禁约束；已有明确成功结果的其他准入仍需另行审计。见实施记录第187节。
+
+
+已有 start 结果为 `started` 时，当前源码同样因 sender 后代完成未证明而拒绝后续新的 start 和包 apply；这可能持续阻塞，直到完成可信进程树及外部动作终态协议并另行处理旧记录。`already_active` 分支未调用 sender，现保持原行为；不得删除历史台账绕过。详见实施记录第188节。

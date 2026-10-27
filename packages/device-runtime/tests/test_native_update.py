@@ -367,6 +367,19 @@ def test_multi_instance_shared_package_refused(update):
     assert not (manager.registry / "updates/5-probe--one.apply-intent.json").exists()
 
 
+def test_started_result_without_proven_sender_tree_blocks_package_update(update):
+    manager, packages, _, _ = update
+    intent = {"action": "start", "execution_barrier": 2}
+    path = manager.registry / "op-probe-start.json"
+    result = manager.registry / "result-probe-start.json"
+    path.write_text(json.dumps(intent))
+    result.write_text(json.dumps({"state": "started"}))
+    with pytest.raises(nu.UpdateError, match="sender process tree completion unproven"):
+        manager.apply("probe", "one")
+    assert packages.calls == 0
+    assert not (manager.registry / "updates/5-probe--one.apply-intent.json").exists()
+
+
 def test_unknown_start_blocks_update_even_when_service_is_inactive(update):
     manager, packages, _, _ = update
     (manager.registry / "op-probe-start.json").write_text('{"action":"start"}')
