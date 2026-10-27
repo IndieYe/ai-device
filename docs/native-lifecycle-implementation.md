@@ -1109,3 +1109,10 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 无网络一次性 Linux amd64/Rosetta systemd 容器使用准确 b4158df DEB（`0d3ccfd5647bf27b1d6965fec90c0ed20e18cb486939e7837e8231af4df10001`）与准确三 wheel 运行既有 `accept-native-update-job.sh`。容器中安装惰性旧版本 source-package fixture，提取而非安装候选原生包；真实生产派发门禁先拒绝，runner 未调用、intent 未创建。仅测试进程临时替换门禁后，真实隔离 systemd 调用 snapshot worker，原候选 DEB 的 preinst 拒绝包覆盖；sender 回执匹配、outcome unknown、active 不变、设备服务未启动。缺 sender 的显式恢复拒绝，恢复原证据后对账幂等、一次派发、job/apply intent 和围栏保留。
 
 输出 `production_dispatch_fence_refused`、`disposable_test_fence_substitute`、`explicit_job_reconciliation_verified`、`independent_job_refused_by_package_guard`，完整日志 `20261027-230750-3f03cb.log`；临时容器已退出。此实验在测试进程替换了派发门禁并使用隔离旧包 fixture，仅覆盖包钩子拒绝后的真实 systemd job/unknown 对账，不证明生产身份绑定、invocation 竞态、成功升级、宿主断电或目标设备，不能开启派发。RPM 仍未构建。
+
+
+## 140. b4158df 隔离 job 丢响应与保留围栏
+
+独立无网络 systemd 容器用同一准确 b4158df DEB 和三 wheel、既有 `accept-native-update-job.sh` 的 `DEVICE_JOB_FAULT=lost-response` 运行故障场景。该 fixture 在真实 systemd-run 返回后由测试 runner 模拟 TimeoutExpired，原调度报告 unknown；同 ID 重入不重派，原包 preinst 仍拒绝覆盖、sender 匹配且包 outcome unknown、active 不变；缺 sender 显式恢复拒绝，复原证据后原 ID 对账幂等并保留围栏。生产派发门禁首先拒绝，之后仅测试进程替换门禁。日志 `20261027-230922-e35ac6.log`，容器已退出。
+
+该实验只模拟返回丢失，不证明 systemd 内部失败、宿主断电、生产派发授权、实际处理者或 invocation 连续性；P1 和 RPM 新制品仍未完成。
