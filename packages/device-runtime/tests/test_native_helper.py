@@ -1,6 +1,7 @@
 import fcntl
 import json
 import os
+import stat
 import subprocess
 from pathlib import Path
 
@@ -696,9 +697,10 @@ def test_daemon_lease_rejects_replaced_path_during_lock(recovery, monkeypatch):
 
     def replace_after_lock(fd, operation):
         original_flock(fd, operation)
-        lock_path.rename(moved)
-        lock_path.write_bytes(b"")
-        lock_path.chmod(0o600)
+        if stat.S_ISREG(os.fstat(fd).st_mode):
+            lock_path.rename(moved)
+            lock_path.write_bytes(b"")
+            lock_path.chmod(0o600)
 
     monkeypatch.setattr(nh.fcntl, "flock", replace_after_lock)
     with pytest.raises(nh.HelperError, match="path changed during acquisition"), nh._daemon_lease(registry):
@@ -711,6 +713,43 @@ def test_daemon_lease_rejects_non_regular_lock(recovery):
     (registry / "helper-daemon.lock").mkdir()
     with pytest.raises(OSError), nh._daemon_lease(registry):
         pytest.fail("directory lease entered")
+
+
+def test_daemon_anchor_blocks_replaced_lock_path(recovery):
+    registry, _ = recovery
+    lock_path = registry / "helper-daemon.lock"
+    with nh._daemon_lease(registry):
+        lock_path.rename(registry / "retained-old.lock")
+        lock_path.write_bytes(b"")
+        lock_path.chmod(0o600)
+        with pytest.raises(nh.HelperError, match="already active"), nh._daemon_lease(registry):
+            pytest.fail("directory anchor failed to serialize")
+
+
+def test_daemon_anchor_rejects_directory_drift_during_lock(recovery, monkeypatch):
+    registry, _ = recovery
+    original_flock = nh.fcntl.flock
+
+    def replace_after_lock(fd, operation):
+        original_flock(fd, operation)
+        registry.rename(registry.parent / "retained-registry")
+        registry.mkdir()
+
+    monkeypatch.setattr(nh.fcntl, "flock", replace_after_lock)
+    with pytest.raises(nh.HelperError, match="anchor changed during acquisition"), nh._daemon_lease(registry):
+        pytest.fail("drifted directory anchor entered")
+
+
+def test_daemon_anchor_retains_old_file_lock_conflict(recovery):
+    registry, _ = recovery
+    with (
+        nh._daemon_file_lease(registry),
+        pytest.raises(nh.HelperError, match="already active"),
+        nh._daemon_lease(registry),
+    ):
+        pytest.fail("old file lock conflict ignored")
+    with nh._daemon_lease(registry):
+        pass
 
 
 def test_recover_socket_requires_administrator(recovery, monkeypatch):

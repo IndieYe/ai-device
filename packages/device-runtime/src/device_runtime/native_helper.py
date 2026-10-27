@@ -829,9 +829,47 @@ class Helper:
 
 
 @contextmanager
-def _daemon_lease(registry):
+def _daemon_anchor(registry):
+    """Serialize daemon and socket recovery on the stable registry directory.
+
+    The administrator must keep the registry, its ancestors and mount stable
+    while a daemon or unresolved transaction exists. This cooperative lock
+    cannot enforce that operational precondition or identify old helpers.
+    """
     registry = _path(registry)
     _trusted(registry, directory=True)
+    fd = os.open(registry, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise HelperError("helper daemon or recovery is already active") from exc
+        try:
+            locked = os.fstat(fd)
+            current = registry.lstat()
+            _trusted(registry, directory=True)
+        except OSError as exc:
+            raise HelperError("daemon anchor changed during acquisition") from exc
+        if (
+            not stat.S_ISDIR(locked.st_mode)
+            or not stat.S_ISDIR(current.st_mode)
+            or (locked.st_dev, locked.st_ino) != (current.st_dev, current.st_ino)
+        ):
+            raise HelperError("daemon anchor changed during acquisition")
+        yield fd
+    finally:
+        os.close(fd)
+
+
+@contextmanager
+def _daemon_lease(registry):
+    registry = _path(registry)
+    with _daemon_anchor(registry), _daemon_file_lease(registry) as fd:
+        yield fd
+
+
+@contextmanager
+def _daemon_file_lease(registry):
     path = registry / "helper-daemon.lock"
     fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:

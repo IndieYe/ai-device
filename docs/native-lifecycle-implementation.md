@@ -886,3 +886,10 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 108. 目录锁锚点的隔离边界
 
 `scripts/probe-native-directory-anchor.py` 在无网络 Linux 6.18.15 amd64/Rosetta 容器验证：对 registry 目录 flock 后，仅替换目录内锁文件，另一次对同目录加锁仍冲突；但重命名整个 registry 并创建新目录后，两目录可分别独占加锁。`DIRECTORY_ANCHOR_PROBE_OK`，日志 `20261027-204946-4bce53.log`，ruff通过。目录锁不能消除目录或其祖先被替换、挂载变化及旧 helper 不参与的问题；未修改生产锁协议或派发。下一步需定义所有参与者共同遵循的部署/恢复稳定锚点与失败条件，不以此实验声称已解决 P1。
+
+
+## 109. 用户确认维护前提下的 daemon 目录锚点
+
+用户确认采用 registry 稳定维护前提：helper运行或存在未终态事务时不替换registry、必要祖先及挂载；不能确认则拒绝启动/恢复，迁移需管理员维护窗口、旧入口停用和事务收口，不自动迁移清理。`_daemon_lease` 先对可信registry目录取非阻塞独占flock、核对打开FD与路径dev/inode，再获取原daemon文件锁；`serve`与`recover_socket`既有调用自动使用两锁。测试覆盖目录内锁文件替换时仍冲突、获取时目录替换拒绝、旧文件锁竞争，以及隔离Linux fork后父关闭子进程仍保持租约（日志 `20261027-210107-8b2b2f.log`）。相关154测试、完整Device 1043通过3跳过（日志 `20261027-210141-099b46.log`）、ruff及diff检查通过。
+
+这是daemon和socket恢复的局部锚点，不解决管理员违反稳定前提导致整个目录/祖先/挂载替换；旧helper必须事先手动退休。更新器/包事务入口尚未形成共同目录协议，受控启动、活peer绑定、故障恢复、真实systemd与准确制品尚未验收。保留原文件锁，生产派发继续default-deny；P1未完成。
