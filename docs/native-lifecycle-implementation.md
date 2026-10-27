@@ -632,3 +632,7 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 57. helper启动恢复证据统一重验
 
 新版helper在重复resolve、同ID start、只读查询及新ID门禁读取旧恢复记录时，统一要求已知确认状态、原始意图一致和`start_replayed=false`；不匹配或非法记录拒绝，不重放。新增四个入口与三类证据漂移组合测试，helper 104项通过，完整回归1004通过、3跳过。该检查不证明旧进程退出或跨重启持久屏障，不改变新job派发关闭及原包保护，未操作真实设备。
+
+## 58. 旧锁路径替换候选的提前打开竞态
+
+一次性Linux容器提取v17原helper，在隔离fixture中预先打开其daemon锁文件，再将锁路径替换为符号链接：随后通过原helper `_daemon_lease` 打开路径因`O_NOFOLLOW`以ELOOP拒绝，但此前打开的旧inode描述符仍能成功获取EX flock。证明仅替换锁路径无法排除旧进程在替换前打开、替换后获取旧inode的竞态；更未证明正在运行的daemon、sender及宿主重启的安全收口。该实验不构成受支持的迁移实现，不得用于真实环境或删除/替换真实锁文件。新job派发保持关闭、原包保护不变，未操作真实服务。
