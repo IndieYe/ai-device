@@ -270,3 +270,5 @@ accept-native-old-helper-fence.sh在一次性容器复现v17旧helper忽略未�
 `observe_job` 对 systemd 返回采用完整六字段严格解析：重复、缺失、额外或畸形行及过长输出都不作为 unit 观察；显式 `recover_job` 因而拒绝不确定的终态，不重试、不解除围栏。独立包结果仍可只读展示，不代表 unit 已安全终止；详见实施记录第133节。
 
 job 显式恢复在实例事务和包锁内重验完整当前 job intent、准确 prepared 与运行时 snapshot；协议、字段或快照不兼容时保持围栏并拒绝，不自动迁移、删除或重放。该校验不解决 systemd invocation 观察窗口，详见实施记录第135节。
+
+job worker 执行前与显式恢复共用完整意图检查，在实例事务和包锁内拒绝不兼容协议、错误身份及 prepared/snapshot 漂移；已存在 apply intent 的同 ID 仍只观察、不重放。此局部门禁不授权启用派发。

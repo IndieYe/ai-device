@@ -26,6 +26,32 @@ class UpdateError(ValueError):
     pass
 
 
+def _verify_job_intent(stem, instance_id, operation_id, expected_digest):
+    """Revalidate a job under the caller's instance and package leases."""
+    path = stem.with_suffix(".job-intent.json")
+    nh._trusted(path)
+    job = json.loads(path.read_bytes())
+    snapshot = stem.with_suffix(".bootstrap")
+    nb.validate_snapshot(snapshot)
+    expected = {
+        "schema_version": 1,
+        "state": "job_dispatch_intent",
+        "close_protocol": "package-lease-v1",
+        "unit": "ai-device-package-" + hashlib.sha256(str(stem).encode()).hexdigest() + ".service",
+        "instance_id": instance_id,
+        "operation_id": operation_id,
+        "prepared_sha256": nh._digest(stem.with_suffix(".prepared.json")),
+        "runtime_snapshot_sha256": nh._digest(snapshot / "snapshot.json"),
+    }
+    if (
+        nh._digest(path) != expected_digest
+        or not isinstance(job, dict)
+        or type(job.get("schema_version")) is not int
+        or job != expected
+    ):
+        raise UpdateError("job intent differs from current transaction")
+
+
 def _read_runtime_receipt(path, uid):
     # Verify the opened file, not a separate stat of the path, and never read
     # more than the receipt budget even if the owner writes concurrently.
@@ -411,16 +437,7 @@ class Updates:
                     nh._trusted(pending_job)
                     if nh._digest(pending_job) != job_intent_sha256:
                         raise UpdateError("package job intent changed")
-                    job_value = json.loads(pending_job.read_bytes())
-                    if job_value.get("prepared_sha256") != nh._digest(
-                        stem.with_suffix(".prepared.json")
-                    ):
-                        raise UpdateError("queued job prepared evidence changed")
-                    nb.validate_snapshot(stem.with_suffix(".bootstrap"))
-                    if job_value.get("runtime_snapshot_sha256") != nh._digest(
-                        stem.with_suffix(".bootstrap") / "snapshot.json"
-                    ):
-                        raise UpdateError("queued job runtime changed")
+                    _verify_job_intent(stem, instance_id, operation_id, job_intent_sha256)
                 if job_intent_sha256 is not None and not job_path.exists():
                     raise UpdateError("package job intent missing")
                 for path in stem.parent.glob("*.apply-intent.json"):
@@ -545,28 +562,10 @@ class Updates:
             value = self._prepared(binding, stem)
             with self._apply_lease(self.registry / "package-manager", existing=True):
                 if job_intent_sha256 is not None:
-                    job_path = stem.with_suffix(".job-intent.json")
-                    nh._trusted(job_path)
-                    job = json.loads(job_path.read_bytes())
-                    snapshot = stem.with_suffix(".bootstrap")
-                    nb.validate_snapshot(snapshot)
-                    expected_job = {
-                        "schema_version": 1,
-                        "state": "job_dispatch_intent",
-                        "close_protocol": "package-lease-v1",
-                        "unit": "ai-device-package-" + hashlib.sha256(str(stem).encode()).hexdigest() + ".service",
-                        "instance_id": instance_id,
-                        "operation_id": operation_id,
-                        "prepared_sha256": nh._digest(stem.with_suffix(".prepared.json")),
-                        "runtime_snapshot_sha256": nh._digest(snapshot / "snapshot.json"),
-                    }
-                    if (
-                        nh._digest(job_path) != job_intent_sha256
-                        or not isinstance(job, dict)
-                        or type(job.get("schema_version")) is not int
-                        or job != expected_job
-                    ):
-                        raise UpdateError("job recovery intent differs")
+                    try:
+                        _verify_job_intent(stem, instance_id, operation_id, job_intent_sha256)
+                    except UpdateError as exc:
+                        raise UpdateError("job recovery intent differs") from exc
                 intent_path = stem.with_suffix(".apply-intent.json")
                 nh._trusted(intent_path)
                 intent = json.loads(intent_path.read_text())

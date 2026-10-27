@@ -702,6 +702,8 @@ def test_queued_job_blocks_direct_apply_and_start(update):
 
 
 def test_worker_rechecks_job_intent_and_source(update, monkeypatch):
+    import hashlib
+
     manager, packages, helper, _package = update
     stem = manager.registry / "updates/5-probe--one"
     snapshot = stem.with_suffix(".bootstrap")
@@ -709,10 +711,29 @@ def test_worker_rechecks_job_intent_and_source(update, monkeypatch):
     (snapshot / "snapshot.json").write_text("snapshot")
     monkeypatch.setattr(nu.nb, "validate_snapshot", lambda directory: {})
     intent = {
+        "schema_version": 1,
+        "state": "job_dispatch_intent",
+        "close_protocol": "package-lease-v1",
+        "unit": "ai-device-package-" + hashlib.sha256(str(stem).encode()).hexdigest() + ".service",
+        "instance_id": "probe",
+        "operation_id": "one",
         "prepared_sha256": nh._digest(stem.with_suffix(".prepared.json")),
         "runtime_snapshot_sha256": nh._digest(snapshot / "snapshot.json"),
     }
     path = stem.with_suffix(".job-intent.json")
+    for key, bad in (("schema_version", True), ("close_protocol", "other"), ("state", "other"),
+                     ("unit", "wrong"), ("instance_id", "other"), ("operation_id", "other"), ("extra", True)):
+        changed = {**intent, key: bad}
+        path.write_text(json.dumps(changed))
+        with pytest.raises(nu.UpdateError, match="job intent differs"):
+            manager.apply("probe", "one", job_intent_sha256=nh._digest(path))
+        assert packages.calls == 0 and not stem.with_suffix(".apply-intent.json").exists()
+    for changed in ({k: v for k, v in intent.items() if k != "close_protocol"}, [], None,
+                    {**intent, "prepared_sha256": "wrong"}, {**intent, "runtime_snapshot_sha256": "wrong"}):
+        path.write_text(json.dumps(changed))
+        with pytest.raises(nu.UpdateError, match="job intent differs"):
+            manager.apply("probe", "one", job_intent_sha256=nh._digest(path))
+        assert packages.calls == 0 and not stem.with_suffix(".apply-intent.json").exists()
     path.write_text(json.dumps(intent))
     digest = nh._digest(path)
     with pytest.raises(nu.UpdateError, match="job intent changed"):

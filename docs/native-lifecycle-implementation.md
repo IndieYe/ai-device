@@ -1077,3 +1077,12 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 原 `Updates.recover(..., job_intent_sha256=...)` 在实例事务及 package EX 锁内只核对 job 文件摘要、实例/操作和 prepared 摘要，未约束 schema、状态、close 协议、确定性 unit、快照摘要或额外字段；回归先复现不兼容 schema 仍生成恢复证据。现在锁内重新验证 snapshot，要求完整精确的当前 job intent（严格整数 schema、固定状态/close 协议、确定性 unit、实例/操作、prepared 与 snapshot SHA），以及调用方携带的 intent 文件摘要相符；不兼容或漂移拒绝，不自动迁移、删除或重放。
 
 回归覆盖布尔 schema、错误协议/状态/unit/snapshot、额外/缺失字段、非对象和实际 snapshot 漂移，拒绝时无 recovery 证据及额外包动作；有效意图的显式对账、重复对账、迟到 worker 不重放仍通过。完整 Device `1107 passed, 4 skipped`，日志 `20261027-225158-b48c21.log`；ruff 与 diff 检查通过。未构建包含此次修复的新包，未执行真实包更新。systemd 终态观察与恢复之间的 invocation 竞态仍未解决，生产派发保持关闭。
+
+
+## 136. worker 执行与恢复统一完整 job 意图校验
+
+锁内恢复修复后复核发现，worker `Updates.apply` 原先只核验 job 文件摘要、prepared 与 snapshot 摘要，不核验 schema、协议、unit、实例和操作等完整字段；新增回归先复现布尔 schema 被接受。现由共享 `_verify_job_intent` 在实例事务及 package EX 下对执行与 job 恢复统一检查完整固定字段、严格整数 schema、准确 prepared/snapshot 和意图文件摘要；已有 apply intent 的同 ID 观察仍不重放，直接 apply 的互锁行为不变。
+
+测试覆盖错误字段、额外/缺失字段、非对象、摘要不符，均在发布 apply intent 和包动作之前拒绝；完整意图仍重新检查源状态后可通过测试替身执行，恢复回归保持通过。相关 97 项通过，完整 Device `1107 passed, 4 skipped`（`20261027-225546-d241a2.log`），ruff/diff 检查通过。旧格式不自动迁移；未构建包含新修改的 DEB/RPM、未验证真实 systemd 包事务或宿主崩溃；受控身份与 invocation 竞态仍未解决，生产派发继续默认关闭。
+
+已有 worker snapshot 是冻结字节，当前源码修改不会自动升级其执行逻辑；新派发原型创建快照时核对关键 worker 模块摘要，但派发仍关闭。旧测试 helper 和旧非终态必须依已确认维护窗口由管理员手动处理，不以本次修复宣称旧 worker 已受新校验保护。
