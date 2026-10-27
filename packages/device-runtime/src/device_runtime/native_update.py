@@ -489,7 +489,9 @@ class Updates:
                         state = stored["state"]
                     if state in (None, "unknown"):
                         try:
-                            nh._read_start_recovery(recovery, json.loads(pending.read_text()))
+                            start_intent = json.loads(pending.read_text())
+                            nh._require_current_start_barrier(start_intent)
+                            nh._read_start_recovery(recovery, start_intent)
                         except (OSError, ValueError, TypeError, nh.HelperError) as exc:
                             raise UpdateError(
                                 "unconfirmed start sender blocks package update"

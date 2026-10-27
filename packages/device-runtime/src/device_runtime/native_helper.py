@@ -187,6 +187,12 @@ def _valid_sender_completion(receipt, intent):
     )
 
 
+def _require_current_start_barrier(intent):
+    """Legacy sender locks alone do not prove the start sender has exited."""
+    if not isinstance(intent, dict) or type(intent.get("execution_barrier")) is not int or intent.get("execution_barrier") != 2:
+        raise HelperError("legacy start sender completion unproven; manual reconciliation required")
+
+
 def _read_start_recovery(path, intent):
     recovery = json.loads(path.read_text())
     if (
@@ -716,6 +722,7 @@ class Helper:
                     expected["execution_barrier"] = stored_intent["execution_barrier"]
                 if stored_intent != expected:
                     raise HelperError("matching start intent required for recovery")
+                _require_current_start_barrier(stored_intent)
                 if recovery_path.exists():
                     return {**result, "recovery": _read_start_recovery(recovery_path, expected)}
                 if (
@@ -860,6 +867,7 @@ class Helper:
                         raise HelperError(
                             "unconfirmed operation blocks a new start; reconcile first"
                         )
+                    _require_current_start_barrier(pending_intent)
                     _read_start_recovery(recovered, pending_intent)
             if snapshot["ActiveState"] not in {"inactive", "failed", "active"}:
                 raise HelperError("service transition requires read-only reconciliation")

@@ -1470,6 +1470,49 @@ def test_guard_receipt_mismatch_refused(helper):
         service.handle(req("resolve-stopped"), peer_uid=record["uid"])
 
 
+@pytest.mark.parametrize("barrier", [None, 1])
+def test_legacy_running_recovery_without_sender_completion_remains_unknown(helper, barrier):
+    service, adapter, record = stopped_unknown(helper)
+    path = service.registry / "op-probe-one.json"
+    intent = json.loads(path.read_text())
+    if barrier is None:
+        intent.pop("execution_barrier")
+    else:
+        intent["execution_barrier"] = barrier
+    path.write_text(json.dumps(intent))
+    (service.registry / "sender-probe-one.json").unlink()
+    adapter.override.clear()
+    adapter.active = "active"
+    with pytest.raises(nh.HelperError, match="legacy.*sender"):
+        service.handle(req("resolve-running"), peer_uid=record["uid"])
+    assert not (service.registry / "recovery-probe-one.json").exists()
+    with pytest.raises(nh.HelperError, match="unconfirmed"):
+        service.handle(req("start", "next"), peer_uid=record["uid"])
+
+
+@pytest.mark.parametrize("barrier", [None, 1])
+def test_existing_legacy_recovery_cannot_authorize_new_start(helper, barrier):
+    service, adapter, record = stopped_unknown(helper)
+    path = service.registry / "op-probe-one.json"
+    intent = json.loads(path.read_text())
+    if barrier is None:
+        intent.pop("execution_barrier")
+    else:
+        intent["execution_barrier"] = barrier
+    path.write_text(json.dumps(intent))
+    recovery = service.registry / "recovery-probe-one.json"
+    recovery.write_text(json.dumps({"state": "confirmed_running", "intent": intent, "start_replayed": False}))
+    before = recovery.read_bytes()
+    adapter.override.clear()
+    adapter.active = "active"
+    observed = service.handle(req("query"), peer_uid=record["uid"])
+    assert observed["recovery"]["state"] == "confirmed_running"
+    with pytest.raises(nh.HelperError, match="legacy.*sender"):
+        service.handle(req("start", "next"), peer_uid=record["uid"])
+    assert recovery.read_bytes() == before
+    assert not (service.registry / "op-probe-next.json").exists()
+
+
 def test_old_barrier_without_receipt_not_safe_for_stopped(helper):
     service, _adapter, record = stopped_unknown(helper)
     path = service.registry / "op-probe-one.json"

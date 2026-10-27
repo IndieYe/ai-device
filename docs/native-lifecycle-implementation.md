@@ -1458,3 +1458,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 ## 184. 旧 bootstrap 不自动获得退休围栏
 
 在一次性无网络 Linux 容器中干净安装旧准确 `8b52ab9` DEB，使用该包独立 bootstrap 的真实 `native_helper`，在 root 所有、祖先不可写的 `/run/old-retirement-test` 生成结构完整的 intent/close/retired；旧 `_job_retired` 为真且 `_pending_package_jobs` 返回空（`20261028-024334-3af117.log`）。因此第182节新围栏不能追溯覆盖旧 bootstrap，升级和退休须继续遵循管理员维护窗口，不得把新包测试当旧进程证明。首次以 `/tmp` fixture 运行因其祖先可写导致可信检查失败（`20261028-024309-5497a2.log`），不是有效旧行为证据。该实验只读判断隔离记录，不启动服务或执行包操作。
+
+
+## 185. 旧 start sender 屏障不能授权后续动作
+
+当前实现的旧启动 intent 缺失 `execution_barrier` 或使用版本1时，`resolve-running` 可在无 sender 回执下仅凭当前运行观察与锁空闲写 `confirmed_running`；已有旧恢复记录也能被新 start 和 package apply 消费。针对两种旧 intent、无回执和已有恢复记录的四项测试修复前均失败（`20261028-024646-89ed24.log`），测试使用适配器替身，不证明实际设备已出现重复动作。旧 sender guard 异常退出时子进程可能仍存活，单靠锁空闲无法确认完成。
+
+当前源码只允许 execution barrier 严格整数2的 intent 进入新 resolve-running/resolve-stopped；消费已有恢复记录以授权新 start 或 package apply 时也检查该屏障，旧记录保留，可由 query/reconcile 只读查看，不授权新动作。关闭前的旧 helper 或 snapshot 不自动获得这一门禁，不自动删除或迁移旧记录；需要管理员在维护窗口核实并按后续协议处置。版本2回执仅证明直接 sender 已回收，不宣称完整进程树或 systemd 外部工作已终结。helper/update/job 定向310通过1跳过（`20261028-024742-e26cad.log`）；完整1170通过10跳过，ruff通过（`20261028-024806-1591d3.log`）。准确新包验收待完成。

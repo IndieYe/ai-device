@@ -399,9 +399,26 @@ def test_incomplete_start_recovery_blocks_package_update(update, replayed):
     assert packages.calls == 0
 
 
-def test_valid_start_recovery_allows_stopped_package_update(update):
+@pytest.mark.parametrize("barrier", [None, 1])
+def test_legacy_start_recovery_blocks_package_update(update, barrier):
     manager, packages, _, _ = update
     intent = {"action": "start"}
+    if barrier is not None:
+        intent["execution_barrier"] = barrier
+    (manager.registry / "op-probe-start.json").write_text(json.dumps(intent))
+    recovery = manager.registry / "recovery-probe-start.json"
+    recovery.write_text(json.dumps({"state": "confirmed_stopped", "intent": intent, "start_replayed": False}))
+    before = recovery.read_bytes()
+    with pytest.raises(nu.UpdateError, match="unconfirmed start"):
+        manager.apply("probe", "one")
+    assert recovery.read_bytes() == before
+    assert packages.calls == 0
+    assert not (manager.registry / "updates/5-probe--one.apply-intent.json").exists()
+
+
+def test_valid_start_recovery_allows_stopped_package_update(update):
+    manager, packages, _, _ = update
+    intent = {"action": "start", "execution_barrier": 2}
     (manager.registry / "op-probe-start.json").write_text(json.dumps(intent))
     (manager.registry / "recovery-probe-start.json").write_text(json.dumps({
         "state": "confirmed_stopped", "intent": intent, "start_replayed": False,
