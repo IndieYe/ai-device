@@ -991,3 +991,10 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 一次性无网络 Linux amd64/Rosetta 容器以独立 systemd PID1 运行，准确校验并安装第122节 DEB。复用 `accept-native-systemd.sh` 验证普通 UID12345 新装、helper/systemd 启动、同 ID 不重放、非 owner 拒绝；容器无中心连接或真实凭证。新脚本 `packages/device-runtime/scripts/accept-native-receipt-systemd.py` 在容器内停止其测试 client，然后让真实 `systemctl start` 和 sender guard 完成，再注入丢响应使 intent 维持 unknown。实际 sender 回执包含整数 returncode；仅在本次容器篡改该回执移除 returncode，验证 resolve-running 拒绝、无 recovery、新 ID 阻塞且原 intent 不变。恢复该测试回执原始字节后，显式 resolve-running 确认运行，PID不变、原 intent 不变且真实 sender 仅调用一次。
 
 `SYSTEMD_RECEIPT_UNKNOWN_RECOVERY_OK`，日志 `20261027-220022-6ca4bd.log`，基线日志 `20261027-220001-162cfe.log`，脚本 ruff通过。测试后仅对该一次性容器 systemd 执行 poweroff，确认 --rm 容器退出；未停止真实服务。此实验不覆盖真实宿主重启/断电、package apply、目标设备、逐消息处理者认证或生产监督器；恢复测试只用已有 P1 隔离授权，不开放新 job 派发。
+
+
+## 124. 准确开发DEB的隔离 systemd peer 只读观察
+
+无网络一次性 Linux 6.18 amd64/Rosetta systemd 容器安装第122节准确 DEB 并通过普通用户 helper 基线。新脚本 `packages/device-runtime/scripts/accept-native-systemd-peer.py` 使用独立 bootstrap 内的真实 `scoped_helper_unit_peer` 连接 helper socket，确认 systemd unit MainPID 与 SO_PEERCRED/pidfd 的 peer PID 相同；作用域前后固定 unit 的 LoadState、ActiveState、SubState、MainPID、InvocationID、FragmentPath 保持一致，作用域内仅发无害 query 并收到成功响应。结果明确 `loaded_code_verified=false`、`dispatch_allowed=false`。输出 `SYSTEMD_PEER_OBSERVED_NOT_AUTHORIZED_OK`，日志 `20261027-220507-6784e1.log`；脚本 ruff通过，临时容器退出。
+
+该证据仅为本机隔离 systemd 单次只读观察，不证明 socket 后续消息由同一进程处理、不绑定已验证候选字节、不消除父死亡竞态，也不授权 job 派发或证明目标设备。未修改生产门禁或真实服务。
