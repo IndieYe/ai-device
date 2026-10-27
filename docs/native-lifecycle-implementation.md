@@ -803,3 +803,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 93. 隔离 systemd 中暂停真实 guard
 
 扩展 disposable `accept-native-update-job.sh` 的 `start-guard-pause`：先确认生产派发默认拒绝；登记有限无网络测试 runner，并在真实 systemd start-pre 窗口核对 helper MainPID、guard 直接父子关系及命令行后暂停 guard，核对 `/proc` 停止状态，再仅对该隔离 daemon 注入 SIGKILL。显式恢复 socket、重启 daemon，早期新 ID 拒绝且无新意图；真实 systemd job 已终结时 guard 仍暂停、回执缺失、独占包锁冲突、resolve-running 拒绝。恢复 guard 后匹配回执出现，同 ID 不重放，显式 resolve-running 确认运行。finally 恢复已识别的测试 guard；两次无网络 amd64 systemd 容器均 exit 0，日志 `20261027-182407-08a029.log`、`20261027-182633-34474d.log`；关机调用超时后以列表确认两个 --rm 实例已退出。测试使用历史 DEB SHA256 `9b37b30b0f915bcbd15dd8d2475559d2e98648438e1ca5f98d4fb63bcab9d00c` 和修复 wheel `d2432a074804b2093708bc36ef3a659a897e6c0a5bb24f1651de18f9ddca32d4`，非正式制品；helper 回归110通过，shell语法和diff检查通过，完整回归沿用前一检查点1030通过3跳过。此实验不证明宿主重启、真实设备、启动代码身份或事务授权；新派发持续拒绝、包保护不变。
+
+
+## 94. 显式候选 bootstrap unit 入口
+
+新增 `deploy --candidate-version`：限定固定独立 bootstrap Python，要求现有 registry 的包锁和已发布候选，独占包锁内复核候选后只创建全新 unit；unit 使用 `-I -B -m device_runtime.native_bootstrap` 和精确版本，启动时现有入口重新核验并执行内存中的候选字节。默认无版本仍走原 unit；不覆盖已有 unit、不自动 reload、启用或启动。测试覆盖错误解释器、非法版本、候选失败、包锁冲突、旧 unit 不覆盖和显式成功；完整 1035 passed、3 skipped，ruff/diff 检查通过。本项仅提供受控启动路径，部署时检查和启动间可能变化，由启动时重新检查；未用本次制品执行真实 systemd 干净安装，不证明实际 socket peer 身份或事务锁连续性，生产派发保持关闭。

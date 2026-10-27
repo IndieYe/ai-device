@@ -196,15 +196,22 @@ def render_client_unit(*, instance_id, root, uid, gid, environment_file):
     )
 
 
-def render_helper_unit(*, bootstrap_python, registry, socket_path, group):
+def render_helper_unit(*, bootstrap_python, registry, socket_path, group, candidate_version=None):
     python, registry, socket_path = map(_path, (bootstrap_python, registry, socket_path))
     if type(group) is not int or group < 0:
         raise HelperError("explicit socket group required")
+    if candidate_version is None:
+        entry = "device_runtime.native_helper serve"
+        version_arg = ""
+    else:
+        _identifier(candidate_version)
+        entry = "device_runtime.native_bootstrap"
+        version_arg = f" --version {candidate_version}"
     return (
         "[Unit]\nDescription=Device bounded native management helper\n"
         "After=local-fs.target\n\n[Service]\nType=simple\nUser=root\nGroup=root\n"
-        f"ExecStart={python} -I -B -m device_runtime.native_helper serve "
-        f"--registry {registry} --socket {socket_path} --group {group}\n"
+        f"ExecStart={python} -I -B -m {entry} "
+        f"--registry {registry} --socket {socket_path} --group {group}{version_arg}\n"
         "# The start guard owns inherited leases until its sender is reaped.\n"
         "KillMode=process\nUMask=0077\nNoNewPrivileges=yes\nRestart=no\n"
         "# No ExecStartPre unlink: an orphan socket requires explicit reconciliation.\n"
@@ -212,7 +219,7 @@ def render_helper_unit(*, bootstrap_python, registry, socket_path, group):
     )
 
 
-def deploy_helper(*, bootstrap_python, registry, unit_dir, runtime_dir, group):
+def deploy_helper(*, bootstrap_python, registry, unit_dir, runtime_dir, group, candidate_version=None):
     """Explicit administrator provisioning only; never reload, enable or start."""
     if sys.platform != "linux" or os.geteuid() != 0:
         raise HelperError("helper deployment requires Linux administrator identity")
@@ -224,6 +231,7 @@ def deploy_helper(*, bootstrap_python, registry, unit_dir, runtime_dir, group):
         registry=registry,
         socket_path=runtime_dir / "helper.sock",
         group=group,
+        candidate_version=candidate_version,
     )
     _trusted(python)
     if not python.is_file() or not os.access(python, os.X_OK):
@@ -234,6 +242,14 @@ def deploy_helper(*, bootstrap_python, registry, unit_dir, runtime_dir, group):
     unit = unit_dir / "ai-device-native-helper.service"
     if unit.exists() or unit.is_symlink():
         raise HelperError("helper unit already exists; explicit reconciliation required")
+    if candidate_version is not None:
+        from . import native_bootstrap
+
+        if python != native_bootstrap.TRUSTED_HELPER_BOOTSTRAP / "bin/python3.13":
+            raise HelperError("independent bootstrap required for candidate deployment")
+        _trusted(registry, directory=True)
+        with package_lease(registry, exclusive=True, existing=True):
+            native_bootstrap.read_helper_candidate(registry / "bootstrap-candidates", candidate_version)
     for directory in (registry, runtime_dir):
         if not directory.exists():
             _trusted(directory.parent, directory=True)
@@ -1053,6 +1069,7 @@ def main():
     for name in ("bootstrap-python", "registry", "unit-dir", "runtime-dir"):
         deploy.add_argument("--" + name, type=Path, required=True)
     deploy.add_argument("--group", type=int, required=True)
+    deploy.add_argument("--candidate-version")
     recovery = modes.add_parser("recover-socket")
     recovery.add_argument("--registry", type=Path, required=True)
     recovery.add_argument("--socket", type=Path, required=True)

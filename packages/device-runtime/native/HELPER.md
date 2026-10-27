@@ -254,3 +254,6 @@ accept-native-old-helper-fence.sh在一次性容器复现v17旧helper忽略未�
 
 
 新建 helper unit 显式使用 `KillMode=process`、`Restart=no`：停止或异常退出 daemon 时不由 systemd 将同 unit 的 start guard 一并杀掉；guard 继续持有继承的执行/包锁，直到 sender 被回收并写入回执。已有 unit 不自动更新或重启。guard 异常、挂起或回执缺失时仍为 unknown，不能仅因锁释放就重试；残留 guard 不承诺自动终止，管理员需显式诊断并遵循恢复门禁。生产派发默认关闭不变；该配置不是运行代码身份或事务授权证明。
+
+
+实验性干净部署可显式使用 `deploy --candidate-version <版本>`，必须指定固定独立 bootstrap 的 Python，registry 中已有经发布并校验的候选及包锁；部署在独占包锁下先复核候选，只写新 unit，不覆盖、reload、启用或启动。unit 经独立 bootstrap 在启动时再次核验并执行候选字节；默认不提供版本时仍使用原 helper 入口。此 unit 仅是受控启动路径，不证明正在运行的 socket peer 已加载指定代码，不授权 job 派发或替代事务锁交接；旧测试环境仍须人工退休。

@@ -534,6 +534,65 @@ def test_deploy_helper_no_start_and_no_replace(deployment):
     assert unit.read_text() == content
 
 
+def test_deploy_candidate_unit_requires_fixed_bootstrap_and_verified_candidate(deployment, monkeypatch):
+    from device_runtime import native_bootstrap as bootstrap
+
+    fixed = deployment["bootstrap_python"].parent / "bootstrap"
+    python = fixed / "bin/python3.13"
+    python.parent.mkdir(parents=True)
+    python.write_text("fixture")
+    python.chmod(0o755)
+    monkeypatch.setattr(bootstrap, "TRUSTED_HELPER_BOOTSTRAP", fixed)
+    registry = deployment["registry"]
+    registry.mkdir()
+    (registry / "package-manager.execution.lock").touch(mode=0o600)
+    observed = []
+    monkeypatch.setattr(bootstrap, "read_helper_candidate", lambda path, version: observed.append((path, version)))
+    options = {**deployment, "bootstrap_python": python, "candidate_version": "release-1"}
+    result = nh.deploy_helper(**options)
+    unit = Path(result["unit"])
+    content = unit.read_text()
+    assert observed == [(registry / "bootstrap-candidates", "release-1")]
+    assert f"{python} -I -B -m device_runtime.native_bootstrap" in content
+    assert "--version release-1" in content and "KillMode=process" in content
+    assert result["started"] is False and result["enabled"] is False
+    with pytest.raises(nh.HelperError, match="already exists"):
+        nh.deploy_helper(**options)
+    assert unit.read_text() == content
+
+
+@pytest.mark.parametrize("reason", ["wrong_python", "invalid_version", "candidate_invalid", "lock_busy"])
+def test_deploy_candidate_refuses_before_unit_write(deployment, monkeypatch, reason):
+    from device_runtime import native_bootstrap as bootstrap
+
+    fixed = deployment["bootstrap_python"].parent / "bootstrap"
+    python = fixed / "bin/python3.13"
+    python.parent.mkdir(parents=True)
+    python.write_text("fixture")
+    python.chmod(0o755)
+    monkeypatch.setattr(bootstrap, "TRUSTED_HELPER_BOOTSTRAP", fixed)
+    registry = deployment["registry"]
+    registry.mkdir()
+    (registry / "package-manager.execution.lock").touch(mode=0o600)
+    options = {**deployment, "bootstrap_python": python, "candidate_version": "release-1"}
+    if reason == "wrong_python":
+        options["bootstrap_python"] = deployment["bootstrap_python"]
+    if reason == "invalid_version":
+        options["candidate_version"] = "../escape"
+    if reason == "candidate_invalid":
+        def reject(*_args):
+            raise bootstrap.BootstrapError("candidate invalid")
+        monkeypatch.setattr(bootstrap, "read_helper_candidate", reject)
+    if reason == "lock_busy":
+        with nh.package_lease(registry), pytest.raises(nh.HelperError, match="still executing"):
+            nh.deploy_helper(**options)
+    else:
+        with pytest.raises((nh.HelperError, bootstrap.BootstrapError)):
+            nh.deploy_helper(**options)
+    assert not (deployment["unit_dir"] / "ai-device-native-helper.service").exists()
+    assert not deployment["runtime_dir"].exists()
+
+
 def test_deploy_helper_requires_administrator(deployment, monkeypatch):
     monkeypatch.setattr(nh.os, "geteuid", lambda: 12345)
     with pytest.raises(nh.HelperError, match="administrator"):
