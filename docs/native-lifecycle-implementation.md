@@ -1210,3 +1210,12 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 `Systemd.query` 先前用字典推导忽略畸形行并覆盖重复字段；六个负向测试复现重复、缺失、额外、畸形、过长和非文本输出未稳定拒绝。现明确 `--all --no-pager`，有界输出且仅接受 ActiveState/SubState/MainPID/Job/User/Group/FragmentPath/ExecStart 各一次；空 Job 合法，其余格式或字段缺失拒绝。helper/update/job 284 通过、1 跳过；完整 Device 1143 通过、4 跳过，ruff/diff 检查通过。
 
 `accept-native-helper-observation.py` 使用准确 e298fdb DEB 的解释器、显式路径核对当前源码，在一次性 systemd 容器验证真实已完成 unit 的八字段和空 Job（`20261028-001450-353d05.log`）。初次探测发现真实不存在 unit 即使 `--all` 仍缺 ExecStart（`20261028-001346-bc62c1.log`），严格解析正确拒绝；未放宽。该实验不代表新包验收，e298fdb 包不含本次修复。严格解析不能证明同一 systemd invocation 在观察与写恢复记录之间未变化；生产派发、监督器和身份闭环仍未完成。
+
+
+## 152. 7c06c81 准确 DEB 新装与 systemd 恢复
+
+干净检查点 `7c06c81c1d9e20d31a77673b2c8b62432728c295` 离线构建三包，Device wheel SHA256 `627b6c86112a5482aaba716ad641d9b175fe7383e47be259b3a08d39dc25b7d4`；六个关键模块逐字节匹配 Git（`20261028-002311-16258d.log`）。锁定输入在一次性无网络 amd64/Rosetta Linux 构建未签名开发 DEB：`build/native-packages-p1-7c06c81/ai-device-native-client_0.2.2-1_amd64.deb`，109816578 字节，SHA256 `b4c6e300620ac92768c5ae636d62c2429533e32c0dbb9dbfb6c930550bee49a1`（`20261028-002325-150ea0.log`），不覆盖旧成果。
+
+干净容器校验包摘要、安装并比对主 runtime 六模块及 bootstrap 四模块与该源码，批准/退休负向 fixture 与禁止覆盖门禁通过（`20261028-002429-cde6e6.log`）。另一个无网络独立 systemd 容器重复核摘要、安装和六模块比对，普通 UID12345 安装、helper 注册和启动、同 ID 不重放、非 owner 拒绝、真实 sender 完成后丢响应，以及畸形屏障/回执拒绝、修复 fixture 后显式恢复且 PID 不变和仅一次启动通过（`20261028-002451-c5f757.log`）。包内 `-I -B` 代码对真实运行 unit 返回八字段并对不存在 unit 拒绝（`20261028-002511-d1dea6.log`）；实验容器已停止（`20261028-002517-2d3e43.log`）。
+
+这些证据仅覆盖隔离 Linux amd64/Rosetta 开发包和所述测试；不是生产监督器、实际消息处理者或同一 invocation 的事务绑定证明，也不覆盖真正系统重启、中心、升级和真实设备。RPM 尚缺离线构建工具；生产派发仍默认关闭，包覆盖保护未改变。
