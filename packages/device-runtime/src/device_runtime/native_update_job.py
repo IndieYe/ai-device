@@ -322,6 +322,10 @@ def close_before_apply(manager, instance_id, operation_id):
             helper._trusted(marker)
             if not helper._same_json(json.loads(marker.read_bytes()), receipt):
                 raise JobError("close evidence differs")
+            # A prior link may have succeeded while its directory fsync failed.
+            # Do not report a durable close until this retry syncs the entry.
+            with helper._directory_fd(marker.parent) as fd:
+                os.fsync(fd)
         else:
             helper._save_new(marker, receipt)
         return receipt

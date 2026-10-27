@@ -1632,3 +1632,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 新增 `test_close_and_late_worker_use_same_package_lease_across_processes`：独立 spawn 子进程实际调用 `close_before_apply`，在持有生产 package EX 锁并到达关闭标记发布前同步暂停；父进程实际调用 `Updates.apply`，确认由于包锁竞争拒绝且无关闭/apply intent。子进程被释放后走真实 `_save_new` 发布关闭标记；父进程迟到 apply 因已关闭拒绝，原 job intent 与 active 字节不变，无包适配器动作、apply intent、sender 或 outcome。管理身份、snapshot 验证和包适配器为测试替身，实例 lease 也为替身；实际测试的包锁是 OS 跨进程 flock，未运行真实 systemd/设备/包动作。
 
 初版使用 fork 的完整回归通过但报告多线程 fork 警告（`20261028-073259-f5717c.log`），已改 spawn 并显式建立子进程替身；单项连续 5 次通过及更新/job 定向 145 通过（`20261028-073423-12cd9f.log`），完整 1204 通过、16 跳过无该警告（`20261028-073436-7689e7.log`），ruff通过。正常关闭与迟到拒绝不证明目录 fsync 故障的持久性、旧 snapshot 兼容、真实身份、外部 job 终态或崩溃恢复；生产派发、worker 与恢复默认拒绝不变。
+
+
+## 209. 关闭标记重试重新同步目录
+
+对现有 `close_before_apply` 增补故障回归：首次 `_save_new` 已完成文件 fsync 和 hardlink，但父目录 fsync 注入失败，标记可见；重试时继续对目标目录的 fsync 注入失败，旧实现仍直接返回 `closed_before_apply`，测试先失败（`20261028-073746-21be63.log`）。这表明重试仅看见匹配字节不能确认首次目录同步成功，不表示实际掉电已发生。
+
+修复后，在原实例事务和 package EX 锁内，既有关闭标记通过类型敏感内容核对后再次 fsync 其父目录；同步失败传播异常，不覆盖标记或删除 intent；同步恢复时可返回原关闭结果。初次发布仍走原有文件 fsync、no-replace link、目录 fsync 路径。定向 145 通过（`20261028-073804-14db39.log`），完整 1204 通过、16 跳过（`20261028-073818-bf894a.log`），ruff 和 diff 检查通过。测试模拟文件系统错误，未模拟实际掉电或证明任意已存在文件的数据持久性；旧 snapshot 不自动获得修复。退休、worker、派发及恢复仍维持原有默认拒绝，不能据此释放围栏；真实受控身份、外部 job 和崩溃恢复仍未完成。

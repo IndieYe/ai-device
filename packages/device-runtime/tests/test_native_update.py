@@ -1393,6 +1393,25 @@ def test_uncertain_close_and_retirement_cannot_release_job_fence(update, monkeyp
         with pytest.raises(OSError, match="injected directory"):
             job.close_before_apply(manager, "probe", "one")
     assert stem.with_suffix(".job-closed.json").exists()
+    closed_bytes = stem.with_suffix(".job-closed.json").read_bytes()
+    directory_info = stem.parent.stat()
+    attempted = []
+
+    def fail_close_directory(fd):
+        info = os.fstat(fd)
+        if (info.st_dev, info.st_ino) == (directory_info.st_dev, directory_info.st_ino):
+            attempted.append(True)
+            raise OSError("injected close retry directory fsync failure")
+        return real_fsync(fd)
+
+    with monkeypatch.context() as injected:
+        injected.setattr(nh.os, "fsync", fail_close_directory)
+        with pytest.raises(OSError, match="close retry directory"):
+            job.close_before_apply(manager, "probe", "one")
+    assert attempted
+    assert stem.with_suffix(".job-closed.json").read_bytes() == closed_bytes
+    assert job.close_before_apply(manager, "probe", "one")["state"] == "closed_before_apply"
+    assert stem.with_suffix(".job-closed.json").read_bytes() == closed_bytes
     # Reach the old publication path only to reproduce the failure; production
     # retirement remains closed and the reader must retain the fence regardless.
     monkeypatch.setattr(job, "_require_proven_retirement_fence", lambda: None)
