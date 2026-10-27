@@ -121,6 +121,29 @@ exit 7
     assert result.returncode != 0 and not (bad / 'called').exists()
     assert not (bad / 'fixture.sender.json').exists()
     print('CANDIDATE_PROTOCOL_DRIFT_REFUSES_BEFORE_DPKG', flush=True)
+    for kind in ('file', 'dangling-symlink'):
+        blocked = ROOT / ('orphan-log-' + kind)
+        blocked.mkdir(mode=0o700)
+        log = blocked / 'fixture.package.log'
+        if kind == 'file':
+            log.write_bytes(b'preserve')
+        else:
+            log.symlink_to('missing')
+        blocked_receipt = blocked / 'fixture.sender.json'
+        intent = {'sender_protocol': candidate.PROTOCOL, 'operation': kind, 'snapshot': 'fixture'}
+        with helper.package_lease(ROOT, exclusive=True) as fd:
+            result = subprocess.run(
+                [sys.executable, '-I', '-B', '-c', candidate.TREE_GUARD,
+                 str(blocked_receipt), json.dumps(intent), str(blocked)],
+                check=False, pass_fds=(fd,), capture_output=True,
+            )
+        assert result.returncode != 0 and not (blocked / 'called').exists()
+        assert not blocked_receipt.exists()
+        if kind == 'file':
+            assert log.read_bytes() == b'preserve'
+        else:
+            assert log.is_symlink() and os.readlink(log) == 'missing'
+    print('CANDIDATE_ORPHAN_LOG_REFUSES_BEFORE_DPKG', flush=True)
     run_case(candidate, 'complete', False)
     run_case(candidate, 'crash', True)
     # Model failure after link but before the parent directory is durably synced.
