@@ -532,3 +532,11 @@ helper启动/登记和其他包apply被持久job意图阻断。worker从完整�
 外部重启后核实服务running、ses-14204/pro-1非私密、唯一execution和停止检查开关保持，3文件现场及HEAD 5f92fd4完整；重启等待解除。审核observe_job草稿发现复用_transaction会创建锁/目录，改直接读取可信已有registry/updates，不初始化或补写台账。诊断严格绑定事务ID/准确批准/完整apply目标和快照摘要、sender intent/state/整数returncode、outcome intent与枚举；pending必须命令0且准确包数据库目标匹配。systemctl只show，失败或超时保持unknown；任何状态retry_allowed=false，保留持久门禁，不自动恢复。
 
 新增6项回归：active/failed/inactive分类、读取前后全部文件内容及mtime不变/不创建锁、缺目录不初始化、query超时、sender失败不许宣称成功。完整955 passed/3 Linux skipped（88.07s），ruff/format/sh-n/diff通过，后台81358已回收。该函数尚未在新构建runtime内动态调用；第35节真实失响应/排队漂移证据仍来自v18，不能混算为新诊断动态验收。显式恢复及unknown解除仍未实现。原包保护、P1边界不变。
+
+## 37. 新wheel只读job诊断真实systemd验收
+
+以ce9d3f5干净检查点重建三组件wheel至build/native-inputs/wheels-p1-diagnostics-v19，隔离容器离线安装后-I -B运行现有故障脚本，直接调用observe_job。lost-response真实受理后调用方超时、同ID不重发，包钩子拒绝后诊断package_outcome_recorded且准确outcome一致；source-drift确认start-pre后改变测试active，worker执行前拒绝，诊断job_failed_requires_review且无apply/sender/package日志。两路径retry_allowed=false、fence_retained=true。
+
+诊断前后registry下全部目录/文件mode、mtime_ns、文件SHA256快照一致，没有补锁或写台账。两临时容器ACCEPTANCE_EXIT=0，随后关机外层130分开记录；均已退出，无后台遗留，客户端未启动，包保护保持。源码仅扩展验收脚本，无核心变更；核心完整955+3skip沿用ce9d3f5，未声称本轮重跑。sh-n/diff通过。
+
+显式恢复仍未实现：failed/缺unit不可单独证明排队job不会再执行，诊断也不解除持久门禁。下一步需准确unit/worker退出证据与锁空闲联合核验、持久恢复记录及旧ID永不重派；不得直接删除job-intent或因源恢复就复用旧job。P1仍未完成。

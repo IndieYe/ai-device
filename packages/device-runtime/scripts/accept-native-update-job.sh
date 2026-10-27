@@ -31,6 +31,19 @@ prepared=manager.prepare('probe','job-one',package,sha256=helper._digest(package
 stem=registry/'updates/5-probe--job-one'
 manager.approve('probe','job-one',prepared_sha256=helper._digest(stem.with_suffix('.prepared.json')))
 active=(root/'active.json').read_bytes()
+def diagnostic(expected):
+ def snapshot():
+  entries={}
+  for path in registry.rglob('*'):
+   info=path.lstat()
+   entries[str(path.relative_to(registry))]=(info.st_mode,info.st_mtime_ns,helper._digest(path) if path.is_file() else None)
+  return entries
+ before=snapshot()
+ report=job.observe_job(manager,'probe','job-one')
+ assert report['state']==expected,report
+ assert report['retry_allowed'] is False and report['fence_retained']
+ assert snapshot()==before,'diagnostic changed persistent files/directories'
+ return report
 mode=os.environ.get('DEVICE_JOB_FAULT','none')
 assert mode in ('none','lost-response','source-drift')
 calls=[]
@@ -74,6 +87,7 @@ if mode=='source-drift':
  assert stem.with_suffix('.job-intent.json').exists()
  error=Path('/var/lib/ai-device/worker-test-error.log').read_text()
  assert 'source active changed' in error,error
+ diagnostic('job_failed_requires_review')
  (root/'active.json').write_bytes(active)
  print(json.dumps({'state':'queued_source_drift_refused','dispatch_once':True,'package_executed':False,'persistent_fence_retained':True,'test_active_restored':True}))
  raise SystemExit(0)
@@ -89,6 +103,8 @@ assert sender['intent']==intent and sender['returncode']!=0,sender
 assert outcome['state']=='unknown' and outcome['intent']==intent,outcome
 assert 'helper transaction required' in stem.with_suffix('.package.log').read_text()
 assert (root/'active.json').read_bytes()==active
+report=diagnostic('package_outcome_recorded')
+assert report['outcome']==outcome
 show=subprocess.run(['/usr/bin/systemctl','show',first['unit'],'--property=Restart,User,ExecStart,ActiveState,Result'],check=True,capture_output=True,text=True)
 print(show.stdout)
 assert 'Restart=no' in show.stdout
