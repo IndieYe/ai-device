@@ -1600,3 +1600,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 从干净提交 `121c5e926ce5438cc2e73e724bf58be89655449c` 离线构建未签名 DEB `build/native-packages-p1-121c5e9/ai-device-native-client_0.2.2-1_amd64.deb`，109835950 字节，SHA256 `05d057cad34fd885b530b660fb152e92004678781bcdd2c980c56f4e30b25ea6`；Device wheel SHA256 `c94514170ce13a09488571b9ae5d9a1c11e1c434025c45f7eab9bc98e4677674`，34 个 Python 模块逐字节匹配冻结提交（`20261028-041615-8ee521.log`）。
 
 无网络 amd64 隔离 systemd 容器干净安装准确包并以普通用户安装实例，真实 bootstrap/helper 启动后校验 bootstrap、runtime helper 文件均与 wheel 相同；缓慢未完成帧在 5.008 秒获得拒绝，前后正常 query 成功，Device unit inactive、MainPID 0（`20261028-041725-a2cf7f.log`，`scripts/accept-native-helper-deadline-121c5e9.sh`）。容器已停止。此实验未模拟响应背压，写入 5 秒设置由源码与 socketpair 定向测试覆盖；不能声称响应必达或验证真实设备、宿主重启、动作身份、外部 job 终态。旧包/旧 helper 不会自动更新；派发、恢复及覆盖保护仍关闭或维持原门禁，P1 未完成。
+
+
+## 205. 新准确包生产 job 围栏回归
+
+在独立无网络 amd64 systemd 容器中，以第204节 `121c5e9` 准确 DEB（SHA256 `05d057cad34fd885b530b660fb152e92004678781bcdd2c980c56f4e30b25ea6`）及同批 wheel 复测：惰性旧包夹具登记于隔离 dpkg，解包新制品，不安装真实更新；包内 helper/update/job 三模块与 wheel 字节一致。生产新派发在写 job intent 和运行 systemd 之前拒绝；人工构造的固定 snapshot worker 在真实隔离 systemd 中拒绝新动作，intent 字节和 active 不变，不创建 apply intent、sender 或 outcome（`20261028-041937-775869.log`；`scripts/accept-native-worker-default-deny-121c5e9.sh`）。这不是新包的干净升级、运行身份可信绑定或外部终态验收。两个本轮 fixture 容器已停止，未解除门禁。
+
+首次复用旧验收脚本时，在隔离容器中离线调用了 pip 重装 wheel（`20261028-041852-bd5c0b.log`），不符合本项目 uv 工具链约束；后续改成直接核对已打包模块并在全新容器重跑，通过结果以无重装的上述日志为准。进一步核查发现现有 `build-native-linux.sh` 内部也调用 pip 离线安装 wheel，因此第203、204节包构建同样存在工具链合规缺口；制品身份和隔离测试记录仍是实际事实，但构建流程需改用 uv 并重新构建验证，不能将其表述为工具链合规完成。
