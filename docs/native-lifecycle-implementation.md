@@ -1392,3 +1392,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 从干净 `0fde77aad6c25a77d92f37d4ae3403806cb534c7` 离线构建 wheel、payload 和未签名 DEB。Device wheel SHA256 `c33bc9d11b585361791588867dc448685748799cbc0ecaa51b579385174ebe14`，全部 33 个 `device_runtime` 源码文件逐字节匹配 Git（`20261028-020314-290ae9.log`）。DEB `build/native-packages-p1-0fde77a/ai-device-native-client_0.2.2-1_amd64.deb`，109821082 字节，SHA256 `3f0c6b8601b0ddcfe8bec46929131642c4b2f66d88a5f71431aa01143e3327d6`（`20261028-020316-d30938.log`）。
 
 隔离干净安装、核心源码比对及重装保护通过（`20261028-020439-917934.log`）；使用包内 job 代码与包内 Linux 原生依赖运行源码和字节码集合相关 11 项通过（`20261028-020442-5d7672.log`），dispatcher 负例仅在测试中替换生产派发门禁。独立隔离 systemd 实验中生产派发及两个恢复门禁仍拒绝、无 intent/恢复写入，随后仅测试进程替身执行旧逻辑；原包保护拒绝、active 不变（`20261028-020446-1036a5.log`、`20261028-020524-cf0e2e.log`），专属容器已停止。systemd fixture 解包后重装同批 wheel，不是生产升级验收。字节码集合一致不证明实际执行内容或第三方依赖，P1 继续未完成。
+
+
+## 177. 真实 helper 只读查询响应发送者隔离实验
+
+在准确 `0fde77a` DEB 的无网络隔离 systemd 容器干净安装、创建普通用户测试实例并通过实际 `register` 注册后，启动真实 helper；对同一 Unix socket 调用实际 `query`，在只读 `scoped_helper_unit_peer` 内以 `SO_PASSCRED`/`recvmsg` 核对单一完整 SCM_CREDENTIALS、unit peer PID 与 root UID，验证真实查询响应成功、实例和操作 ID 正确、无启动意图且 scope 明示不能派发。输出 `REAL_HELPER_QUERY_RESPONSE_CREDENTIALS_MATCH_UNIT_PEER` 与 `QUERY_ONLY_NO_START_INTENT_AND_NO_DISPATCH_AUTHORIZATION`（`20261028-021218-dc102b.log`）。
+
+此实验只证明一次只读查询及响应发送者与观察到的 unit peer 一致；不证明消息处理者与任意不可逆动作的因果绑定、实际加载代码身份、观察后仍存活或原子 invocation 绑定。无真实设备或升级动作，生产派发和恢复默认拒绝不变。测试容器仅属本次实验并已停止。
