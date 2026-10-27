@@ -494,3 +494,11 @@ accept-native-manager-runtime.sh在隔离amd64 Linux、/tmp工作目录，以v15
 准确输入：ai_device wheel SHA256 f25c7b7574ca2d915b05d126e9a05f87ed5404974e06cff9f55d7adf5dbbf424，bash aee883b74bb2fc816abb77ba428ed4339c6901726a9ac3098a3ba8737fa16dd3，fs b872aa775eaacc9836c0ec94a2abf1e41c8395ef725eecb37d05b521053ab626。现场build/native-inputs/wheels-p1-manager-v16、dependencies-manager-v16、manager-v16-reproduced-lock.json保留但忽略，不提交二进制。完整944 passed/3 Linux skipped（44.09s），ruff/sh-n/diff通过。
 
 独立job原先缺完整运行时的前置已在隔离实验解除，但尚未派发：后续需把此完整运行时纳入原生构建，再接job持久排队门禁、锁交接、worker侧源/批准二次复核和隔离systemd动态验收。P1未完成，包保护不变。宿主前端/数据库/AI资产不适用；构建验收脚本/测试/本记录已更新。
+
+## 32. 完整管理运行时纳入开发DEB
+
+以7ffc905干净源码新构建三组件wheel，复用已校验13条client/native锁定wheel（单独目录无cp313t残留），生成精确Linux constraints并通过现有assemble-native-payload.py得到build/native-payload-v17。隔离Linux运行原build-native-linux.sh构建DEB，保留所有原始保护代码不变。新包109756216 bytes，SHA256 ab69060eb6f2eda8281d21ab14584da28f4a233504cf20d6a830bc7ea5c47c8d，路径build/native-packages-v17/ai-device-native-client_0.2.2-1_amd64.deb；仍是0.2.2-1未签名本地开发制品，不发布。
+
+只提取不安装的新临时容器：pip check通过，包内native_update/bootstrap/job/candidate/prepare全部导入，从完整独立快照完成Ed25519真实签名验证和zstd压缩解压；模块路径位于快照，无源码依赖。新旧v15 preinst字节cmp一致，提取已有payload后运行新preinst仍准确拒绝覆盖，未移除/覆盖任何设备安装。固化accept-native-manager-package.sh并在第二新容器复跑通过，快照执行后重新inventory一致。无服务操作、无后台或容器遗留。
+
+源码变更仅新增验收脚本及记录；核心完整回归沿用7ffc905的944 passed/3 skipped（本轮没有核心改动，未声称新跑完整）。sh-n/diff通过。原生构建的完整管理运行时前置已在DEB完成，RPM/macOS未对齐；静态job仍不可派发。下一步接一次性job派发前持久门禁/锁交接与worker准确二次复核，隔离systemd动态验收。P1未完成，包钩子准确许可仍未开放。
