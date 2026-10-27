@@ -18,8 +18,9 @@ mkdir -p "$root$home" "$root/usr/bin"
 cp -R "$payload/." "$root$home/"
 tar -xzf "$archive" -C "$root$home"
 mv "$root$home/python" "$root$home/runtime"
-"$root$home/runtime/bin/python3.13" -I -m pip --isolated install --no-index --no-deps \
- --find-links "$root$home/bundle/dependencies" \
+env -i PATH=/usr/bin:/bin HOME="$work" TMPDIR="$work" \
+ "$root$home/tools/uv" pip install --offline --no-cache --no-config --system \
+ --python "$root$home/runtime/bin/python3.13" --no-index --no-deps --link-mode copy \
  "$root$home/bundle/wheels/"*.whl "$root$home/bundle/dependencies/"*.whl > "$work/bootstrap.log" 2>&1
 cat > "$root/usr/bin/ai-device-native-install" <<'EOF'
 #!/bin/sh

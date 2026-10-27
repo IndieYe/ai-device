@@ -1607,3 +1607,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 在独立无网络 amd64 systemd 容器中，以第204节 `121c5e9` 准确 DEB（SHA256 `05d057cad34fd885b530b660fb152e92004678781bcdd2c980c56f4e30b25ea6`）及同批 wheel 复测：惰性旧包夹具登记于隔离 dpkg，解包新制品，不安装真实更新；包内 helper/update/job 三模块与 wheel 字节一致。生产新派发在写 job intent 和运行 systemd 之前拒绝；人工构造的固定 snapshot worker 在真实隔离 systemd 中拒绝新动作，intent 字节和 active 不变，不创建 apply intent、sender 或 outcome（`20261028-041937-775869.log`；`scripts/accept-native-worker-default-deny-121c5e9.sh`）。这不是新包的干净升级、运行身份可信绑定或外部终态验收。两个本轮 fixture 容器已停止，未解除门禁。
 
 首次复用旧验收脚本时，在隔离容器中离线调用了 pip 重装 wheel（`20261028-041852-bd5c0b.log`），不符合本项目 uv 工具链约束；后续改成直接核对已打包模块并在全新容器重跑，通过结果以无重装的上述日志为准。进一步核查发现现有 `build-native-linux.sh` 内部也调用 pip 离线安装 wheel，因此第203、204节包构建同样存在工具链合规缺口；制品身份和隔离测试记录仍是实际事实，但构建流程需改用 uv 并重新构建验证，不能将其表述为工具链合规完成。
+
+
+## 206. 原生 Linux 构建器切换锁定 uv
+
+构建器不再用 CPython `-m pip` 安装 wheel；使用 payload 中已由 `tool-lock.json` 验证的 uv，空环境、独立临时 HOME/TMPDIR、`--offline --no-cache --no-config --system`，显式指定解压的 CPython、`--no-index --no-deps --link-mode copy` 与组件及依赖 wheel 列表。空环境避免 UV 变量和用户配置污染，不修改原有包 preflight/覆盖保护。README 与构建器约束测试同步；定向 14 通过（`20261028-042229-bb04af.log`），完整 1203 通过、16 跳过（`20261028-042242-209baf.log`），ruff 与 shell 语法通过。
+
+初版 uv 在隔离 Linux 离线试建成功（`20261028-042107-3a3873.log`），但该试包先于最终空环境修改且复用旧 payload，不是准确新提交制品。最终构建器的准确制品、安装落点、依赖和 helper 验收需在提交后单独验证；无 RPM 或真实宿主验收。

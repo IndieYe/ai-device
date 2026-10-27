@@ -6,6 +6,16 @@ from pathlib import Path
 import pytest
 
 
+def test_builder_uses_isolated_offline_uv_for_explicit_runtime():
+    builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
+    source = builder.read_text()
+    assert 'env -i PATH=/usr/bin:/bin HOME="$work" TMPDIR="$work"' in source
+    assert '"$root$home/tools/uv" pip install --offline --no-cache --no-config --system' in source
+    assert '--python "$root$home/runtime/bin/python3.13" --no-index --no-deps --link-mode copy' in source
+    assert '"$root$home/bundle/wheels/"*.whl "$root$home/bundle/dependencies/"*.whl' in source
+    assert ' -m pip ' not in source
+
+
 def test_independent_bootstrap_includes_candidate_launcher():
     builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
     source = builder.read_text()
