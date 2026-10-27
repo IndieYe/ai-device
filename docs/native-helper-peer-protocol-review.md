@@ -70,6 +70,8 @@
 
 **锁交接语义实验**：`scripts/probe-native-daemon-lock-handoff.py` 在无网络 Linux 6.18.15 amd64/Rosetta 容器中对临时普通文件验证：独立 open 的描述不能取得已持有的排他 flock；父 fork 后关闭自己的 FD，子进程继承的同一 open-file description 仍保持锁；子进程关闭后独立 open 可取得锁。`DAEMON_FLOCK_HANDOFF_OK`，日志 `20261027-202218-ee55c4.log`，ruff 通过。实验未调用 `LOCK_UN`，未验证异常后代继承、锁文件替换、崩溃后 systemd 行为或实际 daemon 实现；特别注意任一共享描述上的显式解锁可能影响其他持有者，不能把实验结论推广为必然安全的租约交接。
 
+
+当前实现已将独立 bootstrap 与候选的上述校验提取为内部 `_verified_helper_bytes`，原有公开入口仍在同一进程调用并直接执行返回字节；路径替换回归及完整 Device 回归通过。返回字节并不证明后续由谁执行，未引入 fork、监督器或新的调用授权；实际候选动态回归仍需执行。
 实施前需完成：真实 bootstrap 字节快照提取的既有功能及漂移回归；fork 前后验证字节与原路径替换对照；受控子进程提前退出、超时、父退出、遗留子进程及描述符泄漏/锁保持测试；systemd invocation/peer 绑定与 PID namespace 核对；start/job 在释放包锁间隙的真实并发和崩溃验收。系统不承诺对可信本机 root 的故意绕过提供 OS 沙箱。即使这些局部测试通过，正式信任根和 P1 其他门禁仍须独立完成。
 
 ## 后续验收门禁

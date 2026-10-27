@@ -284,6 +284,36 @@ def run_verified_helper_candidate(candidates_dir, version, *, registry, socket_p
     """
     import types
 
+    contents = _verified_helper_bytes(candidates_dir, version, expected_snapshot_sha256)
+    names = ("__init__", "management_lock", "native_helper")
+    # Keep imports for these modules inside this exact validated byte set.
+    module_names = ("device_runtime", "device_runtime.management_lock", "device_runtime.native_helper")
+    previous = {name: sys.modules.get(name) for name in module_names}
+    try:
+        for name, qualified in zip(names, module_names, strict=True):
+            path, data = contents[name]
+            module = types.ModuleType(qualified)
+            module.__file__ = str(path)
+            module.__package__ = "device_runtime"
+            if name == "__init__":
+                module.__path__ = [str(path.parent)]
+            sys.modules[qualified] = module
+            exec(compile(data, str(path), "exec"), module.__dict__)  # noqa: S102
+        sys.modules["device_runtime.native_helper"].serve(registry, socket_path, group=group)
+    finally:
+        for name, module in previous.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
+
+
+def _verified_helper_bytes(candidates_dir, version, expected_snapshot_sha256):
+    """Validate the independent bootstrap and return its verified source bytes.
+
+    Internal preparation only; returning bytes does not attest a running process
+    or authorize dispatch. Callers must preserve the validated execution boundary.
+    """
     if sys.platform != "linux" or os.geteuid() != 0:
         raise BootstrapError("Linux administrator required")
     candidate = helper._path(candidates_dir) / version
@@ -332,26 +362,7 @@ def run_verified_helper_candidate(candidates_dir, version, *, registry, socket_p
     if validate_snapshot(candidate) != snapshot or _digest(candidate / "snapshot.json") != evidence["snapshot_sha256"]:
         raise BootstrapError("candidate changed during launch")
 
-    # Keep imports for these modules inside this exact validated byte set.
-    module_names = ("device_runtime", "device_runtime.management_lock", "device_runtime.native_helper")
-    previous = {name: sys.modules.get(name) for name in module_names}
-    try:
-        for name, qualified in zip(names, module_names, strict=True):
-            path, data = contents[name]
-            module = types.ModuleType(qualified)
-            module.__file__ = str(path)
-            module.__package__ = "device_runtime"
-            if name == "__init__":
-                module.__path__ = [str(path.parent)]
-            sys.modules[qualified] = module
-            exec(compile(data, str(path), "exec"), module.__dict__)  # noqa: S102
-        sys.modules["device_runtime.native_helper"].serve(registry, socket_path, group=group)
-    finally:
-        for name, module in previous.items():
-            if module is None:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = module
+    return contents
 
 
 def publish_managed_helper_candidate(registry, source, version):

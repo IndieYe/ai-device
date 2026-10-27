@@ -407,6 +407,15 @@ def test_verified_helper_candidate_executes_checked_bytes(runtime, monkeypatch):
         return result
 
     monkeypatch.setattr(bootstrap, "validate_snapshot", verify_and_replace)
+    capture = {}
+    verified_bytes = bootstrap._verified_helper_bytes
+
+    def capture_verified(*args):
+        contents = verified_bytes(*args)
+        capture.update(contents)
+        return contents
+
+    monkeypatch.setattr(bootstrap, "_verified_helper_bytes", capture_verified)
     original_package = sys.modules["device_runtime"]
     bootstrap.run_verified_helper_candidate(
         candidate.parent, "v1", registry="r", socket_path="s", group=7,
@@ -414,6 +423,8 @@ def test_verified_helper_candidate_executes_checked_bytes(runtime, monkeypatch):
     )
     assert sys.modules["device_runtime"] is original_package
     assert snapshot["inventory"] and calls == 2
+    assert capture["management_lock"][1] == b"value = 'checked'\n"
+    assert capture["management_lock"][0].read_bytes() == b"value = 'replaced'\n"
     assert real_sys is sys
 
 

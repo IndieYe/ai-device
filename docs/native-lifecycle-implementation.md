@@ -850,3 +850,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 102. 实际 bootstrap 字节交接设计和 flock 实验
 
 基于实际 `run_verified_helper_candidate`、`serve`、start/dispatch 代码，在 `native-helper-peer-protocol-review.md` 描述父校验内存字节、受控 fork、pidfd/消息身份、daemon 锁、外部连接及持久 intent 的拟议交接和明确验收门禁；尚未实现或独立评审。`scripts/probe-native-daemon-lock-handoff.py` 在隔离 Linux 6.18.15 amd64/Rosetta 验证：独立 open 冲突；父关闭后子继承 FD 保持排他 flock；子关闭后锁释放。`DAEMON_FLOCK_HANDOFF_OK`，日志 `20261027-202218-ee55c4.log`，ruff通过。未验证显式解锁、真实 daemon、systemd、崩溃或锁文件漂移；原生包保护和生产派发不变，P1未完成。
+
+
+## 103. 提取 bootstrap 已验证内存字节
+
+将 `run_verified_helper_candidate` 中独立 bootstrap 环境、snapshot 和候选模块字节检查提取为内部 `_verified_helper_bytes`；原入口仍在同一进程调用它、从返回字节创建模块并执行原有 `serve`，未新增公开执行入口、fork 或派发授权。扩展既有漂移回归，在最终检查后替换候选路径，断言返回内存字节仍为已验证原值、路径为替换值且执行仍使用原值。bootstrap测试33通过；Device完整回归1037通过3跳过（日志 `20261027-202402-576004.log`），ruff通过。此改动仅建立内部校验边界，不证明运行进程身份或跨崩溃事务；`_require_proven_job_fence` 仍无条件拒绝，P1未完成。实际候选的独立bootstrap/systemd动态回归本轮未做。
