@@ -2,6 +2,7 @@ import json
 import os
 import stat
 import subprocess
+import sys
 from contextlib import contextmanager
 
 import pytest
@@ -135,6 +136,51 @@ def test_apply_intent_fsync_failure_never_calls_package_manager(update, monkeypa
         observation = manager.apply("probe", "one")
         assert observation["apply_intent"] is not None and observation["outcome"] is None
         assert len(prepared) == 1 and packages.calls == 0
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork")
+def test_apply_process_exit_after_durable_intent_does_not_replay(update, monkeypatch):
+    if os.environ.get("DEVICE_CRASH_TEST_CHILD") != "1":
+        env = {**os.environ, "DEVICE_CRASH_TEST_CHILD": "1"}
+        subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", f"{__file__}::test_apply_process_exit_after_durable_intent_does_not_replay"],
+            check=True, timeout=30, env=env,
+        )
+        return
+    manager, packages, _, package = update
+    manager.prepare("probe", "two", package, sha256=nh._digest(package), version="2")
+    second = manager.registry / "updates/5-probe--two.prepared.json"
+    manager.approve("probe", "two", prepared_sha256=nh._digest(second))
+    parent_pid = os.getpid()
+    original_atomic = nu._atomic
+    package_marker = manager.registry / "unexpected-package-apply"
+
+    def save_and_exit(path, value):
+        original_atomic(path, value)
+        if os.getpid() != parent_pid and path.name.endswith(".apply-intent.json"):
+            os._exit(73)
+
+    def unexpected_apply(*args, **kwargs):
+        package_marker.write_text("called")
+        raise AssertionError("package manager must not execute")
+
+    monkeypatch.setattr(nu, "_atomic", save_and_exit)
+    monkeypatch.setattr(packages, "apply", unexpected_apply)
+    child = os.fork()
+    if child == 0:
+        try:
+            manager.apply("probe", "one")
+        finally:
+            os._exit(74)
+    _, status = os.waitpid(child, 0)
+    assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 73
+    assert (manager.registry / "updates/5-probe--one.apply-intent.json").exists()
+    assert not package_marker.exists()
+    observation = manager.apply("probe", "one")
+    assert observation["apply_intent"] is not None and observation["outcome"] is None
+    with pytest.raises(nu.UpdateError, match="existing package"):
+        manager.apply("probe", "two")
+    assert not package_marker.exists()
 
 
 def test_apply_and_same_id_no_replay(update):

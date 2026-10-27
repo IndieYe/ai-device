@@ -3,6 +3,7 @@ import json
 import os
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -227,6 +228,48 @@ def test_start_intent_fsync_failure_never_calls_sender(helper, monkeypatch, fail
         with pytest.raises(nh.HelperError, match="unconfirmed operation"):
             service.handle(req("start", "two"), peer_uid=record["uid"])
         assert not any(action == "start" for action, _ in adapter.calls)
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork")
+def test_start_process_exit_after_durable_intent_does_not_replay(helper, monkeypatch):
+    if os.environ.get("DEVICE_CRASH_TEST_CHILD") != "1":
+        env = {**os.environ, "DEVICE_CRASH_TEST_CHILD": "1"}
+        subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", f"{__file__}::test_start_process_exit_after_durable_intent_does_not_replay"],
+            check=True, timeout=30, env=env,
+        )
+        return
+    service, adapter, record = helper
+    parent_pid = os.getpid()
+    original_save = nh._save_new
+    sender_marker = service.registry / "unexpected-sender"
+
+    def save_and_exit(path, value, **kwargs):
+        original_save(path, value, **kwargs)
+        if os.getpid() != parent_pid and path.name == "op-probe-one.json":
+            os._exit(73)
+
+    def unexpected_sender(*args, **kwargs):
+        sender_marker.write_text("called")
+        raise AssertionError("sender must not execute")
+
+    monkeypatch.setattr(nh, "_save_new", save_and_exit)
+    monkeypatch.setattr(adapter, "start", unexpected_sender)
+    child = os.fork()
+    if child == 0:
+        try:
+            service.handle(req("start"), peer_uid=record["uid"])
+        finally:
+            os._exit(74)
+    _, status = os.waitpid(child, 0)
+    assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 73
+    assert (service.registry / "op-probe-one.json").exists()
+    assert not sender_marker.exists()
+    result = service.handle(req("start"), peer_uid=record["uid"])
+    assert result["result"]["state"] == "unknown" and result["replayed"] is False
+    with pytest.raises(nh.HelperError, match="unconfirmed operation"):
+        service.handle(req("start", "two"), peer_uid=record["uid"])
+    assert not sender_marker.exists()
 
 
 def test_start_idempotency(helper):

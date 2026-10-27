@@ -940,3 +940,10 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 一次性无网络 Linux 容器运行 `probe-native-pidfd-check-race.py`：持 daemon 双锁的子先通过父 pidfd 活性检查；观察者随后令父退出并确认回收，再允许子写入模拟动作的管道标记。该时刻父 pidfd 已可读但标记仍成功，输出 `PIDFD_CHECK_THEN_ACTION_RACE_CONFIRMED`，日志 `20261027-212744-292f64.log`；脚本 ruff通过。
 
 该探针未触发任何真实外部动作；说明活性检查与后续动作非原子，不证明生产路径具体会这样执行。已开始动作的意图持久化、异常、unknown 与显式恢复仍需整体协议，不得仅靠一次 pidfd 检查授权。派发保持关闭。
+
+
+## 117. intent 持久化后外部动作之前的进程退出
+
+在独立 pytest 进程内 fork，分别让 start、apply、dormant job 的子进程在真实 `_save_new` 完成文件与目录 fsync 后、外部动作之前 `os._exit`。父进程确认 intent 仍可见且 sender/包管理器/runner 替身未调用，原 ID 不重放；start 和 apply 的新 ID 被未确认事务阻塞。job gate 仅在测试中替换，生产仍默认拒绝。针对性193通过，ruff通过，完整1052通过3跳过（`20261027-213220-dcd223.log`）。首次完整运行有多线程 fork 警告；改为独立 pytest 子进程后重跑无该警告。
+
+这是本机文件系统上的进程退出测试，不是宿主断电、文件系统持久性承诺、真实 systemd/dpkg/生产监督或全参与者测试；apply 与 job 使用部分替身，不能证明真实外部动作完整闭环。进程退出发生于 intent 成功返回后，并不覆盖成功前掉电或动作已发生后的结果丢失。生产派发仍关闭。
