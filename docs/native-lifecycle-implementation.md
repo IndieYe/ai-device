@@ -763,3 +763,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 85. socket peer 观察作用域
 
 新增 `scoped_helper_unit_peer`：在 socket 的 SO_PEERPIDFD 仍持有期间读取固定 helper systemd unit，要求 MainPID 与实际 peer 一致；作用域正常退出时再次读取并要求整个 unit 观察相同，pidfd 退出检查及关闭由内层作用域完成。调用异常时仍关闭 pidfd；测试覆盖调用期间 InvocationID 漂移和异常清理。原 `observe_helper_unit_peer` 改为复用该作用域，保持原只读返回契约。该能力只供只读观察：退出时才检测到漂移，不可在作用域内提交不可逆动作；也不证明运行代码、启动器来源、阻止重启或授权派发。相关153项、完整1027项通过、3项跳过，ruff 和 diff 检查通过；本节仅单元测试，未在真实systemd验证新作用域。生产派发保持关闭。
+
+
+## 86. 真实候选 daemon 的 peer 作用域重启实验
+
+一次性无网络 amd64 Linux systemd 容器使用锁定 CPython 和当前 `2e843f7` 源码构建独立候选，快照 SHA256 `24828d48bcb1d9e07daf9a1ebe4c3782639462eca426200faac214d7fbbb90cf`，helper SHA256 `1430db765effeb7d5eb90d41f691ed1c7300d3bd57c7ac2abcca5094e5e644b9`。以真实候选 daemon 和固定测试 unit 建立 Unix socket，`scoped_helper_unit_peer` 对真实 SO_PEERPIDFD/systemd 状态正常通过；作用域内只停止并重启此隔离测试 unit，显式恢复遗留 socket，旧作用域因 unit invocation 改变而拒绝，新连接则取得不同 PID 并通过。实验确认进程身份漂移能被只读观察发现，不证明已加载源码、自举信任、不可逆动作内的互斥或生产派发安全。关机请求超时后再次正常关机，确认一次性实例不存在；未操作真实设备。
