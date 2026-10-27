@@ -262,3 +262,34 @@ def publish_managed_helper_candidate(registry, source, version):
         if read_helper_candidate(candidates, version) != result:
             raise BootstrapError("candidate publication verification differs")
         return result
+
+
+def inspect_helper_transition(registry, unit_dir, version):
+    """Read-only evidence for review, not permission to replace or restart a helper."""
+    if sys.platform != "linux" or os.geteuid() != 0:
+        raise BootstrapError("Linux administrator required")
+    registry, unit_dir = map(helper._path, (registry, unit_dir))
+    helper._trusted(registry, directory=True)
+    helper._trusted(unit_dir, directory=True)
+    candidates = registry / "bootstrap-candidates"
+    unit = unit_dir / "ai-device-native-helper.service"
+    with helper.package_lease(registry, exclusive=True, existing=True):
+        helper._trusted(unit)
+        before = _digest(unit)
+        candidate = read_helper_candidate(candidates, version)
+        candidate_path = candidates / version / "candidate.json"
+        candidate_digest = _digest(candidate_path)
+        # Do not infer process state or protocol compatibility from unit content.
+        if _digest(unit) != before:
+            raise BootstrapError("helper unit changed during observation")
+        return {
+            "state": "helper_transition_observed_not_authorized",
+            "unit": str(unit),
+            "unit_sha256": before,
+            "candidate_version": version,
+            "candidate_sha256": candidate_digest,
+            "snapshot_sha256": candidate["snapshot_sha256"],
+            "process_quiescence_verified": False,
+            "protocol_compatibility_verified": False,
+            "switch_allowed": False,
+        }

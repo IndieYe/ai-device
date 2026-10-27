@@ -324,3 +324,40 @@ def test_managed_candidate_refuses_busy_lock(runtime):
     ):
         bootstrap.publish_managed_helper_candidate(registry, source, "v1")
     assert not (registry / "bootstrap-candidates/v1").exists()
+
+
+def test_transition_observation_is_read_only_and_refuses_drift(runtime, monkeypatch):
+
+    source, destination = runtime
+    module = source / "lib/python3.13/site-packages/device_runtime/native_helper.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("# fixture")
+    registry = destination.parent
+    candidates = registry / "bootstrap-candidates"
+    candidates.mkdir()
+    unit_dir = registry / "systemd"
+    unit_dir.mkdir()
+    unit = unit_dir / "ai-device-native-helper.service"
+    unit.write_text("old helper unit")
+    monkeypatch.setattr(
+        bootstrap,
+        "inspect_helper_candidate",
+        lambda candidate: {
+            "snapshot_sha256": bootstrap._digest(candidate / "snapshot.json"),
+            "helper_sha256": bootstrap._digest(
+                candidate / "runtime/lib/python3.13/site-packages/device_runtime/native_helper.py"
+            ),
+        },
+    )
+    bootstrap.publish_helper_candidate(source, candidates, "v1")
+    with bootstrap.helper.package_lease(registry, exclusive=True):
+        pass
+    before = unit.read_bytes()
+    result = bootstrap.inspect_helper_transition(registry, unit_dir, "v1")
+    assert result["unit_sha256"] == bootstrap._digest(unit)
+    assert not result["switch_allowed"] and not result["process_quiescence_verified"]
+    assert not result["protocol_compatibility_verified"] and unit.read_bytes() == before
+    (candidates / "v1/candidate.json").write_text("{}")
+    with pytest.raises(bootstrap.BootstrapError, match="evidence differs"):
+        bootstrap.inspect_helper_transition(registry, unit_dir, "v1")
+    assert unit.read_bytes() == before

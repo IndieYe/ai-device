@@ -584,3 +584,7 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 46. 管理目录受锁候选发布与只读重验
 
 新增publish_managed_helper_candidate，要求预先存在可信manager/bootstrap-candidates目录，由入口持全局包EX锁执行候选发布并复核；低层发布仍要求调用者持锁。新增read_helper_candidate，不执行候选代码，重新校验快照与版本、来源、helper摘要、未激活记录。锁占用拒绝且不创建候选；证据或快照漂移拒绝。定向20通过；v27 wheel在一次性隔离Linux实测包锁占用拒绝、受锁发布和只读重验成功。未跑本轮完整回归，未实现签名、稳定入口或旧helper切换，不启动服务。P1未完成。
+
+## 47. 重启后回归与helper切换只读观察
+
+用户完成外部安全重启后只读核实宿主服务running、唯一execution和工作区b2b2a2b干净；先前受锁候选发布完整回归976 passed/3 skipped（43.09s）。新增inspect_helper_transition，在已有包EX锁下重验已发布候选、读取现有helper unit摘要并复核unit未变，返回候选/快照摘要；明确switch_allowed=false、未验证进程静止及协议兼容，不改unit、不重启/启动服务、不授权切换。fixture测试证据漂移拒绝和unit不变；新增后完整977 passed/3 skipped（42.36s）。尚无稳定入口、旧helper安全迁移、签名或实际服务切换验证，P1未完成。
