@@ -1563,3 +1563,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 `probe-native-request-credential-transfer.py` 在无网络一次性 Linux 容器中创建 Unix listener，root 连接后 fork 并使子进程降权至 UID/GID 12345，子进程使用继承的连接 FD 发送请求。服务端 `SO_PEERCRED` 仍是 root 连接创建者；启用 `SO_PASSCRED` 的 `recvmsg` 得到子进程实际 PID/UID/GID（`20261028-034855-407d7e.log`）。先前 socketpair 形式亦通过，但正式证据以 listener/connect 为准。脚本限 root Linux PID1 和特定测试环境变量，运行后 `--rm`，不启动 helper、systemd 或 Device。
 
 反例依赖主动继承 FD，不证明真实客户端会跨身份转交，也不证明现有生产普通动作漏洞。它明确未来 root-only 交接不能单独把连接级 peer UID 当成每条消息发送者或实际执行者；逐消息凭据、分帧、可转交连接能力和 handler/invocation 绑定须另行设计。未修改生产认证、新派发或恢复门禁；无新包、无真实设备操作。
+
+
+## 200. 逐段发送者凭据及单帧候选隔离验证
+
+新增未接入产品的 `scripts/probe-native-request-frame-credentials.py`。Linux 一次性容器的 Unix stream 接收端在发送前启用 `SO_PASSCRED`，每次 `recvmsg` 要求唯一完整 `SCM_CREDENTIALS`、相同 PID/UID/GID 且 UID 0，限定单个换行帧和最大长度。通过真实 socket 及 fork fixture 验证同一 root 发送者分段可接收；中途降权、非 root、超长、同次读取多帧及断连未完成均拒绝。模拟缺失/畸形/截断控制信息均拒绝；真实 `SCM_RIGHTS` 注入拒绝且检查已接收的 FD 未泄漏（`20261028-035229-0fac9c.log`），ruff 通过。
+
+这是受控接收端实验，不是生产接口、端到端授权或身份认证完成。实验用 socketpair；上一节真实 listener/connect 仅验证连接创建者与发送者差异。生产设计还需验证监听启用时机、超时、分帧与 JSON、发送进程存活及 PID 复用、受控 handler 代码/动作和 systemd invocation 与 worker/外部工作终态；凭据不证明执行者或持久性。异常 SCM 权限和其他内核版本未全面验证。本轮未重跑完整回归、未构建新包，生产派发/恢复/包保护门禁不变。
