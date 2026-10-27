@@ -1158,3 +1158,12 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 `Updates._prepared` 曾只校验批准回执中的 prepared 摘要，缺 UID、布尔 UID 或多余字段可进入包动作；非对象则产生未预期的 AttributeError。通过实际 `Updates.apply` 和替身包管理器先复现四例，再统一采用类型敏感的精确管理员批准回执校验，覆盖批准重入、prepare 消费、job 描述/观察及关闭。畸形首次记录在 apply intent 和包动作之前拒绝；已执行后批准漂移时 apply/reconcile/recover 和重复 approve 拒绝，包次数不增、原证据字节与文件集合不变。旧意图不自动迁移或改写。
 
 完整 Device 测试 1118 通过、4 跳过；ruff、diff 检查通过。使用本地 fixture，不代表生产包事务或外部认证测试；正式签名、批准策略、受控监督和生产派发门禁仍未完成。旧 b4158df DEB 与冻结 snapshot 不含第143—145节代码修复，新 DEB/RPM 尚未构建或验收。
+
+
+## 146. 46c2f06 准确离线 DEB 与隔离 systemd
+
+干净提交 `46c2f06b92d14afc8ad1ca75eb6e3724e893e910` 用 `uv build --offline --wheel --all-packages` 生成 `build/native-wheels-p1-46c2f06/`。Device wheel SHA256 `9cec69887c3d43c134a4b219ef456348ca56b4bbb2485a8334ee3e4a50ac1eea`、Bash `aee883b74bb2fc816abb77ba428ed4339c6901726a9ac3098a3ba8737fa16dd3`、FS `b872aa775eaacc9836c0ec94a2abf1e41c8395ef725eecb37d05b521053ab626`；Device 六个关键模块逐字节匹配冻结 Git，metadata 声明 Python ≥3.13 和 native 依赖。`build/native-payload-p1-46c2f06/build-inputs.json` 记录来源、wheel 和锁定 uv，标记 unsigned development build。一次性离线 Linux 容器构建 `build/native-packages-p1-46c2f06/ai-device-native-client_0.2.2-1_amd64.deb`，109815240 字节，SHA256 `be58c0e5fcecc6f468a62aa5b01cfa588361049a9057c3915eedc08dfe13f6d8`；不发布、不覆盖旧制品。
+
+`accept-native-46c2f06-deb.sh` 在一次性无网络容器核对 Hash、干净 dpkg 安装、包内六模块及独立 bootstrap 四模块与冻结源码一致；独立解释器从包内导入，对批准和退休类型漂移进行替身 fixture、默认派发门禁与原覆盖保护检查通过，日志 `20261027-234333-aef3a0.log`。真实隔离 systemd 基线普通 UID12345、稳定 PID、非 owner 拒绝通过，日志 `20261027-234412-76f8de.log`。另一次真实隔离 systemd job 先确认生产门禁拒绝、runner 0 且无 intent，再由测试进程替换门禁；worker 遭原包 preinst 拒绝，missing sender 阻恢复、显式对账幂等、只派发一次、围栏保留且 active 不变，日志 `20261027-234506-3d6b30.log`。两 systemd 测试容器已正常退出。
+
+上述证据不证明生产监督、消息处理者或 invocation 绑定、成功升级、宿主重启、真实设备或正式签名。新 RPM 未构建；本次无网络隔离镜像确认缺少 rpmbuild，不以旧 RPM 代替。
