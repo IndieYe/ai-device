@@ -644,3 +644,7 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 60. v24 RPM隔离运行时链接与模块导入
 
 一次性Rocky Linux 9 x86_64容器无`--nodeps`安装摘要为`da2731ad27205ab25918740f41c2fd8725fab9550229cf62207694267fb0361b`的v24开发RPM。包内client Python导入ssl、sqlite3、ctypes、zlib、cryptography、zstandard并完成Ed25519测试签名；独立bootstrap Python导入上述标准库及native_helper成功。对两个运行时目录内普通文件名匹配`*.so`或`*.so.*`逐个运行ldd，未报告`not found`（非动态对象的ldd错误被忽略）。该证据仅覆盖上述导入与扫描，未证明所有可执行文件、延迟加载、目标实机或完整依赖闭包；制品仍是旧v17 payload，不是最新源码发行。旧helper迁移仍缺，新job派发关闭，原包保护不变，未操作真实设备。
+
+## 61. 当前源码隔离DEB开发制品
+
+以干净提交`9debfb6c6d94ac6bdc7162fe1df496e094db1e50`离线构建三组件wheel，用现有v17锁定依赖与uv组装payload，再在一次性amd64 Linux容器使用锁定CPython构建未签名DEB：`build/native-packages-current-9debfb6/ai-device-native-client_0.2.2-1_amd64.deb`，109766104字节，SHA256 `9b37b30b0f915bcbd15dd8d2475559d2e98648438e1ca5f98d4fb63bcab9d00c`。payload记录基线提交及wheel摘要，device wheel SHA256 `92130ff7ee0f17c24e0805efd80074b2db9a19bdddc7deef6c83713be340985f`。另一隔离容器fresh安装成功；包内native_helper与native_update_job字节与构建时源码相同，派发门禁仍拒绝。存在布局时重复安装失败，但实验输出未确认失败原因，不能将其单独作为钩子保护通过的证据。未构建新RPM、未签名发布或验证完整升级；旧helper跨重启迁移仍缺，原包保护未放宽，未操作真实设备。
