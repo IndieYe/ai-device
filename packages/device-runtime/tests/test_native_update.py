@@ -183,6 +183,49 @@ def test_apply_process_exit_after_durable_intent_does_not_replay(update, monkeyp
     assert not package_marker.exists()
 
 
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork")
+def test_apply_process_exit_after_package_action_begins_stays_unknown(update, monkeypatch):
+    if os.environ.get("DEVICE_CRASH_TEST_CHILD") != "1":
+        env = {**os.environ, "DEVICE_CRASH_TEST_CHILD": "1"}
+        subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", f"{__file__}::test_apply_process_exit_after_package_action_begins_stays_unknown"],
+            check=True, timeout=30, env=env,
+        )
+        return
+    manager, packages, _, package = update
+    manager.prepare("probe", "two", package, sha256=nh._digest(package), version="2")
+    second = manager.registry / "updates/5-probe--two.prepared.json"
+    manager.approve("probe", "two", prepared_sha256=nh._digest(second))
+    marker = manager.registry / "package-started-test-marker"
+    parent_pid = os.getpid()
+
+    def apply_then_exit(*args, **kwargs):
+        if os.getpid() == parent_pid:
+            raise AssertionError("unknown operation must not replay")
+        marker.write_text("started")
+        os._exit(73)
+
+    monkeypatch.setattr(packages, "apply", apply_then_exit)
+    child = os.fork()
+    if child == 0:
+        try:
+            manager.apply("probe", "one")
+        finally:
+            os._exit(74)
+    _, status = os.waitpid(child, 0)
+    assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 73
+    assert marker.read_text() == "started"
+    stem = manager.registry / "updates/5-probe--one"
+    assert stem.with_suffix(".apply-intent.json").exists()
+    assert not stem.with_suffix(".outcome.json").exists()
+    assert not stem.with_suffix(".sender.json").exists()
+    observation = manager.apply("probe", "one")
+    assert observation["apply_intent"] is not None and observation["outcome"] is None
+    with pytest.raises(nu.UpdateError, match="existing package"):
+        manager.apply("probe", "two")
+    assert marker.read_text() == "started"
+
+
 def test_apply_and_same_id_no_replay(update):
     manager, packages, helper, _ = update
     old = (helper.root / "active.json").read_bytes()

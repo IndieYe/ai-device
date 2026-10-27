@@ -307,6 +307,74 @@ def test_recorded_dispatch_rejects_identity_or_evidence_drift(transaction, monke
     assert path.read_bytes() == before and not calls
 
 
+def test_dispatch_process_exit_after_runner_begins_stays_recorded(transaction, monkeypatch):
+    import os
+    import subprocess
+    import sys
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from device_runtime import native_update as update
+
+    if not hasattr(os, "fork"):
+        pytest.skip("requires fork")
+    if os.environ.get("DEVICE_CRASH_TEST_CHILD") != "1":
+        env = {**os.environ, "DEVICE_CRASH_TEST_CHILD": "1"}
+        subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", f"{__file__}::test_dispatch_process_exit_after_runner_begins_stays_recorded"],
+            check=True, timeout=30, env=env,
+        )
+        return
+    monkeypatch.setattr(job.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(job, "_require_proven_job_fence", lambda: None)
+    transaction.with_suffix(".apply-intent.json").unlink()
+    monkeypatch.setattr(job.bootstrap, "snapshot_runtime", lambda *args: {})
+    original_digest = job.helper._digest
+
+    def digest(path):
+        if path.name in ("native_update.py", "native_update_job.py", "native_helper.py"):
+            return "same-worker-bytes"
+        return original_digest(path)
+
+    @contextmanager
+    def txn(*args):
+        yield {}, transaction
+
+    @contextmanager
+    def lease(*args):
+        yield
+
+    monkeypatch.setattr(job.helper, "_digest", digest)
+    manager = SimpleNamespace(
+        packages=update.Debian(), registry=transaction.parent.parent,
+        _transaction=txn, _prepared=lambda *args: {}, _apply_lease=lease,
+    )
+    marker = transaction.parent / "runner-started-test-marker"
+    parent_pid = os.getpid()
+
+    def runner_then_exit(*args, **kwargs):
+        if os.getpid() == parent_pid:
+            raise AssertionError("recorded job must not replay")
+        marker.write_text("started")
+        os._exit(73)
+
+    child = os.fork()
+    if child == 0:
+        try:
+            job.dispatch_job(manager, "probe", "one", runner=runner_then_exit)
+        finally:
+            os._exit(74)
+    _, status = os.waitpid(child, 0)
+    assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 73
+    assert marker.read_text() == "started"
+    assert transaction.with_suffix(".job-intent.json").exists()
+    assert not transaction.with_suffix(".job-dispatch.json").exists()
+    result = job.dispatch_job(manager, "probe", "one", runner=runner_then_exit)
+    assert result["state"] == "dispatch_already_recorded" and result["replayed"] is False
+    assert marker.read_text() == "started"
+
+
 def test_dispatch_rejected_by_real_shared_start_sender_lock(transaction, monkeypatch):
     from contextlib import contextmanager
     from types import SimpleNamespace

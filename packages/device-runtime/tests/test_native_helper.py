@@ -272,6 +272,45 @@ def test_start_process_exit_after_durable_intent_does_not_replay(helper, monkeyp
     assert not sender_marker.exists()
 
 
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork")
+def test_start_process_exit_after_sender_begins_stays_unknown(helper, monkeypatch):
+    if os.environ.get("DEVICE_CRASH_TEST_CHILD") != "1":
+        env = {**os.environ, "DEVICE_CRASH_TEST_CHILD": "1"}
+        subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", f"{__file__}::test_start_process_exit_after_sender_begins_stays_unknown"],
+            check=True, timeout=30, env=env,
+        )
+        return
+    service, adapter, record = helper
+    marker = service.registry / "sender-started-test-marker"
+    parent_pid = os.getpid()
+
+    def start_then_exit(*args, **kwargs):
+        if os.getpid() == parent_pid:
+            raise AssertionError("unknown operation must not replay")
+        marker.write_text("started")
+        os._exit(73)
+
+    monkeypatch.setattr(adapter, "start", start_then_exit)
+    child = os.fork()
+    if child == 0:
+        try:
+            service.handle(req("start"), peer_uid=record["uid"])
+        finally:
+            os._exit(74)
+    _, status = os.waitpid(child, 0)
+    assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 73
+    assert marker.read_text() == "started"
+    assert (service.registry / "op-probe-one.json").exists()
+    assert not (service.registry / "result-probe-one.json").exists()
+    assert not (service.registry / "sender-probe-one.json").exists()
+    result = service.handle(req("start"), peer_uid=record["uid"])
+    assert result["result"]["state"] == "unknown" and result["replayed"] is False
+    with pytest.raises(nh.HelperError, match="unconfirmed operation"):
+        service.handle(req("start", "two"), peer_uid=record["uid"])
+    assert marker.read_text() == "started"
+
+
 def test_start_idempotency(helper):
     service, adapter, record = helper
     result = service.handle(req("start"), peer_uid=record["uid"])

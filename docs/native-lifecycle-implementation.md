@@ -954,3 +954,10 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 `dispatch_job` 的已有 intent 分支在既有 `_prepared` 授权校验之后，验证 runtime snapshot，并逐字段精确比对 schema（严格整数）、state、close 协议、确定性 unit、instance/operation ID、prepared 与 snapshot 摘要；畸形、多字段、证据变化或快照验证失败均拒绝，不修改 intent、不调用 runner。准确记录仍可在生产新派发门禁关闭时只读返回 `dispatch_already_recorded`，不重派。新增12种字段/内容漂移负向用例；相关205项通过，ruff通过，完整1064通过3跳过（`20261027-213718-f18965.log`）。
 
 这是已记录路径的一致性检查，不是跨进程身份认证、持锁授权、恢复或新派发许可；快照不可用/漂移会拒绝观察分支，不能由此推断动作未执行或删除封锁。首次派发仍 default-deny。未构建新包或进行真实 systemd 验收；旧测试helper继续手动退休，不自动迁移。
+
+
+## 119. 外部动作已开始、结果未保存时的进程退出
+
+在独立 pytest 进程内使用 fork，让 start sender、apply 包操作与 dormant job runner 测试替身分别先写入已开始标记，再在进程内 `os._exit`，不产生结果或 sender 回执。父进程确认持久 intent 存在：start 返回 unknown、同 ID 不重放、新 ID 阻塞；apply 同 ID 只观察、无 outcome，新 ID 被未终态事务阻塞；job 返回已记录且不重派。job 的 default-deny 仅在测试中替换。针对性208项、ruff通过；完整1067通过3跳过，日志 `20261027-214219-dd9bf9.log`。
+
+此处“动作已开始”是写测试标记，不是真实 systemctl、dpkg 或 systemd-run；未验证真实后代存活、动作完成与回执丢失、systemd重启或宿主断电。unknown 必须保持封锁并经准确证据显式对账，不因本测试推定动作失败、已完成或可重试；生产派发仍关闭。
