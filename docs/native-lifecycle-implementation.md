@@ -1614,3 +1614,14 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 构建器不再用 CPython `-m pip` 安装 wheel；使用 payload 中已由 `tool-lock.json` 验证的 uv，空环境、独立临时 HOME/TMPDIR、`--offline --no-cache --no-config --system`，显式指定解压的 CPython、`--no-index --no-deps --link-mode copy` 与组件及依赖 wheel 列表。空环境避免 UV 变量和用户配置污染，不修改原有包 preflight/覆盖保护。README 与构建器约束测试同步；定向 14 通过（`20261028-042229-bb04af.log`），完整 1203 通过、16 跳过（`20261028-042242-209baf.log`），ruff 与 shell 语法通过。
 
 初版 uv 在隔离 Linux 离线试建成功（`20261028-042107-3a3873.log`），但该试包先于最终空环境修改且复用旧 payload，不是准确新提交制品。最终构建器的准确制品、安装落点、依赖和 helper 验收需在提交后单独验证；无 RPM 或真实宿主验收。
+
+
+## 207. 锁定 uv 构建的准确 DEB 隔离验收
+
+从干净提交 `0a348ec12c0ed8e7bc88b25e5eb5091af836640a` 用第206节最终构建器在无网络 amd64 Linux 容器离线构建未签名 DEB `build/native-packages-p1-0a348ec/ai-device-native-client_0.2.2-1_amd64.deb`，105251986 字节，SHA256 `f9bba80be6356441c1f8c3fcc7b9c1be36695e090c959ef09a8d7a15b1cb8f58`。Device wheel SHA256 `c94514170ce13a09488571b9ae5d9a1c11e1c434025c45f7eab9bc98e4677674`，34 个 Python 模块逐字节匹配提交；包构建使用 payload 锁定 uv，无 pip 调用（`20261028-042415-ff0a08.log`）。
+
+在独立无网络 systemd 容器干净安装该 DEB，包内 uv 检查指定 Python 3.13.17 环境的 17 包依赖兼容；普通用户安装实例，bootstrap/runtime helper 均与准确 wheel 匹配。真实 helper 对慢速未完成帧 5.008 秒拒绝，前后 query 成功；Device unit inactive/MainPID 0，原地覆盖拒绝且 helper 文件字节未变（`20261028-042516-deaf0e.log`，`scripts/accept-native-helper-deadline-0a348ec.sh`）。另在新的隔离容器使用惰性旧包和新包解包 fixture，核对关键模块字节，生产派发在 intent/runner 前拒绝、真实 systemd snapshot worker 不写 apply intent/sender/outcome 且 active 未变（`20261028-042547-1bbdeb.log`，`scripts/accept-native-worker-default-deny-0a348ec.sh`）。两容器已停止。
+
+这些证据不证明 RPM、真实宿主/设备、响应背压、受控动作身份、包更新与外部 job 终态或崩溃恢复；惰性旧包 fixture 不是实际升级。旧运行实例不自动更新，所有既定 default-deny 与包覆盖保护维持，P1 未完成。
+
+后续核查：上述三份工具输出文件在接续时已不可读（`20261028-073027-886d40.log`）；验收结果依据此前会话中实际返回的工具输出，本次未重跑，准确 DEB 摘要已重新核对。不要将日志文件名当作当前可读取的独立证据。
