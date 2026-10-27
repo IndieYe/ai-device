@@ -105,3 +105,6 @@
 
 
 隔离 `scripts/probe-native-daemon-parent-exit.py` 使用真实 `_daemon_lease`，父进程 fork 后以 `os._exit` 直接退出；观察者确认父已退出而子存活时独立租约仍被拒绝，子退出后可获得。输出 `DAEMON_PARENT_EXIT_WORKER_LEASE_OK`，日志 `20261027-212458-725f1d.log`。此实验没有 systemd、socket、已验证候选、pidfd 或身份握手，不证明监督器死亡时子进程可控退出；恰好表明父死亡本身不收口子进程及锁。
+
+
+`probe-native-daemon-pidfd-exit.py` 将父自身 pidfd 继承与真实 `_daemon_lease` 组合：子就绪并持锁后，父按控制消息退出；子等待 pidfd 可读并主动退出，之后独立完整租约可取得。一次性 Linux 容器输出 `PIDFD_PARENT_EXIT_DAEMON_LEASE_OK`，日志 `20261027-212613-22a6f9.log`。这是限定时序机制实验；父退出与子处理之间存在窗口，不保证进程挂起、阻塞、异常或已开始的不可逆动作被终止，不提供生产监督器、消息身份或 systemd 验收。

@@ -926,3 +926,10 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 `probe-native-daemon-parent-exit.py` 在一次性无网络 Linux 6.18 amd64/Rosetta 容器通过实际 `_daemon_lease` 取得双锁，父 fork 后 `os._exit`、不执行上下文清理。父确认退出而子仍存活时，独立完整租约仍拒绝；子退出后租约可取得。`DAEMON_PARENT_EXIT_WORKER_LEASE_OK`，日志 `20261027-212458-725f1d.log`，脚本 ruff通过。
 
 该实验只说明继承锁的内核行为；父死亡不会自动使持锁子退出，不验证 systemd、socket/peer、已校验候选、pidfd握手或生产监督和故障回收。仍须设计可信进程关系及故障关闭，不可用此反例开放派发。
+
+
+## 115. 父 pidfd 与实际 daemon 双锁的限定时序
+
+`probe-native-daemon-pidfd-exit.py` 在一次性无网络 Linux 6.18 amd64/Rosetta 容器中，让监督父持实际 `_daemon_lease` 并把自身 pidfd 随 fork 交给子。子就绪后父退出，子观察 pidfd 变为可读并主动退出；随后独立完整租约可取得。输出 `PIDFD_PARENT_EXIT_DAEMON_LEASE_OK`，日志 `20261027-212613-22a6f9.log`，脚本 ruff通过。
+
+仅证明该受控单次时序，不保证死亡即时可见、挂起/阻塞子进程退出、不可逆操作被取消或所有FD正确收口；不含真实 systemd、运行候选、socket处理者和事务。pidfd检查后仍存在死亡竞态，生产派发保持关闭。
