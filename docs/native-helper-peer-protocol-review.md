@@ -139,3 +139,10 @@
 `scripts/probe-native-pidfd-handshake.py` 在无网络一次性 Linux 6.18 amd64/Rosetta 容器中，用等待挑战的直接 fork 子进程获取 pidfd，父发送 32 字节随机挑战，子通过 SEQPACKET 回复有界记录；父按 SO_PASSCRED 校验实际发送 PID/UID、比较挑战，并在读取前后检查 pidfd。正常场景仅返回 `observed_not_authorized`；错误挑战、继承端点后代发送、子进程退出及有限等待超时均拒绝。`PIDFD_RECORD_HANDSHAKE_FIXTURE_OK`，日志 `20261027-221612-c43041.log`，ruff通过。
 
 这是隔离原型：挑战只关联本次握手，不证明候选代码、公开 socket 实际处理者或 systemd invocation；前后活性检查也不能消除检查后死亡及消息排队竞态。缺少生产父子启动、锁所有权与完整 FD 清理、事务和 unknown 对账；不接入现有 IPC，不开放派发。
+
+
+## 准确 DEB 候选字节与 pidfd 握手组合实验
+
+一次性无网络 Linux 6.18 amd64/Rosetta 容器安装第122节准确 `57714ae` DEB（SHA256 `b172b35a6882eb61b89b48dba4b27808f3bf6da1d06da8510cb31ca4f2e45d03`），未覆盖包内源码。独立 bootstrap 发布并验证候选字节后，实验篡改容器内候选路径；父持 daemon 双锁 fork 子进程，子以继承的验证字节加载三个候选模块，再对父随机挑战通过 SEQPACKET 发送 READY。父使用直接子 pidfd、SO_PASSCRED 的 PID/UID 和读取前后活性检查核对，并确认竞争 daemon 租约被拒绝；子正常退出后双锁释放。`VERIFIED_CANDIDATE_PIDFD_HANDSHAKE_FIXTURE_OK`，日志 `20261027-221821-c360ce.log`。
+
+这是单次受控机制实验：加载和握手代码为测试脚本，未调用生产 `_serve`、未绑定公开 socket 的实际处理者或 systemd invocation；不证明持锁期间其他继承者行为、父死亡竞态或事务 unknown 收敛。挑战不替代代码信任、持久 intent 和权限检查；不得据此开放派发。

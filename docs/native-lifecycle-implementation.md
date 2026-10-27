@@ -1026,3 +1026,10 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 `probe-native-pidfd-handshake.py` 在一次性无网络 Linux 6.18 amd64/Rosetta 容器组合直接子 pidfd、SEQPACKET/SO_PASSCRED、有界一次性挑战及读取前后活性检查。正常仅得 `observed_not_authorized`，错误挑战、后代冒用继承端点、子退出和有界超时均拒绝。`PIDFD_RECORD_HANDSHAKE_FIXTURE_OK`，日志 `20261027-221612-c43041.log`，ruff通过。
 
 挑战不证明加载代码或公开 socket 实际处理者；退出检查与后续动作非原子，也不处理 systemd invocation、生产双锁交接、消息重放持久状态或 unknown 恢复。仅为机制原型，不改变生产 IPC 或 default-deny。
+
+
+## 129. 准确 DEB 验证候选字节与直接子握手
+
+`accept-native-verified-handshake.sh` 在无网络一次性 Linux 6.18 amd64/Rosetta 容器安装第122节准确 `57714ae` 未签名 DEB（摘要 `b172b35a6882eb61b89b48dba4b27808f3bf6da1d06da8510cb31ca4f2e45d03`），无需覆盖源码。独立 bootstrap 发布并校验候选字节，随后测试性篡改候选路径；父持 daemon 双锁 fork，子从继承的验证字节加载候选并以 SEQPACKET 回应随机挑战。父核对直接子 pidfd、逐记录 PID/UID、活性和双锁互斥，子退出后释放租约。输出 `VERIFIED_CANDIDATE_PIDFD_HANDSHAKE_FIXTURE_OK`，日志 `20261027-221821-c360ce.log`；ruff与shell语法检查通过。
+
+实验代码不是生产监督器，未绑定公开 socket 实际处理者或 systemd invocation，未验证父死亡、持久事务及unknown；测试握手不得授权新 job 派发。未操作真实设备或服务。
