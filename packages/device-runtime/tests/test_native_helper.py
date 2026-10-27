@@ -1313,6 +1313,52 @@ def test_guard_missing_receipt_blocks_recovery(helper, action):
         service.handle(req("start", "bypass"), peer_uid=record["uid"])
 
 
+@pytest.mark.parametrize("action", ["resolve-running", "resolve-stopped"])
+@pytest.mark.parametrize("bad_code", ["missing", None, True, "0", 1.5, [], {}])
+def test_guard_malformed_returncode_blocks_recovery(helper, action, bad_code):
+    service, adapter, record = stopped_unknown(helper)
+    if action == "resolve-running":
+        adapter.override.clear()
+        adapter.active = "active"
+    path = service.registry / "sender-probe-one.json"
+    receipt = json.loads(path.read_text())
+    if bad_code == "missing":
+        receipt.pop("returncode")
+    else:
+        receipt["returncode"] = bad_code
+    path.write_text(json.dumps(receipt))
+    intent = (service.registry / "op-probe-one.json").read_bytes()
+    with pytest.raises(nh.HelperError, match="receipt mismatch"):
+        service.handle(req(action), peer_uid=record["uid"])
+    assert not (service.registry / "recovery-probe-one.json").exists()
+    assert (service.registry / "op-probe-one.json").read_bytes() == intent
+    with pytest.raises(nh.HelperError, match="unconfirmed"):
+        service.handle(req("start", "bypass"), peer_uid=record["uid"])
+
+
+@pytest.mark.parametrize("value", [None, [], "sender_reaped", 1])
+def test_guard_non_object_receipt_blocks_recovery(helper, value):
+    service, _adapter, record = stopped_unknown(helper)
+    (service.registry / "sender-probe-one.json").write_text(json.dumps(value))
+    with pytest.raises(nh.HelperError, match="receipt mismatch"):
+        service.handle(req("resolve-stopped"), peer_uid=record["uid"])
+    assert not (service.registry / "recovery-probe-one.json").exists()
+    with pytest.raises(nh.HelperError, match="unconfirmed"):
+        service.handle(req("start", "bypass"), peer_uid=record["uid"])
+
+
+@pytest.mark.parametrize("returncode", [-9, 1, 124])
+def test_guard_nonzero_integer_receipt_allows_only_observed_recovery(helper, returncode):
+    service, _adapter, record = stopped_unknown(helper)
+    path = service.registry / "sender-probe-one.json"
+    receipt = json.loads(path.read_text())
+    receipt["returncode"] = returncode
+    path.write_text(json.dumps(receipt))
+    result = service.handle(req("resolve-stopped"), peer_uid=record["uid"])
+    assert result["recovery"]["state"] == "confirmed_stopped"
+    assert result["recovery"]["start_replayed"] is False
+
+
 def test_guard_receipt_mismatch_refused(helper):
     service, _adapter, record = stopped_unknown(helper)
     path = service.registry / "sender-probe-one.json"

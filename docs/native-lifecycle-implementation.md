@@ -968,3 +968,10 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 无网络 Linux 6.18 amd64/Rosetta 一次性容器，用 SHA 校验旧 0dbcf8d DEB 并仅在容器覆盖当前 bootstrap/helper 模块；独立 bootstrap 发布及校验候选内存字节后篡改磁盘候选，父持 daemon 双锁 fork，子使用验证字节并直接调用内部 `_serve`。观察者确认 socket peer 为子、畸形请求拒绝、双锁阻止并发租约。父退出后，子内实验 watchdog 观察父 pidfd 并退出；观察者确认子退出、双锁释放、socket 文件保留且连接被拒绝。`VERIFIED_PARENT_EXIT_PIDFD_FIXTURE_OK`，日志 `20261027-214658-bd5b5d.log`；Python ruff及shell语法检查通过。
 
 仅为旧包加当前源码覆盖的单次机制实验，不是当前准确包、真实 systemd 或生产监督器；内部 `_serve` 绕过生产租约入口，watchdog 不证明处理者身份、无竞态或动作回收，残留 socket 不自动清理。生产派发仍关闭，未操作真实服务。
+
+
+## 121. unknown 恢复的 sender 回执格式校验
+
+start barrier 2 与 package apply 显式恢复共用 sender completion 校验：须为对象，state 为 `sender_reaped`、intent 精确一致，且 `returncode` 是整数（不接受 bool）。缺失、空值、字符串、浮点或非对象拒绝；不写恢复证据、不改原 intent，受影响的新事务继续阻塞。负数、非零与超时码均允许作为进程退出证据，但恢复仍依真实服务或包状态判断，不能把退出码视为成功或隐式重放。相关 guard 已写入整数 returncode；旧或损坏回执不自动补造、迁移或删除，需人工核查。原有 barrier 1 与新 job default-deny 未改变。
+
+测试覆盖 start 的运行/停止恢复、apply 恢复、错误返回码及非对象回执、原 intent 保留、新 ID 封锁、有效非零退出码和无重放；完整 1102通过3跳过、ruff通过（日志 `20261027-215138-6a9750.log`）。未重新构建包或在真实 systemd/dpkg 验收；不证明 sender 回执之外的崩溃或 peer 闭环。

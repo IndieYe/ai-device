@@ -135,6 +135,17 @@ def _pending_package_jobs(directory):
     return [path for path in Path(directory).glob("*.job-intent.json") if not _job_retired(path)]
 
 
+def _valid_sender_completion(receipt, intent):
+    # A reaped process may exit nonzero or via signal; the integer code is
+    # evidence of completion, not evidence that the requested action succeeded.
+    return (
+        isinstance(receipt, dict)
+        and receipt.get("state") == "sender_reaped"
+        and receipt.get("intent") == intent
+        and type(receipt.get("returncode")) is int
+    )
+
+
 def _read_start_recovery(path, intent):
     recovery = json.loads(path.read_text())
     if (
@@ -669,10 +680,7 @@ class Helper:
                             raise HelperError("sender completion receipt missing; remains unknown")
                         _trusted(receipt_path)
                         receipt = json.loads(receipt_path.read_text())
-                        if (
-                            receipt.get("state") != "sender_reaped"
-                            or receipt.get("intent") != expected
-                        ):
+                        if not _valid_sender_completion(receipt, expected):
                             raise HelperError("sender completion receipt mismatch; remains unknown")
                     if action == "resolve-stopped":
                         if expected.get("execution_barrier") != 2:

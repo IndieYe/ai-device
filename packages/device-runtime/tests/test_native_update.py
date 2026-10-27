@@ -253,6 +253,60 @@ def test_failed_or_lost_completion_recover_without_reapply(update, mode, state):
     assert packages.calls == 1
 
 
+@pytest.mark.parametrize("bad_code", ["missing", None, True, "0", 1.5, [], {}])
+def test_malformed_package_sender_returncode_blocks_recovery(update, bad_code):
+    manager, packages, _, package = update
+    packages.mode = "failure"
+    manager.apply("probe", "one")
+    stem = manager.registry / "updates/5-probe--one"
+    path = stem.with_suffix(".sender.json")
+    receipt = json.loads(path.read_text())
+    if bad_code == "missing":
+        receipt.pop("returncode")
+    else:
+        receipt["returncode"] = bad_code
+    path.write_text(json.dumps(receipt))
+    intent = stem.with_suffix(".apply-intent.json").read_bytes()
+    with pytest.raises(nu.UpdateError, match="matching package sender completion"):
+        manager.recover("probe", "one")
+    assert not stem.with_suffix(".recovery.json").exists()
+    assert stem.with_suffix(".apply-intent.json").read_bytes() == intent
+    manager.prepare("probe", "two", package, sha256=nh._digest(package), version="2")
+    prepared = manager.registry / "updates/5-probe--two.prepared.json"
+    manager.approve("probe", "two", prepared_sha256=nh._digest(prepared))
+    with pytest.raises(nu.UpdateError, match="existing package"):
+        manager.apply("probe", "two")
+    assert packages.calls == 1
+
+
+@pytest.mark.parametrize("value", [None, [], "sender_reaped", 1])
+def test_non_object_package_sender_receipt_blocks_recovery(update, value):
+    manager, packages, _, _ = update
+    packages.mode = "failure"
+    manager.apply("probe", "one")
+    stem = manager.registry / "updates/5-probe--one"
+    stem.with_suffix(".sender.json").write_text(json.dumps(value))
+    with pytest.raises(nu.UpdateError, match="matching package sender completion"):
+        manager.recover("probe", "one")
+    assert stem.with_suffix(".apply-intent.json").exists()
+    assert not stem.with_suffix(".recovery.json").exists()
+    assert packages.calls == 1
+
+
+@pytest.mark.parametrize("returncode", [-9, 1, 124])
+def test_nonzero_package_sender_receipt_uses_observed_package_state(update, returncode):
+    manager, packages, _, _ = update
+    packages.mode = "failure"
+    manager.apply("probe", "one")
+    path = manager.registry / "updates/5-probe--one.sender.json"
+    receipt = json.loads(path.read_text())
+    receipt["returncode"] = returncode
+    path.write_text(json.dumps(receipt))
+    result = manager.recover("probe", "one")
+    assert result["recovery"]["state"] == "source_package_observed_recovery_required"
+    assert result["recovery"]["reapplied"] is False and packages.calls == 1
+
+
 def test_sender_crash_no_receipt_stays_blocked(update):
     manager, packages, _, _ = update
     packages.mode = "crash"

@@ -578,7 +578,7 @@ class Updates:
                 sender = stem.with_suffix(".sender.json")
                 nh._trusted(sender)
                 completion = json.loads(sender.read_text())
-                if completion.get("state") != "sender_reaped" or completion.get("intent") != intent:
+                if not nh._valid_sender_completion(completion, intent):
                     raise UpdateError("matching package sender completion required")
                 installed = self.packages.installed(value["metadata"]["Package"])
                 if self._target(value, installed):
