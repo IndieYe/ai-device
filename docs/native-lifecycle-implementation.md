@@ -1639,3 +1639,12 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 对现有 `close_before_apply` 增补故障回归：首次 `_save_new` 已完成文件 fsync 和 hardlink，但父目录 fsync 注入失败，标记可见；重试时继续对目标目录的 fsync 注入失败，旧实现仍直接返回 `closed_before_apply`，测试先失败（`20261028-073746-21be63.log`）。这表明重试仅看见匹配字节不能确认首次目录同步成功，不表示实际掉电已发生。
 
 修复后，在原实例事务和 package EX 锁内，既有关闭标记通过类型敏感内容核对后再次 fsync 其父目录；同步失败传播异常，不覆盖标记或删除 intent；同步恢复时可返回原关闭结果。初次发布仍走原有文件 fsync、no-replace link、目录 fsync 路径。定向 145 通过（`20261028-073804-14db39.log`），完整 1204 通过、16 跳过（`20261028-073818-bf894a.log`），ruff 和 diff 检查通过。测试模拟文件系统错误，未模拟实际掉电或证明任意已存在文件的数据持久性；旧 snapshot 不自动获得修复。退休、worker、派发及恢复仍维持原有默认拒绝，不能据此释放围栏；真实受控身份、外部 job 和崩溃恢复仍未完成。
+
+
+## 210. 准确 DEB 的关闭重试故障验收
+
+从干净提交 `5728183ddb9c6640eb5c817a6bcbe118e65c3914` 用锁定 uv 和无网络 amd64 Linux 构建未签名 DEB `build/native-packages-p1-5728183/ai-device-native-client_0.2.2-1_amd64.deb`，105251468 字节，SHA256 `f53e4f3b03efc70ea6fdafe710ab44af7b1c8e8d95b82d1429310e37c8f0fca0`；Device wheel SHA256 `04535852600937c8c307553f12edb95de18a5791333c05811d1f5501edc867d1`，34 个 Python 模块匹配提交（`20261028-074022-66af5a.log`）。
+
+无网络隔离 systemd、惰性旧包夹具和新 DEB 解包环境中，包内 helper/update/job 模块匹配 wheel；生产 dispatch 在创建 intent 和 runner 前拒绝，真实 systemd snapshot worker 拒绝新动作且不写 apply intent。使用实际包内 `close_before_apply` 和 snapshot，注入目标目录 fsync 错误，初次发布及再次重试均抛错，不报告成功；恢复 fsync 后重试成功，原 job intent 和 active 字节不变，未写 apply intent（`20261028-074132-8260a7.log`，`scripts/accept-native-close-fsync-5728183.sh`）。一次性容器结束后已停止并删除，其他容器未动（`20261028-074156-4532ee.log`）。
+
+这不是干净安装、真实升级、实际掉电、可信运行身份或外部 job 终态证明；目录同步被故障注入，未验证硬件持久性。生产派发、退休、worker 和恢复门禁不变，旧 snapshot 不自动获得修复，P1 未完成。
