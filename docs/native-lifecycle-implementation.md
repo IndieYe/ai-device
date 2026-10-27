@@ -713,3 +713,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 75. helper 启动禁止写入新字节码
 
 发现第71节只在新 bootstrap 提取时排除缓存，但 systemd 单元和包内 helper 命令此前均用 `python -I -m`，运行时仍可能写入新缓存。两处入口均改为 `-I -B -m`，新增渲染和包入口回归，相关 helper/包保护/bootstrap 142 项通过，ruff 与 shell 语法检查通过。`-B` 不阻止读取已有缓存，仍须第70节候选门禁与干净制品；既有系统 unit 不会自动修改，不做真实服务变更。该修复不证明执行代码身份或持续互斥，派发仍默认关闭，原包保护不变。
+
+
+## 76. 隔离 systemd 跨进程包锁探测
+
+新增 `accept-native-systemd-package-lock.py`，仅允许显式 disposable 标记、Linux root 和 PID1 systemd。在一次性 amd64 systemd 容器以 transient service 真实持有 `package_lease`，分别验证共享锁阻挡其他进程独占锁、独占锁阻挡共享锁，持有方正常释放后对方可获得锁，脚本两方向通过。该实验不调用 job 派发、不启动 Device 服务、不验证持久意图或崩溃恢复，也不证明 helper 加载代码身份；不能作为完整 job/start 互斥验收或开放派发依据。容器正常关机请求超时，随后列表确认实例不存在。新 job 默认拒绝和包保护未更改。
