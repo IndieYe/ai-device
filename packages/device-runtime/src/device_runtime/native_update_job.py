@@ -90,7 +90,7 @@ def describe_job(stem):
 
 
 def _require_matching_worker_python_sources(snapshot_package, current_package):
-    """Compare local Python sources only; not runtime or third-party identity."""
+    """Compare local Python source and bytecode files, not their provenance."""
     def collect(root):
         root = Path(root)
         if root.is_symlink() or not root.is_dir():
@@ -101,12 +101,12 @@ def _require_matching_worker_python_sources(snapshot_package, current_package):
             raise error
 
         for base, directories, files in os.walk(root, followlinks=False, onerror=fail):
-            directories[:] = sorted(d for d in directories if d != "__pycache__")
+            directories[:] = sorted(directories)
             for directory in directories:
                 if (Path(base) / directory).is_symlink():
                     raise JobError("snapshot worker Python source tree contains symlink")
             for name in sorted(files):
-                if not name.endswith(".py"):
+                if not name.endswith((".py", ".pyc")):
                     continue
                 path = Path(base) / name
                 if path.is_symlink() or not path.is_file():

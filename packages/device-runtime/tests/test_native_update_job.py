@@ -704,7 +704,7 @@ def test_dispatch_refuses_drift_in_snapshot_management_lock_before_intent(transa
     assert not transaction.with_suffix(".job-dispatch.json").exists()
 
 
-@pytest.mark.parametrize("change", ["contents", "missing", "extra", "symlink", "nested-symlink"])
+@pytest.mark.parametrize("change", ["contents", "missing", "extra", "symlink", "nested-symlink", "pyc-contents", "pyc-extra", "pyc-missing", "pyc-symlink"])
 def test_worker_python_source_tree_rejects_drift(tmp_path, change):
     import shutil
 
@@ -712,6 +712,8 @@ def test_worker_python_source_tree_rejects_drift(tmp_path, change):
     current.mkdir()
     (current / "__init__.py").write_text("version = 1\n")
     (current / "guard.py").write_text("value = 1\n")
+    (current / "__pycache__").mkdir()
+    (current / "__pycache__" / "guard.pyc").write_bytes(b"bytecode")
     snapshot = tmp_path / "snapshot"
     shutil.copytree(current, snapshot)
     job._require_matching_worker_python_sources(snapshot, current)
@@ -724,13 +726,22 @@ def test_worker_python_source_tree_rejects_drift(tmp_path, change):
     elif change == "symlink":
         (snapshot / "guard.py").unlink()
         (snapshot / "guard.py").symlink_to("__init__.py")
-    else:
+    elif change == "nested-symlink":
         (snapshot / "nested").symlink_to(current, target_is_directory=True)
+    elif change == "pyc-contents":
+        (snapshot / "__pycache__" / "guard.pyc").write_bytes(b"other")
+    elif change == "pyc-extra":
+        (snapshot / "__pycache__" / "extra.pyc").write_bytes(b"other")
+    elif change == "pyc-missing":
+        (snapshot / "__pycache__" / "guard.pyc").unlink()
+    else:
+        (snapshot / "__pycache__" / "guard.pyc").unlink()
+        (snapshot / "__pycache__" / "guard.pyc").symlink_to("missing")
     with pytest.raises(job.JobError, match="snapshot worker Python source tree"):
         job._require_matching_worker_python_sources(snapshot, current)
 
 
-def test_worker_python_source_tree_ignores_bytecode_cache(tmp_path):
+def test_worker_python_source_tree_compares_bytecode_cache(tmp_path):
     import shutil
 
     current = tmp_path / "current"
@@ -740,8 +751,8 @@ def test_worker_python_source_tree_ignores_bytecode_cache(tmp_path):
     shutil.copytree(current, snapshot)
     (snapshot / "__pycache__").mkdir()
     (snapshot / "__pycache__" / "__init__.pyc").write_bytes(b"fixture")
-    job._require_matching_worker_python_sources(snapshot, current)
-
+    with pytest.raises(job.JobError, match="snapshot worker Python source tree differs"):
+        job._require_matching_worker_python_sources(snapshot, current)
 
 def test_dispatch_rejects_other_snapshot_source_drift_before_intent(transaction, monkeypatch):
     import shutil
@@ -757,7 +768,7 @@ def test_dispatch_rejects_other_snapshot_source_drift_before_intent(transaction,
     monkeypatch.setattr(job.bootstrap, "snapshot_runtime", lambda *args: {})
     transaction.with_suffix(".apply-intent.json").unlink()
     package = transaction.with_suffix(".bootstrap") / "runtime/lib/python3.13/site-packages/device_runtime"
-    shutil.copytree(Path(job.__file__).parent, package, ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copytree(Path(job.__file__).parent, package)
     (package / "native_candidate.py").write_text("# stale snapshot\n")
 
     @contextmanager
