@@ -718,3 +718,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 76. 隔离 systemd 跨进程包锁探测
 
 新增 `accept-native-systemd-package-lock.py`，仅允许显式 disposable 标记、Linux root 和 PID1 systemd。在一次性 amd64 systemd 容器以 transient service 真实持有 `package_lease`，分别验证共享锁阻挡其他进程独占锁、独占锁阻挡共享锁，持有方正常释放后对方可获得锁，脚本两方向通过。该实验不调用 job 派发、不启动 Device 服务、不验证持久意图或崩溃恢复，也不证明 helper 加载代码身份；不能作为完整 job/start 互斥验收或开放派发依据。容器正常关机请求超时，随后列表确认实例不存在。新 job 默认拒绝和包保护未更改。
+
+
+## 77. 生产派发拒绝与隔离失响应对账
+
+更新 `accept-native-update-job.sh`：先调用未修改的生产派发门禁，要求拒绝且不创建 job-intent、不调用 runner；随后仅在已通过 disposable/systemd/root 空环境门禁的脚本进程内，以明确标记的测试替身继续历史真实 systemd 故障实验，不改产品代码或授权。在一次性 amd64 systemd 容器，历史 DEB `9b37b30...` 作为包保护候选，client runtime 安装 `cc01329` 三 wheel，`lost-response` 模式通过：真实生产门禁先拒绝；测试替身后 systemd 派发响应被模拟丢失，同 ID 不重派，原包钩子拒绝覆盖，缺 sender 对账拒绝，补回后显式对账幂等，门禁保留、active 不变、Device 服务未启动。该证据不是当前HEAD制品、不是成功升级，也不证明实际运行 helper 身份或真实 helper start/job 竞争；测试替身不能授权开放生产派发。容器关机请求超时，列表确认实例不存在。原包保护不变，未操作真实设备服务。

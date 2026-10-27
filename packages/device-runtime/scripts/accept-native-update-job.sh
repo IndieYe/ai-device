@@ -70,6 +70,19 @@ def runner(argv,**kwargs):
  if mode=='lost-response':
   raise subprocess.TimeoutExpired(argv,30)
  return result
+# First test the unmodified production fence before any intent or runner call.
+try:
+ job.dispatch_job(manager,'probe','job-one',runner=runner)
+except job.JobError as error:
+ assert 'new dispatch disabled' in str(error),error
+else:
+ raise AssertionError('production dispatch fence unexpectedly allowed a new job')
+assert not stem.with_suffix('.job-intent.json').exists() and not calls
+print(json.dumps({'state':'production_dispatch_fence_refused','runner_calls':0,'intent_created':False}))
+# All remaining dispatch behavior is a deliberately isolated test substitute.
+# It is not evidence that production dispatch is authorized or safe to enable.
+job._require_proven_job_fence=lambda: None
+print(json.dumps({'state':'disposable_test_fence_substitute','production_dispatch_allowed':False}))
 first=job.dispatch_job(manager,'probe','job-one',runner=runner)
 assert first['state']==('dispatch_unknown' if mode=='lost-response' else 'dispatch_accepted'),first
 second=job.dispatch_job(manager,'probe','job-one')
