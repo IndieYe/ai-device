@@ -688,6 +688,31 @@ def test_daemon_lease_exposes_owned_descriptor_and_closes_it(recovery):
         pass
 
 
+def test_daemon_lease_rejects_replaced_path_during_lock(recovery, monkeypatch):
+    registry, _ = recovery
+    lock_path = registry / "helper-daemon.lock"
+    moved = registry / "retained-original.lock"
+    original_flock = nh.fcntl.flock
+
+    def replace_after_lock(fd, operation):
+        original_flock(fd, operation)
+        lock_path.rename(moved)
+        lock_path.write_bytes(b"")
+        lock_path.chmod(0o600)
+
+    monkeypatch.setattr(nh.fcntl, "flock", replace_after_lock)
+    with pytest.raises(nh.HelperError, match="path changed during acquisition"), nh._daemon_lease(registry):
+        pytest.fail("drifted lease entered")
+    assert moved.is_file() and lock_path.is_file()
+
+
+def test_daemon_lease_rejects_non_regular_lock(recovery):
+    registry, _ = recovery
+    (registry / "helper-daemon.lock").mkdir()
+    with pytest.raises(OSError), nh._daemon_lease(registry):
+        pytest.fail("directory lease entered")
+
+
 def test_recover_socket_requires_administrator(recovery, monkeypatch):
     monkeypatch.setattr(nh.os, "geteuid", lambda: 12345)
     with pytest.raises(nh.HelperError, match="administrator"):

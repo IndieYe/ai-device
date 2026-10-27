@@ -840,6 +840,21 @@ def _daemon_lease(registry):
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise HelperError("helper daemon or recovery is already active") from exc
+        # Verify the locked description is still the trusted path after locking.
+        # This detects acquisition-time drift, not later replacement or unlock.
+        try:
+            locked = os.fstat(fd)
+            current = path.lstat()
+            _trusted(path)
+        except OSError as exc:
+            raise HelperError("daemon lease path changed during acquisition") from exc
+        if (
+            not stat.S_ISREG(locked.st_mode)
+            or not stat.S_ISREG(current.st_mode)
+            or locked.st_mode & 0o022
+            or (locked.st_dev, locked.st_ino) != (current.st_dev, current.st_ino)
+        ):
+            raise HelperError("daemon lease path changed during acquisition")
         # The caller may retain this exact open-file description across fork.
         # An fd alone does not prove a live lock or authorize an operation.
         yield fd

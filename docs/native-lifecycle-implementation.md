@@ -874,3 +874,10 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 新增 `scripts/accept-native-verified-fork.sh`，在无网络一次性 Linux amd64/Rosetta 容器安装第104节 `0dbcf8d` DEB，再仅在容器内将当前 `e7d146a` 的四个源码模块覆盖到独立 bootstrap 并逐字节比较；这不是 `e7d146a` 的准确重建包。真实 bootstrap 发布并检查候选、调用 `_verified_helper_bytes` 后，在容器内把候选 helper 路径替换为立即失败的内容；父进程持真实 daemon 租约 fork 子进程，子进程仅执行继承的验证字节并临时调用内部 `_serve`。观察 socket peer 是子进程，畸形请求拒绝；父关闭租约后另一个租约被拒绝，终止仅本实验子进程并回收后 pidfd 表示退出、租约可重新获取。`VERIFIED_FORK_FIXTURE_OK`，日志 `20261027-203953-8d6757.log`，容器一次性退出。
 
 **限制**：脚本为机制试验，特意绕过生产 `serve` 锁包装，不是受控生产入口；没有启动握手、监督器死亡并存活子进程的交易故障处理、systemd invocation、所有 FD 清理、锁漂移或持久 intent/包事务验证。候选路径替换仅为容器内对照，不应在真实安装中使用。未开放派发、未验证 P1 完成。
+
+
+## 107. daemon 锁获取窗口漂移拒绝与剩余反例
+
+`_daemon_lease` 加锁后核对 fd 为非组/其他可写普通文件，当前可信路径同为普通文件且 dev/inode 与已锁 fd 一致；获取过程路径缺失或替换则拒绝进入租约。回归模拟 flock 后替换路径，验证拒绝；另覆盖锁路径为目录。相关测试151通过，完整Device回归1040通过3跳过，ruff通过。
+
+`scripts/probe-native-daemon-lock-drift.py` 在无网络一次性 Linux 容器故意在成功获取锁后重命名锁路径，再通过同一路径重新取得另一 inode 的锁，确实同时得到两把不同锁（`POST_ACQUISITION_SPLIT_REPRODUCED`，日志 `20261027-204550-302f47.log`）。这是可信管理员/系统误操作边界下的真实可靠性缺口，不通过该项修复宣称已解决；不得据此开放派发。运行期路径漂移处理、守护进程间相互隔离、受控启动与持久 intent 闭环仍待设计和验证。
