@@ -703,3 +703,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 73. 来源一致的隔离 DEB 干净安装
 
 从干净提交 `cc01329b2ebef33c4c5ffa23f39f0769ecd96e17` 离线构建 Device/Bash/FS wheel，分别 SHA256 `ed2f384155815d5454e18b954300e54d25de0225883c29b138a591f644e91f2a`、`aee883b74bb2fc816abb77ba428ed4339c6901726a9ac3098a3ba8737fa16dd3`、`b872aa775eaacc9836c0ec94a2abf1e41c8395ef725eecb37d05b521053ab626`；使用既有依赖、锁定 uv 和组装器创建 `build/native-payload-p1-cc01329`，核对 `build-inputs.json` 与 wheel 字节一致。一次性 amd64 Linux 容器离线构建 DEB（SHA256 `05eebe5104e31a146f43706df8a72e457b3bfe5208c3be332e31475bbb54618a`），空环境 dpkg 安装成功；bootstrap 无字节码缓存，helper 源码与当前源码逐字节一致，安装清单与输入清单一致，`-I -B` 导入模块路径正确。实验包留在一次性容器中，未签名未发布；未启动 daemon、不证明运行进程代码身份、systemd 重启或 job/start 互斥和故障恢复；RPM 和真实目标未验收。原包保护和新 job 默认拒绝不变。
+
+
+## 74. 实际 helper 的 systemd/peer 观察及磁盘漂移
+
+一次性 amd64 Linux systemd 容器使用锁定 CPython 及当前源码启动真正的 `native_helper serve`，不是第69节的 socket 替身。`Type=simple` 的首次观察在 socket 就绪前发生并报不存在；随后确认单元 active/running 且 socket 已建立，`observe_helper_unit_peer` 成功关联实际 peer 和 systemd MainPID/InvocationID，结果仍 `loaded_code_verified=false`、`dispatch_allowed=false`。仅在该容器追加修改启动后 helper 源码，观察仍明确不认证加载代码，证明不能把磁盘内容或进程匹配当作运行代码身份。未验证干净安装的包、真实 job/start、进程重启或完整绑定；未打开生产派发。实验容器正常关机命令超时，随后容器列表确认一次性实例不存在。未操作真实设备服务。
