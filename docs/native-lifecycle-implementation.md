@@ -881,3 +881,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 `_daemon_lease` 加锁后核对 fd 为非组/其他可写普通文件，当前可信路径同为普通文件且 dev/inode 与已锁 fd 一致；获取过程路径缺失或替换则拒绝进入租约。回归模拟 flock 后替换路径，验证拒绝；另覆盖锁路径为目录。相关测试151通过，完整Device回归1040通过3跳过，ruff通过。
 
 `scripts/probe-native-daemon-lock-drift.py` 在无网络一次性 Linux 容器故意在成功获取锁后重命名锁路径，再通过同一路径重新取得另一 inode 的锁，确实同时得到两把不同锁（`POST_ACQUISITION_SPLIT_REPRODUCED`，日志 `20261027-204550-302f47.log`）。这是可信管理员/系统误操作边界下的真实可靠性缺口，不通过该项修复宣称已解决；不得据此开放派发。运行期路径漂移处理、守护进程间相互隔离、受控启动与持久 intent 闭环仍待设计和验证。
+
+
+## 108. 目录锁锚点的隔离边界
+
+`scripts/probe-native-directory-anchor.py` 在无网络 Linux 6.18.15 amd64/Rosetta 容器验证：对 registry 目录 flock 后，仅替换目录内锁文件，另一次对同目录加锁仍冲突；但重命名整个 registry 并创建新目录后，两目录可分别独占加锁。`DIRECTORY_ANCHOR_PROBE_OK`，日志 `20261027-204946-4bce53.log`，ruff通过。目录锁不能消除目录或其祖先被替换、挂载变化及旧 helper 不参与的问题；未修改生产锁协议或派发。下一步需定义所有参与者共同遵循的部署/恢复稳定锚点与失败条件，不以此实验声称已解决 P1。
