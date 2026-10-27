@@ -484,3 +484,13 @@ Debian apply意图前准备副本，将snapshot.json摘要绑定意图；guard�
 新增native_update_job.describe_job仅返回静态描述和unit候选，不写systemd目录、不创建worker/launch gate、不启动。要求既有准确管理员批准、apply意图、有效独立快照及准确target全部匹配，unit名取canonical事务路径SHA256，固定root/oneshot/Restart=no/无限包事务超时，无Install段。描述明确staged_not_dispatchable、dispatch_allowed=false；ConditionPathExists默认不满足。4项回归验证幂等、无文件副作用及批准/目标/快照漂移拒绝；完整939 passed/3 skipped（46.54s）。
 
 检查实际接入依赖发现v15包仍不含最新native_update模块/原生验签依赖，不能把当前静态描述当作完整管理器job。排队锁交接与worker侧准确源/批准复核尚未实现；试写的job-intent启动阻断已撤回，现有行为不变。下一步先构建含最新模块、native依赖的完整离线运行时并验证快照内模块导入，再接一次性job意图与二次校验，最后隔离systemd动态验收。静态job描述不构成systemd运行证据或包许可；P1未完成。
+
+## 31. 完整离线管理运行时与native依赖前置
+
+以4f6af9b干净源码构建三组件wheel（uv build --all-packages --wheel），uv export --locked --package ai-device --extra client --extra native --no-dev --no-emit-workspace --no-hashes导出准确依赖；13个Linux wheel逐项匹配uv.lock URL/size/SHA256。首次手工标签筛选误选psutil cp313t，实际下载未安装，改选锁内cp36-abi3；不清理已有下载。新增prepare-native-manager-wheels.py固化非free-threaded cp313/abi3/py3选择、HTTPS显式下载与摘要校验、无覆盖manifest，5项ABI/架构/准确pin回归通过。固化脚本复现同一13条结构清单（只差末尾换行）。
+
+accept-native-manager-runtime.sh在隔离amd64 Linux、/tmp工作目录，以v15 CPython为种子，三组件与13依赖全部--no-index --no-deps --force-reinstall安装，pip check通过。新解释器-I -B导入native_update/bootstrap/job/candidate/prepare、Ed25519、zstandard、psutil、PIL.Image均位于安装runtime下；管理模块字节逐项匹配输入wheel。再复制完整独立快照，从快照解释器重复导入全部模块通过，无PYTHONPATH/源码回退，无服务操作。构建下载阶段联网，安装阶段仅本地明确输入；不是正式签名或重新构建的DEB/RPM。
+
+准确输入：ai_device wheel SHA256 f25c7b7574ca2d915b05d126e9a05f87ed5404974e06cff9f55d7adf5dbbf424，bash aee883b74bb2fc816abb77ba428ed4339c6901726a9ac3098a3ba8737fa16dd3，fs b872aa775eaacc9836c0ec94a2abf1e41c8395ef725eecb37d05b521053ab626。现场build/native-inputs/wheels-p1-manager-v16、dependencies-manager-v16、manager-v16-reproduced-lock.json保留但忽略，不提交二进制。完整944 passed/3 Linux skipped（44.09s），ruff/sh-n/diff通过。
+
+独立job原先缺完整运行时的前置已在隔离实验解除，但尚未派发：后续需把此完整运行时纳入原生构建，再接job持久排队门禁、锁交接、worker侧源/批准二次复核和隔离systemd动态验收。P1未完成，包保护不变。宿主前端/数据库/AI资产不适用；构建验收脚本/测试/本记录已更新。
