@@ -1102,3 +1102,10 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 独立无网络 Linux 容器对准确 b4158df DEB 执行已有 `accept-native-manager-package.sh`：新旧 preinst 一致、覆盖拒绝、包内 `pip check` 通过，独立事务 snapshot 验证通过，snapshot 内 cryptography Ed25519 和 zstandard 实际操作成功、模块从 snapshot 自身导入；没有安装或启动服务，日志 `20261027-230511-832315.log`。
 
 另一个干净容器安装准确 DEB，以 `scripts/accept-native-b4158df-snapshot.sh` 创建真实事务 snapshot，逐字节核对 snapshot 的 native_update、native_update_job、native_helper、native_bootstrap、management_lock 与包内模块一致；snapshot 独立解释器可加载完整意图校验，派发门禁仍拒绝。`B4158DF_TRANSACTION_SNAPSHOT_MODULES_MATCH_GATE_CLOSED`，日志 `20261027-230555-9bf5aa.log`。这些是候选快照和依赖验证，不是活跃 worker 身份、真实包事务或恢复闭环，不覆盖旧 snapshot，也不改变 P1 或生产派发状态。
+
+
+## 139. b4158df 隔离 systemd 包 job 失败与显式对账
+
+无网络一次性 Linux amd64/Rosetta systemd 容器使用准确 b4158df DEB（`0d3ccfd5647bf27b1d6965fec90c0ed20e18cb486939e7837e8231af4df10001`）与准确三 wheel 运行既有 `accept-native-update-job.sh`。容器中安装惰性旧版本 source-package fixture，提取而非安装候选原生包；真实生产派发门禁先拒绝，runner 未调用、intent 未创建。仅测试进程临时替换门禁后，真实隔离 systemd 调用 snapshot worker，原候选 DEB 的 preinst 拒绝包覆盖；sender 回执匹配、outcome unknown、active 不变、设备服务未启动。缺 sender 的显式恢复拒绝，恢复原证据后对账幂等、一次派发、job/apply intent 和围栏保留。
+
+输出 `production_dispatch_fence_refused`、`disposable_test_fence_substitute`、`explicit_job_reconciliation_verified`、`independent_job_refused_by_package_guard`，完整日志 `20261027-230750-3f03cb.log`；临时容器已退出。此实验在测试进程替换了派发门禁并使用隔离旧包 fixture，仅覆盖包钩子拒绝后的真实 systemd job/unknown 对账，不证明生产身份绑定、invocation 竞态、成功升级、宿主断电或目标设备，不能开启派发。RPM 仍未构建。
