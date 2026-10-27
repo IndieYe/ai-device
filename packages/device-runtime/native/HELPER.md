@@ -139,3 +139,15 @@ helper新启动请求、管理员register/recover-registration与更新事务共
 `native_update.py` 目前仅开发用管理员DEB事务台账，非发布入口，不接helper IPC或构建器。现有包仍拒绝覆盖；缺签名候选、安全提取/普通用户准备、任务收口与准确停止、包钩子授权及稳定bootstrap、激活/健康/恢复终态、RPM等，禁止用于真实设备包事务。此前v15不含本轮代码。
 
 验证：helper/更新/管理定向120项、Device完整836项通过；包含独立进程锁争用、调用方fd关闭后子进程持锁、生产启动guard继承fd、持久意图跨helper重建、恢复不解除占用、登记互锁。未进行本轮真实systemd或dpkg验收，不沿用v15证据作为本轮包验证。
+
+## 签名候选认证与安全提取（P1子阶段）
+
+新增 `python -m device_runtime.native_candidate`，需安装 `ai-device[native]`（cryptography Ed25519、zstandard）。CLI显式传入 `--package --envelope --destination --trusted-keys --release-id --source-version --bootstrap-version`；目标暂限linux-amd64-deb。trusted-keys是由管理员在候选外提供的 `{key_id: base64原始32字节Ed25519公钥}` JSON，不自动导入包内信任根，不提供正式私钥或发布签名服务。
+
+release envelope严格为payload/key_id/signature；签名是对既有canonical JSON（UTF-8、排序键、无空白、非ASCII保留）的payload字节作Ed25519，signature为base64。payload schema=1，含release_id、key_id、versions(device/bash/fs)、bootstrap_min、target、allowed_sources、required_space、compatibility(protocol/state数组含当前1)、package。package含name/version/architecture/size/sha256/data_sha256/payload_root/manifest_sha256；data_sha256是DEB压缩data成员准确字节摘要，manifest_sha256是versioned payload下bundle/manifest.json摘要。只接受固定包名及amd64，准确release/源版本/最低bootstrap重核；正式发布描述仍须补全P0系统最低版本等字段和发布服务，不将此局部Schema当完整中心发布契约。
+
+准备先验签，独占新建私有目标目录，按签名大小复制包、校验SHA，再读取标准ar成员。支持gzip/xz/zstd控制与数据归档；不调用dpkg，不提取或执行control脚本，只核对Package/Version/Architecture。数据逐成员检查越界/重复/链接/特殊文件/权限及数量、展开预算，链接延后创建，不允许写穿链接，拒绝逃逸或悬空链接。校验离线Linux bundle及三包准确版本。全部文件与目录fsync后才no-replace发布candidate.json完成回执；失败清理本次新目录，不覆盖原候选。突然中断留下无完成回执的目录视为不完整，后续拒绝覆盖，清理须独立受控。
+
+结果只为`authenticated_extracted`，明确`venv_prepared:false`、`activated:false`。尚未接入native_update批准/应用；旧prepare摘要台账不能当已验签证明。最终目录venv准备、运行候选证据消费、正式信任根、包内native依赖交付/RPM仍缺；现有包覆盖保护不变。Linux包含大小写不同的文件，大小写不敏感文件系统可能被安全拒绝；请在隔离Linux验证，不关闭碰撞检查。
+
+`accept-native-candidate.py PACKAGE OUTPUT --development-ephemeral-key`仅供开发DEB验收，内存临时密钥不落盘，不构成正式发布认证。已在隔离Linux普通UID12345对v15包成功认证提取10443成员/285493398字节；包SHA da0fadb10d904e48a1d80669cae9eb6d61c8751668e62b9585d093cf9a73e7b0。依赖在临时容器联网安装，不能据此声称native验签依赖离线交付已完成。无安装、启动或激活。

@@ -380,3 +380,17 @@ v15 DEB/RPM准确同源：helper SHA256 `ab716baaa822496a25f737c2291d1d993b2511b
 ### 19.1 台账身份与恢复基准复核
 
 本地检查点5c5de92后继续自审，发现ID允许连字符，原`instance--operation`拼接可能别名。改用实例ID长度前缀的`length-instance--operation`，不同ID对不共用台账；未发布原型不迁移旧开发台账，遗留意图仍由glob门禁阻止启动。recover还需核对apply意图精确绑定当前已批准准备文件摘要，不能只比较sender和intent彼此一致。新增2项回归；更新测试17项、完整Device **838 passed in 42.29s**，ruff通过。仍无真实包事务或新制品，完整受控更新未交付。
+
+## 20. P1签名候选认证与安全提取（子阶段，2026-10-27）
+
+新增native_candidate.py与CLI，Ed25519外部信任根验证canonical JSON payload；准确release/源版本/target/bootstrap、三包版本、协议/状态兼容及空间门禁，拒绝重复JSON与无效签名。native可选依赖声明cryptography/zstandard并更新uv.lock；不增加默认client依赖，不自写密码算法、不引入正式密钥。现有原生包未重建，未携带新模块或native验签依赖。
+
+先固定签名大小及SHA的包副本，标准ar解析DEB，核对控制元数据而不执行维护脚本；gzip/xz/zstd有界数据提取，拒绝路径逃逸、重名、特权/可写普通文件、特殊文件、逃逸/悬空/循环链接和经符号链接的硬链接目标。验证签名data成员与payload清单摘要、实际离线bundle及组件版本；完成回执最后持久发布，失败清理本次目录，不覆盖已有目标。进程中断残留无candidate.json视为未完成，不能覆盖重试或自动清理已有成果。
+
+实验：macOS提取v15因Linux terminfo大小写文件碰撞安全拒绝；隔离Linux首次发现符号链接0777按普通权限误拒，已修正仅普通文件/目录检查写权限，链接继续严格解析。Zstd窗口预算单位修正，并补有界展开回归。最后使用仓库accept-native-candidate.py在一次性Linux容器、普通UID/GID12345、只读仓库挂载验证v15真实DEB：10443成员，285493398展开字节，package SHA da0fadb10d904e48a1d80669cae9eb6d61c8751668e62b9585d093cf9a73e7b0，signed payload SHA da9f6b3141674f5f47089cb6614d9cae388fd9b94190fed24632ccdd1d8900b4。内存临时测试密钥，不落私钥、不替换信任根、不构成正式签名发布。未调用包管理器、包内程序、服务或active切换。容器--rm已随命令退出回收，无后台遗留；临时容器验证依赖联网安装，不算离线交付验证。
+
+测试：候选40项（真实Ed25519、篡改、未知key/上下文/兼容、JSON重复、包/清单/data摘要、控制元数据、截断、归档越界/特殊文件/重复/链接/权限、预算及完成失败清理）；新增第40项前完整Device877项通过，最终完整结果见接续记录。ruff/diff检查通过。
+
+交付联动：源码、可选依赖/lock、测试、开发验收脚本、HELPER文档已更新；无数据库/API/IPC/前端/用户配置变化。正式信任根、中心release发布完整Schema、原生包native依赖与构建交付仍缺，不扩大支持矩阵。**只完成认证提取子阶段，不是完整候选准备**：结果authenticated_extracted，venv_prepared=false、activated=false。最终目录共用核心venv准备与恢复、候选证据绑定native_update批准仍缺；现有update.prepare仍只是管理员摘要台账，不视为签名候选。包钩子授权、任务收口、稳定bootstrap/版本化布局及激活终态仍缺，包拒绝覆盖保护未解除，不进入P2。
+
+第20节最终验证：候选40项通过，完整Device **878 passed in 44.92s**；uv lock --check、ruff、diff检查通过。最终复现脚本在隔离Linux普通UID12345对同一v15包成功，容器自动回收。共用installation._prepare已核实在最终release目录创建venv并绑定持久解释器，不允许将提取staging直接当已准备运行候选；后续应新增明确原生准备入口及证据消费，不通过旧upgrader绕过受管门禁。
