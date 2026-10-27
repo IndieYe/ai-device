@@ -1,3 +1,4 @@
+import json
 import subprocess
 from contextlib import contextmanager
 
@@ -213,3 +214,168 @@ def test_recovery_rejects_intent_not_bound_to_preparation(update):
     with pytest.raises(nu.UpdateError, match="approved preparation"):
         manager.recover("probe", "one")
     assert packages.calls == 1
+
+
+@pytest.fixture
+def signed_update(update, monkeypatch):
+    import hashlib
+
+    from device_runtime.protocol import canonical
+
+    manager, _, helper, package = update
+    root = helper.root
+    (root / "active.json").write_text('{"release":"old","release_version":"1"}')
+    (root / nh.MARKER).write_text("binding")
+    envelope = manager.registry / "release.json"
+    envelope.write_text("{}")
+    home = root / "releases/new"
+    (home / "bundle").mkdir(parents=True)
+    manifest = {"components": "fixture"}
+    (home / "bundle/manifest.json").write_text(canonical(manifest))
+    python = home / "client/venv/bin/python"
+    python.parent.mkdir(parents=True)
+    python.write_text("fixture interpreter")
+    python.chmod(0o700)
+    prepared = {"release": "new", "bundle_sha256": nu.core._fingerprint(manifest)}
+    (home / "installation.json").write_text(canonical(prepared))
+    payload = {
+        "package": {
+            "sha256": nh._digest(package),
+            "version": "2",
+            "manifest_sha256": nh._digest(home / "bundle/manifest.json"),
+        }
+    }
+    digest = hashlib.sha256(canonical(payload).encode()).hexdigest()
+    request = {
+        "release_sha256": digest,
+        "source_active_sha256": nh._digest(root / "active.json"),
+        "binding_sha256": nh._digest(root / nh.MARKER),
+    }
+    receipt = root / "native-candidates/runtime.result.json"
+    receipt.parent.mkdir()
+    receipt.write_text(
+        canonical(
+            {
+                "state": "runtime_prepared",
+                "activated": False,
+                "candidate": prepared,
+                "request": request,
+            }
+        )
+    )
+    real_binding = helper._binding
+    monkeypatch.setattr(
+        helper, "_binding", lambda name: {**real_binding(name), "uid": receipt.stat().st_uid}
+    )
+    monkeypatch.setattr(nu.nc, "verify_release", lambda *a, **kw: payload)
+    monkeypatch.setattr(nu.nc, "prepare_candidate", lambda *a, **kw: {"release_sha256": digest})
+    monkeypatch.setattr(nu.core, "inspect_bundle", lambda _: manifest)
+    return manager, package, envelope, receipt, home
+
+
+def signed_prepare(signed_update):
+    manager, package, envelope, receipt, _ = signed_update
+    return manager.prepare_signed(
+        "probe",
+        "signed",
+        package,
+        envelope_path=envelope,
+        trusted_keys={},
+        release_id="new",
+        runtime_receipt=receipt,
+        bootstrap_version="1",
+    )
+
+
+def test_signed_preparation_binds_runtime_and_approval(signed_update):
+    manager, _, _, receipt, _ = signed_update
+    result = signed_prepare(signed_update)
+    evidence = result["authenticated_candidate"]
+    assert evidence["receipt_sha256"] == nh._digest(receipt)
+    path = manager.registry / "updates/5-probe--signed.prepared.json"
+    manager.approve("probe", "signed", prepared_sha256=nh._digest(path))
+    assert signed_prepare(signed_update) == result
+
+
+@pytest.mark.parametrize(
+    "file", ["receipt", "installation", "manifest", "python", "active", "marker"]
+)
+def test_signed_evidence_drift_blocks_approval(signed_update, file):
+    manager, _, _, receipt, home = signed_update
+    signed_prepare(signed_update)
+    path = manager.registry / "updates/5-probe--signed.prepared.json"
+    locations = {
+        "receipt": receipt,
+        "installation": home / "installation.json",
+        "manifest": home / "bundle/manifest.json",
+        "python": home / "client/venv/bin/python",
+        "active": home.parent.parent / "active.json",
+        "marker": home.parent.parent / nh.MARKER,
+    }
+    locations[file].write_text("drift")
+    with pytest.raises(nu.UpdateError, match="changed"):
+        manager.approve("probe", "signed", prepared_sha256=nh._digest(path))
+    assert not path.with_name("5-probe--signed.approved.json").exists()
+
+
+def test_signed_approval_rechecks_actual_bundle(signed_update, monkeypatch):
+    manager, _, _, _, _ = signed_update
+    signed_prepare(signed_update)
+    path = manager.registry / "updates/5-probe--signed.prepared.json"
+
+    def changed(_):
+        raise ValueError("wheel digest differs")
+
+    monkeypatch.setattr(nu.core, "inspect_bundle", changed)
+    with pytest.raises(ValueError, match="wheel digest"):
+        manager.approve("probe", "signed", prepared_sha256=nh._digest(path))
+
+
+def test_signature_failure_creates_no_prepared_record(signed_update, monkeypatch):
+    def invalid(*a, **kw):
+        raise nu.nc.CandidateError("invalid signature")
+
+    monkeypatch.setattr(nu.nc, "verify_release", invalid)
+    with pytest.raises(nu.nc.CandidateError, match="signature"):
+        signed_prepare(signed_update)
+    assert not (signed_update[0].registry / "updates/5-probe--signed.prepared.json").exists()
+
+
+def test_runtime_receipt_wrong_source_refused(signed_update):
+    receipt = signed_update[3]
+    data = json.loads(receipt.read_text())
+    data["request"]["source_active_sha256"] = "changed"
+    receipt.write_text(json.dumps(data))
+    with pytest.raises(nu.UpdateError, match="source"):
+        signed_prepare(signed_update)
+
+
+def test_signed_evidence_change_after_approval_blocks_apply(signed_update):
+    manager, _, _, receipt, _ = signed_update
+    signed_prepare(signed_update)
+    path = manager.registry / "updates/5-probe--signed.prepared.json"
+    manager.approve("probe", "signed", prepared_sha256=nh._digest(path))
+    receipt.write_text("changed")
+    with pytest.raises(nu.UpdateError, match="evidence changed"):
+        manager.apply("probe", "signed")
+    assert manager.packages.calls == 0
+    assert not (manager.registry / "updates/5-probe--signed.apply-intent.json").exists()
+
+
+@pytest.mark.parametrize("field,value", [("state", "failed"), ("activated", True)])
+def test_signed_prepare_rejects_nonprepared_receipt(signed_update, field, value):
+    receipt = signed_update[3]
+    data = json.loads(receipt.read_text())
+    data[field] = value
+    receipt.write_text(json.dumps(data))
+    with pytest.raises(nu.UpdateError, match="authenticated release"):
+        signed_prepare(signed_update)
+
+
+def test_signed_prepare_rejects_wrong_release_digest(signed_update):
+    receipt = signed_update[3]
+    data = json.loads(receipt.read_text())
+    data["request"]["release_sha256"] = "0" * 64
+    receipt.write_text(json.dumps(data))
+    with pytest.raises(nu.UpdateError, match="authenticated release"):
+        signed_prepare(signed_update)

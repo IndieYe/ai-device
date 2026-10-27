@@ -161,3 +161,13 @@ release envelope严格为payload/key_id/signature；签名是对既有canonical 
 新登记schema2 marker以root 0644原子发布，内容仅绑定路径/摘要，不含凭证；其他操作账本仍默认0600，凭证环境仍0600。已有0600 marker不会自动chmod，普通用户读取失败需管理员明确处理，非自动迁移。之前v15包和已运行helper不自动加载新代码。
 
 新增accept-native-prepare.py需在隔离Linux已登记实例运行；开发临时密钥不作为正式发布。真实实验UID12345、持久CPython3.13.17和包内uv：runtime_prepared，同IDrelease稳定，active字节不变；未运行systemd/client或包安装脚本。native验签依赖在临时容器联网安装，运行venv从v15离线bundle构建；不能称新模块原生制包离线交付。完整Device895项通过。更新批准尚未消费本结果，不解除原包门禁。
+
+## 管理员签名候选准备与批准绑定（P1原型）
+
+native_update新增`prepare-signed`，参数package-path/envelope-path/trusted-keys/release-id/runtime-receipt/bootstrap-version，另需既有registry/instance-id/operation-id。CLI信任公钥JSON、包及envelope要求管理员可信路径；外部信任根重新验签，私有临时目录重新提取并验证真实离线bundle，不信普通用户提取JSON。临时认证目录在验证结束清理，不清理实例已有成果。
+
+管理员只读核对普通所有者`native-candidates`直属完成回执、runtime_prepared/activated=false、发布摘要、源active及marker、最终release/installation、签名manifest与真实bundle内容、venv解释器存在及准确字节摘要；不以root运行用户venv。证据摘要并入prepared后approve绑定完整SHA；approve及apply前重查源及实际bundle/回执/installation/manifest/解释器。批准后漂移拒绝，不发送包安装。认证与prepare两次实例lease之间仍按固定源摘要复核，不把新观察覆盖旧源证据。
+
+旧prepare API继续是开发用摘要台账，不声称验签；本原型未成为正式包钩子授权路径。用户venv仍可变，证据检查不是OS隔离或整个site-packages不可变承诺，签名payload也不等于venv运行行为全被认证。正式发布/信任根/包钩子/激活时再次核验与完整健康验收仍缺，不解除包覆盖保护。失败准备的管理员收口尚未实现。
+
+开发验收`accept-native-signed-approval.py`只prepare-signed及approve，断言无apply意图。真实隔离Linux从普通UID运行候选到管理员重新验签批准通过，未apply、未激活或start。临时测试密钥、验签依赖临时联网安装，非正式发布/离线新制品验收。更新测试31项，完整Device909项通过。

@@ -410,3 +410,11 @@ v15 DEB/RPM准确同源：helper SHA256 `ab716baaa822496a25f737c2291d1d993b2511b
 测试：原生准备12项、管理锁24项、helper83项（新增marker权限）及完整Device **895 passed in 42.08s**；ruff/diff通过。覆盖同ID不重放、失败/中断阻止同/新ID、源变化、release证据/解释器丢失、共享运行锁允许准备/独占维护拒绝、完整binding漂移、root拒绝、专用管理租约保持旧门禁。尚无真实guard崩溃/后代回收及管理员恢复链验收，完成回执不代表持久OS事务。
 
 实现/测试/开发验收脚本/HELPER文档已更新；无数据库、前端或公开IPC变化。新模块未接构建器、包钩子和更新批准，v15不含新模块，不操作真实服务设备。下一项消费runtime候选证据绑定更新prepare/approve，先明确root重新认证及普通用户结果可信性边界，不因JSON自洽就认可可激活；同时补准备中断恢复。P1未完成，不进入P2。
+
+## 23. 管理员重新认证运行候选并绑定批准（P1原型）
+
+native_update新增prepare-signed及CLI，外部公钥重新认证准确发布与root可信包/envelope，在registry/updates私有临时目录重提取并验证真实离线payload；核对登记所有者直属runtime回执、源active/marker、发布摘要、最终release安装证据、签名manifest与实际bundle及解释器摘要。准确证据纳入prepared，approve绑定总SHA，approve/apply前重新检查实际bundle字节及源/回执/安装/解释器，漂移拒绝且不发送安装。管理员只读不执行用户venv。认证到prepare分开租约，但保留旧源摘要重查，不覆盖源基准。
+
+14项新增更新测试，更新31项，完整Device **909 passed in 42.58s**，ruff/diff通过。覆盖认证失败不落prepared、同ID证据稳定、错误源/发布/state/activated拒绝、六类证据批准前变化、实际wheel验证失败、批准后变化阻止apply且不写意图。真实隔离Linux先普通UID12345准备最终venv，再root复制测试envelope/公钥/包到可信目录，prepare-signed与approve成功，assert无apply意图；未包安装/激活/服务启动。临时测试公钥非正式信任根；新依赖临时联网非离线新包交付。容器--rm已回收。新增accept-native-signed-approval.py复现管理员半段；实际运行使用等价内联调用，脚本静态通过。
+
+旧prepare开发API保留摘要路径，不宣称验签，不作为正式包钩子许可。普通用户venv可变，当前证据不是整个site-packages的运行行为认证或不可变保证；激活/健康再次核验仍缺，不能因批准成功解除包保护。实现/测试/HELPER文档及验收脚本更新；无数据库/前端/IPC变更，构建器未接。下一项准备失败/中断管理员收口，后续包钩子、任务收口/准确停止、稳定bootstrap版本化布局和激活恢复终态仍未完成；P1未通过，不进入P2。

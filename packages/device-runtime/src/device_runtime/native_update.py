@@ -5,14 +5,18 @@ force. This module cannot grant package-hook authorization or activate a release
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
+from . import installation as core
+from . import native_candidate as nc
 from . import native_helper as nh
 
 
@@ -105,7 +109,16 @@ class Updates:
             stem = directory / f"{len(instance_id)}-{instance_id}--{operation_id}"
             yield record, stem
 
-    def prepare(self, instance_id, operation_id, package_path, *, sha256, version):
+    def prepare(
+        self,
+        instance_id,
+        operation_id,
+        package_path,
+        *,
+        sha256,
+        version,
+        authenticated_candidate=None,
+    ):
         """Register one exact administrator-owned package, without executing it."""
         if not re.fullmatch(r"[a-f0-9]{64}", sha256):
             raise UpdateError("exact lowercase SHA256 required")
@@ -133,6 +146,9 @@ class Updates:
                 "source_active_sha256": active,
                 "source_package": self.packages.installed(metadata["Package"]),
             }
+            if authenticated_candidate is not None:
+                intent["authenticated_candidate"] = authenticated_candidate
+                self._check_candidate(binding, intent)
             path = stem.with_suffix(".prepared.json")
             if path.exists():
                 if json.loads(path.read_text()) != intent:
@@ -141,12 +157,141 @@ class Updates:
                 _atomic(path, intent)
             return intent
 
+    def _runtime_evidence(self, binding, receipt_path, payload):
+        root = Path(binding["root"])
+        receipt_path = Path(receipt_path)
+        if (
+            receipt_path.is_symlink()
+            or receipt_path.parent != root / "native-candidates"
+            or receipt_path.resolve() != receipt_path
+            or receipt_path.stat().st_uid != binding["uid"]
+        ):
+            raise UpdateError("runtime receipt must belong to registered instance owner")
+        if receipt_path.stat().st_size > 256000:
+            raise UpdateError("runtime receipt exceeds budget")
+        receipt = nc._json(receipt_path.read_bytes())
+        request = receipt.get("request", {})
+        signed_digest = hashlib.sha256(nc.canonical(payload).encode()).hexdigest()
+        if (
+            receipt.get("state") != "runtime_prepared"
+            or receipt.get("activated") is not False
+            or request.get("release_sha256") != signed_digest
+        ):
+            raise UpdateError("runtime receipt differs from authenticated release")
+        if request.get("source_active_sha256") != nh._digest(root / "active.json") or request.get(
+            "binding_sha256"
+        ) != nh._digest(root / nh.MARKER):
+            raise UpdateError("runtime source or binding changed")
+        release = receipt["candidate"]["release"]
+        if not isinstance(release, str) or Path(release).name != release or release in {".", ".."}:
+            raise UpdateError("invalid runtime candidate release")
+        home = root / "releases" / release
+        if home.is_symlink() or not home.resolve().is_relative_to((root / "releases").resolve()):
+            raise UpdateError("runtime release escapes instance")
+        manifest = core.inspect_bundle(home / "bundle")
+        if (
+            nh._digest(home / "bundle/manifest.json") != payload["package"]["manifest_sha256"]
+            or core._fingerprint(manifest) != receipt["candidate"]["bundle_sha256"]
+        ):
+            raise UpdateError("runtime bundle differs from signed payload")
+        if nc._json((home / "installation.json").read_bytes()) != receipt["candidate"]:
+            raise UpdateError("runtime installation evidence differs")
+        python = home / "client/venv/bin/python"
+        if not python.is_file() or not os.access(python, os.X_OK):
+            raise UpdateError("runtime interpreter unavailable")
+        # Read-only evidence, never execute the owner's environment as root.
+        return {
+            "receipt_path": str(receipt_path),
+            "receipt_sha256": nh._digest(receipt_path),
+            "installation_path": str(home / "installation.json"),
+            "installation_sha256": nh._digest(home / "installation.json"),
+            "manifest_path": str(home / "bundle/manifest.json"),
+            "manifest_sha256": nh._digest(home / "bundle/manifest.json"),
+            "python_path": str(python),
+            "python_sha256": nh._digest(python),
+            "release_sha256": signed_digest,
+            "source_active_sha256": request["source_active_sha256"],
+            "binding_sha256": request["binding_sha256"],
+        }
+
+    def _check_candidate(self, binding, value):
+        evidence = value.get("authenticated_candidate")
+        if evidence is None:
+            return  # Legacy developer journal; not a signed candidate claim.
+        if evidence["source_active_sha256"] != nh._digest(
+            Path(binding["root"]) / "active.json"
+        ) or evidence["binding_sha256"] != nh._digest(Path(binding["root"]) / nh.MARKER):
+            raise UpdateError("authenticated candidate source changed")
+        core.inspect_bundle(Path(evidence["manifest_path"]).parent)
+        for key in ("receipt", "installation", "manifest", "python"):
+            path = Path(evidence[key + "_path"])
+            if nh._digest(path) != evidence[key + "_sha256"]:
+                raise UpdateError("authenticated runtime evidence changed")
+
+    def prepare_signed(
+        self,
+        instance_id,
+        operation_id,
+        package_path,
+        *,
+        envelope_path,
+        trusted_keys,
+        release_id,
+        runtime_receipt,
+        bootstrap_version,
+    ):
+        package_path = nh._path(package_path)
+        envelope_path = nh._path(envelope_path)
+        nh._trusted(package_path)
+        nh._trusted(envelope_path)
+        if envelope_path.stat().st_size > 256000:
+            raise UpdateError("release envelope exceeds budget")
+        envelope = nc._json(envelope_path.read_bytes())
+        # Recheck binding under the instance lease; prepare() takes it again
+        # after verification and compares the complete source evidence.
+        with self._transaction(instance_id, operation_id) as (binding, stem):
+            active = nc._json((Path(binding["root"]) / "active.json").read_bytes())
+            payload = nc.verify_release(
+                envelope,
+                trusted_keys,
+                release_id=release_id,
+                target="linux-amd64-deb",
+                source_version=active["release_version"],
+                bootstrap_version=bootstrap_version,
+            )
+            with tempfile.TemporaryDirectory(prefix=".authenticate-", dir=stem.parent) as temporary:
+                authentication = nc.prepare_candidate(
+                    package_path,
+                    envelope_path,
+                    Path(temporary) / "candidate",
+                    trusted_keys=trusted_keys,
+                    release_id=release_id,
+                    target="linux-amd64-deb",
+                    source_version=active["release_version"],
+                    bootstrap_version=bootstrap_version,
+                )
+                evidence = self._runtime_evidence(binding, runtime_receipt, payload)
+                if evidence["release_sha256"] != authentication["release_sha256"]:
+                    raise UpdateError("release changed during authentication")
+            self._check_candidate(binding, {"authenticated_candidate": evidence})
+        result = self.prepare(
+            instance_id,
+            operation_id,
+            package_path,
+            sha256=payload["package"]["sha256"],
+            version=payload["package"]["version"],
+            authenticated_candidate=evidence,
+        )
+        return result
+
     def approve(self, instance_id, operation_id, *, prepared_sha256):
-        with self._transaction(instance_id, operation_id) as (_, stem):
+        with self._transaction(instance_id, operation_id) as (binding, stem):
             path = stem.with_suffix(".prepared.json")
             nh._trusted(path)
             if nh._digest(path) != prepared_sha256:
                 raise UpdateError("prepared transaction changed")
+            value = json.loads(path.read_text())
+            self._check_candidate(binding, value)
             receipt = {"prepared_sha256": prepared_sha256, "approved_by_uid": 0}
             approved = stem.with_suffix(".approved.json")
             if approved.exists():
@@ -175,6 +320,7 @@ class Updates:
             raise UpdateError("approved package changed")
         if nh._digest(Path(binding["root"]) / "active.json") != value["source_active_sha256"]:
             raise UpdateError("source active changed")
+        self._check_candidate(binding, value)
         return value
 
     @contextmanager
@@ -342,11 +488,25 @@ def main():
     prepare.add_argument("--version", required=True)
     approve = modes.add_parser("approve")
     approve.add_argument("--prepared-sha256", required=True)
+    signed = modes.add_parser("prepare-signed")
+    for name in (
+        "package-path",
+        "envelope-path",
+        "trusted-keys",
+        "release-id",
+        "runtime-receipt",
+        "bootstrap-version",
+    ):
+        signed.add_argument("--" + name, required=True)
     modes.add_parser("apply")
     modes.add_parser("reconcile")
     modes.add_parser("recover")
     args = vars(parser.parse_args())
-    action = args.pop("action")
+    action = args.pop("action").replace("-", "_")
+    if action == "prepare_signed":
+        keys_path = nh._path(args["trusted_keys"])
+        nh._trusted(keys_path)
+        args["trusted_keys"] = nc._json(keys_path.read_bytes())
     registry = args.pop("registry")
     try:
         print(json.dumps(getattr(Updates(registry), action)(**args), sort_keys=True))
