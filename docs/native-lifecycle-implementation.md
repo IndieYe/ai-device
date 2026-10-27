@@ -598,3 +598,7 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 49. 新job派发默认失败关闭
 
 针对第48节v17旧helper忽略job意图的已证实派发窗口风险，dispatch_job在已存在job的观察返回之后、任何新job意图/快照/系统调用之前调用固定失败关闭门禁；不得根据静态文件、当前PID或一次能力查询放行，因为旧daemon可在检查后启动。已存在job仍按原ID观察，不重派；恢复与退休不删除原台账。历史第41节的新ID派发仅表示当时隔离实验，现行生产入口关闭，新ID不能派发。测试只在明确monkeypatch门禁时覆盖旧派发机制；独立测试验证默认拒绝、无job意图/receipt/systemd调用，既有job不重放。完整979 passed/3 Linux skipped（46.49s）。此门禁只保护加载了新代码的调用者，不约束已运行旧调度器；未实现跨版本持久屏障、旧helper迁移或真实服务升级，原包保护不变，P1未完成。
+
+## 50. 旧helper兼容缺口可复现隔离回归
+
+新增一次性Linux容器脚本accept-native-old-helper-fence.sh，使用v17 DEB内真实旧bootstrap helper及v28当前wheel，在同一个隔离registry上验证：旧helper忽略未退休job-intent；新helper阻塞该意图；新dispatch默认在写job-intent/receipt及调用systemd前拒绝。脚本需显式old-helper-fence-v1标记，实际隔离运行三项均通过。daemon锁仅持有至进程退出，不能作为跨重启的持久屏障；该回归不验证服务重启、派发竞态或旧运行代码迁移，不解除新派发默认门禁。无产品代码修改，本轮未重跑完整回归；之前979 passed/3 skipped。P1未完成。

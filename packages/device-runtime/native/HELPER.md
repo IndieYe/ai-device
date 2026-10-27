@@ -245,3 +245,5 @@ Python recover_job新增管理员显式对账原型：仅已进入apply、匹配
 **重要更正（第48节）**：v17包内旧helper只检查apply-intent，实际忽略未退休job-intent，故不保证排队窗口阻止启动；此前“旧helper保守阻塞”不适用于该版本。不得与新job派发混合用于真实设备；须先验证运行helper身份并完成安全迁移/兼容屏障。
 
 当前新代码的dispatch_job对新job默认失败关闭，直到跨版本持久启动屏障得到实现和验证；已有job仍可观察、不重派。旧运行代码不受此新门禁约束，不能据此声称真实设备已安全。
+
+accept-native-old-helper-fence.sh在一次性容器复现v17旧helper忽略未退休job、新helper阻塞、新派发默认拒绝；不证明跨重启持久互斥或实际迁移完成。
