@@ -733,3 +733,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 79. 真实 helper start 持锁与反向竞争
 
 在 disposable systemd job 验收新增 `start-lock` 场景：隔离注册时给 client unit 添加测试专用 `ExecStartPre=sleep 8`，以真实 helper daemon 的 Unix socket 发起 start，并等待实际 systemd `start-pre` 和持久 start 意图。此窗口独立尝试同一 registry 的独占 package lease，实际返回锁冲突；在脚本进程内显式替换派发门禁后，同实例 job 调用在实例管理锁处拒绝，未生成 job 意图、未调用 runner。真实 start 正常结束后独占 package lease 可获取。运行前真实生产派发门禁仍先拒绝。一次性 amd64 Linux systemd 容器通过；输入为历史 `9b37b30...` DEB 和 `cc01329` wheel，非当前 HEAD 制品。此证据区分实例锁拒绝与独立包锁探针，不证明 job 实际走到包锁、不覆盖 sender 崩溃或运行代码身份，也不授权开放派发。容器关机请求超时，列表确认实例不存在；真实服务和包保护未变。
+
+
+## 80. 未知启动恢复证据与包更新门禁一致性
+
+检查发现包更新对 start 结果只将缺失或 `unknown` 视为待恢复，损坏/未知状态会被错误放行；对恢复证据也未要求 `start_replayed` 严格为 `false`。先以五个负向用例复现，再使更新路径对结果采用 helper 相同的状态白名单，并复用 helper 的恢复证据校验；不完整、错误或无法读取的恢复证据继续阻止包更新。合法未重放恢复后仍需满足既有停止状态和其他包事务门禁。相关测试 171 项通过，完整 Device 回归 1020 passed、3 skipped，ruff 及 diff 检查通过。测试为本地夹具，不证明实际 sender 崩溃、运行代码身份或当前制品/真实 systemd 验收；生产 job 派发保持关闭，原包保护不变。

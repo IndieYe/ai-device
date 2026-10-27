@@ -445,16 +445,21 @@ class Updates:
                 for pending in self.registry.glob("op-*.json"):
                     result = pending.with_name(pending.name.replace("op-", "result-", 1))
                     recovery = pending.with_name(pending.name.replace("op-", "recovery-", 1))
-                    if (
-                        not result.exists()
-                        or json.loads(result.read_text()).get("state") == "unknown"
-                    ):
-                        evidence = json.loads(recovery.read_text()) if recovery.exists() else {}
-                        if evidence.get("state") not in {
-                            "confirmed_running",
-                            "confirmed_stopped",
-                        } or evidence.get("intent") != json.loads(pending.read_text()):
-                            raise UpdateError("unconfirmed start sender blocks package update")
+                    state = None
+                    if result.exists():
+                        stored = json.loads(result.read_text())
+                        if not isinstance(stored, dict) or stored.get("state") not in (
+                            "started", "already_active", "unknown"
+                        ):
+                            raise UpdateError("invalid start result blocks package update")
+                        state = stored["state"]
+                    if state in (None, "unknown"):
+                        try:
+                            nh._read_start_recovery(recovery, json.loads(pending.read_text()))
+                        except (OSError, ValueError, TypeError, nh.HelperError) as exc:
+                            raise UpdateError(
+                                "unconfirmed start sender blocks package update"
+                            ) from exc
                 observation = self.helper._snapshot(binding)
                 if (
                     observation["ActiveState"] not in {"inactive", "failed"}

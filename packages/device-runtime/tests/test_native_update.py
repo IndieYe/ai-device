@@ -182,6 +182,41 @@ def test_unknown_start_blocks_update_even_when_service_is_inactive(update):
     assert packages.calls == 0
 
 
+@pytest.mark.parametrize("state", [None, "failed", "unexpected"])
+def test_invalid_start_result_blocks_package_update(update, state):
+    manager, packages, _, _ = update
+    (manager.registry / "op-probe-start.json").write_text('{"action":"start"}')
+    (manager.registry / "result-probe-start.json").write_text(json.dumps({"state": state}))
+    with pytest.raises(nu.UpdateError, match="invalid start result"):
+        manager.apply("probe", "one")
+    assert packages.calls == 0
+
+
+@pytest.mark.parametrize("replayed", [None, True])
+def test_incomplete_start_recovery_blocks_package_update(update, replayed):
+    manager, packages, _, _ = update
+    intent = {"action": "start"}
+    (manager.registry / "op-probe-start.json").write_text(json.dumps(intent))
+    recovery = {"state": "confirmed_stopped", "intent": intent}
+    if replayed is not None:
+        recovery["start_replayed"] = replayed
+    (manager.registry / "recovery-probe-start.json").write_text(json.dumps(recovery))
+    with pytest.raises(nu.UpdateError, match="unconfirmed start"):
+        manager.apply("probe", "one")
+    assert packages.calls == 0
+
+
+def test_valid_start_recovery_allows_stopped_package_update(update):
+    manager, packages, _, _ = update
+    intent = {"action": "start"}
+    (manager.registry / "op-probe-start.json").write_text(json.dumps(intent))
+    (manager.registry / "recovery-probe-start.json").write_text(json.dumps({
+        "state": "confirmed_stopped", "intent": intent, "start_replayed": False,
+    }))
+    manager.apply("probe", "one")
+    assert packages.calls == 1
+
+
 def test_shared_start_sender_lease_blocks_package_apply(update):
     manager, packages, _, _ = update
     with (
