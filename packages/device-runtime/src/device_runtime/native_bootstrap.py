@@ -267,6 +267,73 @@ def read_helper_candidate(candidates_dir, version):
     return evidence
 
 
+def run_verified_helper_candidate(candidates_dir, version, *, registry, socket_path, group):
+    """Execute verified candidate helper bytes in the candidate interpreter.
+
+    This experimental entry point does not provision a unit, prove the caller's
+    identity, or authorize dispatch. The caller is trusted administrator code.
+    It must run under the candidate's own isolated interpreter with bytecode
+    writes disabled. Modules are compiled from the exact bytes just checked,
+    not imported again from mutable paths.
+    """
+    import types
+
+    if sys.platform != "linux" or os.geteuid() != 0:
+        raise BootstrapError("Linux administrator required")
+    evidence = read_helper_candidate(candidates_dir, version)
+    candidate = helper._path(candidates_dir) / version
+    runtime = candidate / "runtime"
+    python = runtime / "bin/python3.13"
+    if (
+        Path(sys.executable) != python
+        or Path(sys.base_prefix) != runtime
+        or not sys.flags.isolated
+        or not sys.dont_write_bytecode
+    ):
+        raise BootstrapError("candidate isolated interpreter required")
+    snapshot = validate_snapshot(candidate)
+    if _digest(candidate / "snapshot.json") != evidence["snapshot_sha256"]:
+        raise BootstrapError("candidate snapshot changed")
+    names = ("__init__", "management_lock", "native_helper")
+    contents = {}
+    for name in names:
+        relative = f"lib/python3.13/site-packages/device_runtime/{name}.py"
+        entry = snapshot["inventory"].get(relative)
+        if not isinstance(entry, dict) or entry.get("kind") != "file":
+            raise BootstrapError("candidate helper source missing")
+        path = runtime / relative
+        helper._trusted(path)
+        data = path.read_bytes()
+        if len(data) != entry.get("size") or hashlib.sha256(data).hexdigest() != entry.get("sha256"):
+            raise BootstrapError("candidate helper source changed")
+        contents[name] = (path, data)
+    if hashlib.sha256(contents["native_helper"][1]).hexdigest() != evidence["helper_sha256"]:
+        raise BootstrapError("candidate helper evidence differs")
+    if validate_snapshot(candidate) != snapshot or _digest(candidate / "snapshot.json") != evidence["snapshot_sha256"]:
+        raise BootstrapError("candidate changed during launch")
+
+    # Keep imports for these modules inside this exact validated byte set.
+    module_names = ("device_runtime", "device_runtime.management_lock", "device_runtime.native_helper")
+    previous = {name: sys.modules.get(name) for name in module_names}
+    try:
+        for name, qualified in zip(names, module_names, strict=True):
+            path, data = contents[name]
+            module = types.ModuleType(qualified)
+            module.__file__ = str(path)
+            module.__package__ = "device_runtime"
+            if name == "__init__":
+                module.__path__ = [str(path.parent)]
+            sys.modules[qualified] = module
+            exec(compile(data, str(path), "exec"), module.__dict__)  # noqa: S102
+        sys.modules["device_runtime.native_helper"].serve(registry, socket_path, group=group)
+    finally:
+        for name, module in previous.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
+
+
 def publish_managed_helper_candidate(registry, source, version):
     """Publish under the fixed manager directory while holding the package lease."""
     if sys.platform != "linux" or os.geteuid() != 0:

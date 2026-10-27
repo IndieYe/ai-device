@@ -359,6 +359,88 @@ def test_managed_candidate_refuses_busy_lock(runtime):
     assert not (registry / "bootstrap-candidates/v1").exists()
 
 
+def test_verified_helper_candidate_executes_checked_bytes(runtime, monkeypatch):
+    import hashlib
+    import sys
+    from types import SimpleNamespace
+
+    source, destination = runtime
+    site = source / "lib/python3.13/site-packages/device_runtime"
+    site.mkdir(parents=True)
+    (site / "__init__.py").write_text("value = 'candidate'\n")
+    (site / "management_lock.py").write_text("value = 'checked'\n")
+    (site / "native_helper.py").write_text(
+        "from .management_lock import value\ndef serve(registry, socket_path, *, group):\n"
+        "    assert (value, registry, socket_path, group) == ('checked', 'r', 's', 7)\n"
+    )
+    candidate = destination.parent / "v1"
+    snapshot = bootstrap.snapshot_runtime(source, candidate)
+    evidence = {
+        "snapshot_sha256": bootstrap._digest(candidate / "snapshot.json"),
+        "helper_sha256": hashlib.sha256((site / "native_helper.py").read_bytes()).hexdigest(),
+    }
+    monkeypatch.setattr(bootstrap, "read_helper_candidate", lambda *_: evidence)
+    real_sys = bootstrap.sys
+    monkeypatch.setattr(bootstrap, "sys", SimpleNamespace(
+        platform="linux", executable=str(candidate / "runtime/bin/python3.13"),
+        base_prefix=str(candidate / "runtime"), flags=SimpleNamespace(isolated=1),
+        dont_write_bytecode=True, modules=sys.modules,
+    ))
+    original = bootstrap.validate_snapshot
+    calls = 0
+
+    def verify_and_replace(path):
+        nonlocal calls
+        calls += 1
+        result = original(path)
+        if calls == 2:
+            # After the final check, replace the path; the already read bytes
+            # must still be executed, never a later import from disk.
+            (candidate / "runtime/lib/python3.13/site-packages/device_runtime/management_lock.py").write_text(
+                "value = 'replaced'\n"
+            )
+        return result
+
+    monkeypatch.setattr(bootstrap, "validate_snapshot", verify_and_replace)
+    original_package = sys.modules["device_runtime"]
+    bootstrap.run_verified_helper_candidate(candidate.parent, "v1", registry="r", socket_path="s", group=7)
+    assert sys.modules["device_runtime"] is original_package
+    assert snapshot["inventory"] and calls == 2
+    assert real_sys is sys
+
+
+@pytest.mark.parametrize("failure", ["interpreter", "not_isolated", "bytecode", "source_drift"])
+def test_verified_helper_candidate_refuses_untrusted_launch(runtime, monkeypatch, failure):
+    import hashlib
+    import sys
+    from types import SimpleNamespace
+
+    source, destination = runtime
+    site = source / "lib/python3.13/site-packages/device_runtime"
+    site.mkdir(parents=True)
+    for name in ("__init__", "management_lock", "native_helper"):
+        (site / f"{name}.py").write_text("# fixture\n")
+    candidate = destination.parent / "v1"
+    bootstrap.snapshot_runtime(source, candidate)
+    evidence = {
+        "snapshot_sha256": bootstrap._digest(candidate / "snapshot.json"),
+        "helper_sha256": hashlib.sha256((site / "native_helper.py").read_bytes()).hexdigest(),
+    }
+    monkeypatch.setattr(bootstrap, "read_helper_candidate", lambda *_: evidence)
+    python = candidate / "runtime/bin/python3.13"
+    monkeypatch.setattr(bootstrap, "sys", SimpleNamespace(
+        platform="linux", executable=str(python) if failure != "interpreter" else "/other/python",
+        base_prefix=str(candidate / "runtime"), flags=SimpleNamespace(isolated=failure != "not_isolated"),
+        dont_write_bytecode=failure != "bytecode", modules=sys.modules,
+    ))
+    if failure == "source_drift":
+        (candidate / "runtime/lib/python3.13/site-packages/device_runtime/native_helper.py").write_text(
+            "# changed\n"
+        )
+    with pytest.raises(bootstrap.BootstrapError):
+        bootstrap.run_verified_helper_candidate(candidate.parent, "v1", registry="r", socket_path="s", group=7)
+
+
 def test_transition_observation_is_read_only_and_refuses_drift(runtime, monkeypatch):
 
     source, destination = runtime

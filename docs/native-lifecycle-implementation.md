@@ -748,3 +748,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 82. guard 崩溃后的真实隔离 daemon 重启
 
 延续第81节场景，在 guard 异常退出且真实 systemd Job 已终态后，仅对一次性容器内测试 helper 执行停止；保留未知台账和遗留 socket，调用管理员 `recover_socket` 显式检查并移除孤立 socket，然后启动同一测试 unit。通过新连接验证同 ID 仍为 unknown 且 `replayed=false`，原结果字节不变，恢复和新 ID start 仍被拒绝、没有新的意图或恢复证据。实验使用历史 `9b37b30...` DEB 与 `cc01329` wheel，不是当前 HEAD 制品；不证明加载代码身份、宿主重启或可解除阻塞。真实生产派发门禁先拒绝；实例关机请求超时后再次正常关机并确认不存在，未操作真实设备。
+
+
+## 83. 候选 helper 的校验字节执行原型
+
+新增 `run_verified_helper_candidate`：仅 Linux root、候选自身 Python 隔离模式且禁止写字节码时，对已发布候选证据及完整快照做前后校验，从清单校验后读取 `__init__.py`、`management_lock.py`、`native_helper.py` 的具体字节，直接从这些字节编译加载并调用候选 `serve`，不通过之后的磁盘模块导入。测试模拟最终校验后磁盘替换，验证仍执行先前校验字节，并覆盖解释器/隔离模式/字节码及源码漂移拒绝。该入口仅供可信管理员启动器使用，未接入现有独立 bootstrap、unit 或生产派发；验证器自身、解释器/stdlib 原生依赖的可信来源、peer 与启动实例的持续关联、重启和锁交接仍需闭环。模块替换设计仅适用于专用单线程启动进程，不适合复用的管理进程。152 项相关测试通过，完整 Device 1025 passed、3 skipped，ruff 与 diff 检查通过；尚无真实候选进程或准确新制品验收，不能声称运行身份已证明。生产派发保持关闭，包保护不变。
