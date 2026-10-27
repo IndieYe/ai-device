@@ -213,3 +213,5 @@ Debian发送者不再直接使用待替换包的 `sys.executable`。管理员持
 apply意图绑定snapshot回执SHA256，启动前重新核对副本内容及回执摘要，使用副本解释器 `-I -B` 执行标准库guard；`-B`避免运行时写pycache改变快照。快照失败不写apply意图；无回执目录保持阻塞，不自动覆盖、清理或迁移。完成副本可重复核对，不要求原包文件继续存在或不变。当前副本仅支撑发送者，尚未把整个管理器切换到独立job，也未放开包钩子。
 
 `packages/device-runtime/scripts/accept-native-bootstrap.py --source <可信CPython根> --destination <管理器事务目录下新目录>` 用于隔离root验证。实际副本6238成员，独立inode、同ID稳定、重定位prefix及ssl/sqlite3/ctypes加载通过；未运行真实dpkg替换，未构建包含此模块的新制品，不能视为完整升级验收。现有包保护和多实例拒绝不变。
+
+独立发送者跨替换已增加标准dpkg验收：`accept-native-bootstrap-replacement.sh V15_DEB REPOSITORY` 仅在标记 `DEVICE_DISPOSABLE_CONTAINER=bootstrap-replacement-v1` 的新root Linux临时容器中运行。脚本构建独立名测试包v1/v2，替换移除原CPython解释器及标准库后验证快照guard匹配回执和副本继续可用；不会安装Device包或授予其覆盖许可。真实实验同时修复Debian guard缺少sbin的PATH：固定为 `/usr/sbin:/usr/bin:/sbin:/bin`，不继承调用方PATH。该证据不代表整个管理器已脱离待替换包；独立job、正式包钩子许可和激活恢复仍缺。

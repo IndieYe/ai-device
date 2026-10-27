@@ -93,7 +93,8 @@ sys.exit(r.returncode)
             check=True,
             capture_output=True,
             pass_fds=(lease_fd,),
-            env={"PATH": "/usr/bin:/bin", "LANG": "C"},
+            # dpkg requires its standard administrative helpers on PATH.
+            env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C"},
         )
 
 

@@ -460,3 +460,11 @@ Debian apply意图前准备副本，将snapshot.json摘要绑定意图；guard�
 9项新增回归覆盖独立inode与源变更不影响副本、缺回执、快照漂移、越界链接、复制期间源漂移、非管理员、实际适配器argv绑定与快照失败不写apply意图。编写测试时曾错误解包fixture和重复缺参prepare，修正为复用已批准fixture后完整931 passed/3 Linux skipped（46.67s）。隔离amd64 Linux真实v15 CPython6238成员复制、同目录幂等、独立inode、重定位sys.prefix及ssl/sqlite3/ctypes加载通过；未真实dpkg替换、未构建新包或RPM联合验证。验收脚本accept-native-bootstrap.py纳入源码。无真实设备/服务操作，包保护不变。
 
 联动：实现/适配器/测试/HELPER/实施记录已更新；宿主前端、数据库、workdir示例、AI资产不适用。下一项优先真实隔离包替换期间快照guard持续执行和回执、整个管理器独立job，再推进包钩子准确许可与激活恢复。P1未完成、P2未开始。
+
+## 28. 标准dpkg移除源解释器后的发送者验证
+
+新增 `packages/device-runtime/scripts/accept-native-bootstrap-replacement.sh`，仅显式 `DEVICE_DISPOSABLE_CONTAINER=bootstrap-replacement-v1` 的新Linux隔离命名空间可运行。使用v15 DEB只提取CPython材料，另构建独立名 `device-bootstrap-disposable-fixture` v1/v2：v1拥有源运行时，v2标准dpkg更新移除它。通过真实Debian.prepare_execution/apply路径调用快照guard，核对源python3.13和os.py被移除、包数据库v2、匹配sender_reaped/returncode0回执、快照仍一致且ssl/sqlite3/ctypes可加载。未安装Device包，不解除其钩子，不借测试包许可作为Device批准。
+
+首轮发现实际生产路径错误：guard PATH=/usr/bin:/bin使dpkg找不到ldconfig/start-stop-daemon并返回2，未替换；补固定/usr/sbin:/usr/bin:/sbin:/bin并增加单测断言。第二轮标准包替换成功，但父进程写pycache造成源目录残留，原“整个目录消失”断言错误；父进程改-B并直接验证解释器及标准库文件移除，复跑通过。无手工删除或绕过dpkg；所有--rm容器已退出，无后台遗留。
+
+最终931 passed/3 Linux skipped（47.72s）、ruff、sh -n与diff检查通过。该证据仅覆盖独立发送者副本跨真实包替换存活，尚未覆盖整个管理器独立job、Device真实包覆盖许可、激活恢复、RPM或目标实机。P1未完成、包保护不变。下一步整个管理器独立job与标准包事务准确许可；不进入P2。

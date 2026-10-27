@@ -99,6 +99,7 @@ def test_debian_sender_uses_only_bound_snapshot(runtime, monkeypatch):
     assert argv[0] == str(stem.with_suffix(".bootstrap") / "runtime/bin/python3.13")
     assert argv[1:3] == ["-I", "-B"]
     assert kwargs["pass_fds"] == (3,)
+    assert kwargs["env"]["PATH"] == "/usr/sbin:/usr/bin:/sbin:/bin"
     assert kwargs.get("timeout") is None
     with pytest.raises(update.UpdateError, match="snapshot changed"):
         adapter.apply(source / "package.deb", lease_fd=3, receipt_path=receipt, intent={})
