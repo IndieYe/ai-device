@@ -499,7 +499,21 @@ class Updates:
                 intent_path = stem.with_suffix(".apply-intent.json")
                 nh._trusted(intent_path)
                 intent = json.loads(intent_path.read_text())
-                if intent != {"prepared_sha256": nh._digest(stem.with_suffix(".prepared.json"))}:
+                expected = {"prepared_sha256": nh._digest(stem.with_suffix(".prepared.json"))}
+                if "runtime_snapshot_sha256" in intent:
+                    directory = stem.with_suffix(".bootstrap")
+                    nb.validate_snapshot(directory)
+                    expected.update(
+                        {
+                            "runtime_snapshot_sha256": nh._digest(directory / "snapshot.json"),
+                            "target_package": {
+                                "name": value["metadata"]["Package"],
+                                "version": value["metadata"]["Version"],
+                                "architecture": value["metadata"]["Architecture"],
+                            },
+                        }
+                    )
+                if intent != expected:
                     raise UpdateError("apply intent differs from approved preparation")
                 sender = stem.with_suffix(".sender.json")
                 nh._trusted(sender)

@@ -402,3 +402,37 @@ def test_independent_runtime_failure_precedes_apply_intent(update):
     with pytest.raises(nu.nb.BootstrapError, match="snapshot failure"):
         manager.apply("probe", "one")
     assert not list((registry / "updates").glob("*.apply-intent.json"))
+
+
+def test_snapshot_intent_recovery_checks_target_and_receipt(update, monkeypatch):
+    manager, packages, _helper, _package = update
+    manager.apply("probe", "one")
+    stem = manager.registry / "updates/5-probe--one"
+    snapshot = stem.with_suffix(".bootstrap")
+    snapshot.mkdir()
+    (snapshot / "snapshot.json").write_text("fixture snapshot")
+    monkeypatch.setattr(nu.nb, "validate_snapshot", lambda directory: {})
+    intent = json.loads(stem.with_suffix(".apply-intent.json").read_bytes())
+    prepared = json.loads(stem.with_suffix(".prepared.json").read_bytes())
+    intent.update(
+        {
+            "runtime_snapshot_sha256": nh._digest(snapshot / "snapshot.json"),
+            "target_package": {
+                "name": prepared["metadata"]["Package"],
+                "version": prepared["metadata"]["Version"],
+                "architecture": prepared["metadata"]["Architecture"],
+            },
+        }
+    )
+    stem.with_suffix(".apply-intent.json").write_text(json.dumps(intent))
+    sender = json.loads(stem.with_suffix(".sender.json").read_bytes())
+    sender["intent"] = intent
+    stem.with_suffix(".sender.json").write_text(json.dumps(sender))
+    assert (
+        manager.recover("probe", "one")["recovery"]["state"] == "package_applied_pending_activation"
+    )
+    assert packages.calls == 1
+    intent["target_package"]["version"] = "wrong"
+    stem.with_suffix(".apply-intent.json").write_text(json.dumps(intent))
+    with pytest.raises(nu.UpdateError, match="intent differs"):
+        manager.recover("probe", "one")

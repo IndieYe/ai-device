@@ -476,3 +476,5 @@ Debian apply意图前准备副本，将snapshot.json摘要绑定意图；guard�
 3项直接执行可信guard源码回归覆盖成功、命令失败及观察超时；隔离Linux真实fixture包v1→v2移除源解释器后独立记录准确终态。进一步BOOTSTRAP_PARENT_EXIT=1启动guard后发起进程os._exit(23)，观察进程确认父已退出，guard仍完成标准dpkg替换、源解释器及标准库移除、匹配回执和pending终态、副本保持有效。没有kill或宿主服务操作。所有容器--rm退出，无后台遗留。
 
 最终934 passed/3 Linux skipped（48.18s），ruff/format/sh-n/diff通过。这证明发起进程退出不阻断独立发送与结果落盘，尚不等于完整systemd独立job或整个管理器切换；锁/任务收口/包钩子准确许可/激活恢复仍需后续验收。Device包保护未解除，P1仍未完成。
+
+第29节后续复核：recover原仅接受旧prepared_sha256单字段意图，会错误拒绝新快照意图。修复为旧意图保持严格原格式，新意图必须完整匹配prepared摘要、快照回执摘要与准确target_package，并重新验证副本；未知附加字段和目标漂移仍拒绝。新增恢复成功/目标漂移回归，确认不重新执行包。最终完整935 passed/3 skipped（51.65s），ruff/format/diff通过；该修复独立检查点保存，不改写前一提交历史。
