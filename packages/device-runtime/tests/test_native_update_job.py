@@ -117,3 +117,124 @@ def test_dispatch_records_once_without_replay(transaction, monkeypatch, lost):
     assert len(calls) == 1
     assert calls[0][0] == "/usr/bin/systemd-run"
     assert "--property=Restart=no" in calls[0]
+
+
+@pytest.mark.parametrize(
+    "unit_state,expected",
+    [
+        ("active", "job_in_progress"),
+        ("failed", "job_failed_requires_review"),
+        ("inactive", "dispatch_unknown"),
+    ],
+)
+def test_observe_read_only_and_never_grants_retry(transaction, unit_state, expected):
+    import hashlib
+    from types import SimpleNamespace
+
+    intent = {
+        "unit": "ai-device-package-"
+        + hashlib.sha256(str(transaction).encode()).hexdigest()
+        + ".service",
+        "instance_id": "probe",
+        "operation_id": "one",
+        "prepared_sha256": job.helper._digest(transaction.with_suffix(".prepared.json")),
+        "runtime_snapshot_sha256": "snapshot",
+    }
+    transaction.with_suffix(".job-intent.json").write_text(json.dumps(intent))
+    transaction.with_suffix(".apply-intent.json").unlink()
+    manager = SimpleNamespace(registry=transaction.parent.parent)
+    before = {
+        str(p.relative_to(manager.registry)): (p.read_bytes(), p.stat().st_mtime_ns)
+        for p in manager.registry.rglob("*")
+        if p.is_file()
+    }
+
+    def runner(argv, **kw):
+        assert argv[:2] == ["/usr/bin/systemctl", "show"]
+        return SimpleNamespace(stdout=f"LoadState=loaded\nActiveState={unit_state}\n")
+
+    result = job.observe_job(manager, "probe", "one", runner=runner)
+    assert result["state"] == expected and result["retry_allowed"] is False
+    assert result["fence_retained"] and not result["apply_intent_present"]
+    after = {
+        str(p.relative_to(manager.registry)): (p.read_bytes(), p.stat().st_mtime_ns)
+        for p in manager.registry.rglob("*")
+        if p.is_file()
+    }
+    assert before == after
+    assert not list(manager.registry.glob("*.lock"))
+
+
+def test_observe_requires_matching_sender_before_reporting_outcome(transaction):
+    import hashlib
+    from types import SimpleNamespace
+
+    apply_intent = json.loads(transaction.with_suffix(".apply-intent.json").read_bytes())
+    intent = {
+        "unit": "ai-device-package-"
+        + hashlib.sha256(str(transaction).encode()).hexdigest()
+        + ".service",
+        "instance_id": "probe",
+        "operation_id": "one",
+        "prepared_sha256": apply_intent["prepared_sha256"],
+        "runtime_snapshot_sha256": apply_intent["runtime_snapshot_sha256"],
+    }
+    transaction.with_suffix(".job-intent.json").write_text(json.dumps(intent))
+    outcome = {
+        "intent": apply_intent,
+        "state": "package_applied_pending_activation",
+        "package_observation": {
+            "status": "install ok installed",
+            "version": "2",
+            "architecture": "amd64",
+        },
+    }
+    transaction.with_suffix(".outcome.json").write_text(json.dumps(outcome))
+    sender = {"intent": apply_intent, "state": "sender_reaped", "returncode": 1}
+    transaction.with_suffix(".sender.json").write_text(json.dumps(sender))
+    manager = SimpleNamespace(registry=transaction.parent.parent)
+    runner = lambda *a, **kw: SimpleNamespace(stdout="LoadState=loaded\nActiveState=inactive\n")
+    with pytest.raises(job.JobError, match="success evidence"):
+        job.observe_job(manager, "probe", "one", runner=runner)
+    sender["returncode"] = 0
+    transaction.with_suffix(".sender.json").write_text(json.dumps(sender))
+    assert (
+        job.observe_job(manager, "probe", "one", runner=runner)["state"]
+        == "package_outcome_recorded"
+    )
+
+
+def test_observe_missing_journal_never_initializes(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(job.helper, "_trusted", lambda *a, **kw: None)
+    registry = tmp_path / "manager"
+    registry.mkdir()
+    with pytest.raises(FileNotFoundError):
+        job.observe_job(SimpleNamespace(registry=registry), "probe", "one")
+    assert list(registry.iterdir()) == []
+
+
+def test_observe_query_timeout_keeps_unknown(transaction):
+    import hashlib
+    import subprocess
+    from types import SimpleNamespace
+
+    intent = {
+        "unit": "ai-device-package-"
+        + hashlib.sha256(str(transaction).encode()).hexdigest()
+        + ".service",
+        "instance_id": "probe",
+        "operation_id": "one",
+        "prepared_sha256": job.helper._digest(transaction.with_suffix(".prepared.json")),
+    }
+    transaction.with_suffix(".job-intent.json").write_text(json.dumps(intent))
+    transaction.with_suffix(".apply-intent.json").unlink()
+
+    def runner(argv, **kw):
+        raise subprocess.TimeoutExpired(argv, 15)
+
+    result = job.observe_job(
+        SimpleNamespace(registry=transaction.parent.parent), "probe", "one", runner=runner
+    )
+    assert result["state"] == "dispatch_unknown" and not result["retry_allowed"]

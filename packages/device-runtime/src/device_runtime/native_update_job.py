@@ -192,6 +192,118 @@ def dispatch_job(manager, instance_id, operation_id, *, runner=None):
     return receipt
 
 
+def observe_job(manager, instance_id, operation_id, *, runner=None):
+    """Read-only observation: unit status never grants retry or clears a fence."""
+    import subprocess
+
+    runner = runner or subprocess.run
+    helper._identifier(instance_id)
+    helper._identifier(operation_id)
+    registry = helper._path(manager.registry)
+    helper._trusted(registry, directory=True)
+    directory = registry / "updates"
+    helper._trusted(directory, directory=True)
+    stem = directory / f"{len(instance_id)}-{instance_id}--{operation_id}"
+    path = stem.with_suffix(".job-intent.json")
+    helper._trusted(path)
+    intent = json.loads(path.read_bytes())
+    expected_unit = (
+        "ai-device-package-" + hashlib.sha256(str(stem).encode()).hexdigest() + ".service"
+    )
+    if (
+        intent.get("unit") != expected_unit
+        or intent.get("instance_id") != instance_id
+        or intent.get("operation_id") != operation_id
+    ):
+        raise JobError("job observation identity differs")
+    prepared_path = stem.with_suffix(".prepared.json")
+    approved_path = stem.with_suffix(".approved.json")
+    for evidence in (prepared_path, approved_path):
+        helper._trusted(evidence)
+    prepared = json.loads(prepared_path.read_bytes())
+    prepared_digest = helper._digest(prepared_path)
+    if intent.get("prepared_sha256") != prepared_digest or json.loads(
+        approved_path.read_bytes()
+    ) != {"prepared_sha256": prepared_digest, "approved_by_uid": 0}:
+        raise JobError("job approval evidence differs")
+    report = {
+        "state": "dispatch_unknown",
+        "unit": expected_unit,
+        "intent_sha256": helper._digest(path),
+        "retry_allowed": False,
+        "fence_retained": True,
+        "unit_observation": None,
+    }
+    try:
+        result = runner(
+            [
+                "/usr/bin/systemctl",
+                "show",
+                expected_unit,
+                "--property=LoadState,ActiveState,SubState,Result,MainPID,Job",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C"},
+        )
+        fields = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+        report["unit_observation"] = fields
+        if fields.get("LoadState") == "loaded":
+            if fields.get("ActiveState") in ("activating", "active", "deactivating"):
+                report["state"] = "job_in_progress"
+            elif fields.get("ActiveState") == "failed":
+                report["state"] = "job_failed_requires_review"
+    except (OSError, subprocess.SubprocessError):
+        pass
+    apply_path = stem.with_suffix(".apply-intent.json")
+    outcome_path = stem.with_suffix(".outcome.json")
+    if apply_path.exists():
+        helper._trusted(apply_path)
+        apply_intent = json.loads(apply_path.read_bytes())
+        expected_apply = {
+            "prepared_sha256": prepared_digest,
+            "runtime_snapshot_sha256": intent.get("runtime_snapshot_sha256"),
+            "target_package": {
+                "name": prepared["metadata"]["Package"],
+                "version": prepared["metadata"]["Version"],
+                "architecture": prepared["metadata"]["Architecture"],
+            },
+        }
+        if apply_intent != expected_apply:
+            raise JobError("job apply evidence differs")
+        report["apply_intent_present"] = True
+        if outcome_path.exists():
+            helper._trusted(outcome_path)
+            outcome = json.loads(outcome_path.read_bytes())
+            sender_path = stem.with_suffix(".sender.json")
+            helper._trusted(sender_path)
+            sender = json.loads(sender_path.read_bytes())
+            if (
+                outcome.get("intent") != apply_intent
+                or sender.get("intent") != apply_intent
+                or sender.get("state") != "sender_reaped"
+                or type(sender.get("returncode")) is not int
+                or outcome.get("state") not in ("unknown", "package_applied_pending_activation")
+            ):
+                raise JobError("job outcome evidence differs")
+            expected_package = {
+                "status": "install ok installed",
+                "version": prepared["metadata"]["Version"],
+                "architecture": prepared["metadata"]["Architecture"],
+            }
+            if outcome["state"] == "package_applied_pending_activation" and (
+                sender["returncode"] != 0 or outcome.get("package_observation") != expected_package
+            ):
+                raise JobError("job success evidence differs")
+            report["state"] = "package_outcome_recorded"
+            report["outcome"] = outcome
+    else:
+        report["apply_intent_present"] = False
+    return report
+
+
 def main():
     import argparse
 

@@ -16,7 +16,7 @@ cp "$1" /var/lib/ai-device/inputs/candidate.deb
 printf 'TEST_ONLY=yes\n' > /etc/device-job-fixture.env
 chmod 600 /etc/device-job-fixture.env
 $P/runtime/bin/python3.13 -I -B - <<'PY'
-import json,time,subprocess
+import json,time,subprocess,os
 from pathlib import Path
 from device_runtime import native_helper as helper
 from device_runtime import native_update as update
@@ -31,14 +31,52 @@ prepared=manager.prepare('probe','job-one',package,sha256=helper._digest(package
 stem=registry/'updates/5-probe--job-one'
 manager.approve('probe','job-one',prepared_sha256=helper._digest(stem.with_suffix('.prepared.json')))
 active=(root/'active.json').read_bytes()
-first=job.dispatch_job(manager,'probe','job-one')
-assert first['state']=='dispatch_accepted',first
+mode=os.environ.get('DEVICE_JOB_FAULT','none')
+assert mode in ('none','lost-response','source-drift')
+calls=[]
+real_run=subprocess.run
+def runner(argv,**kwargs):
+ calls.append(argv)
+ if mode=='source-drift':
+  # Test-only bounded queue delay; production dispatch has no arbitrary properties.
+  argv=[argv[0],'--no-block','--property=ExecStartPre=/usr/bin/sleep 8','--property=StandardError=file:/var/lib/ai-device/worker-test-error.log',*argv[1:]]
+ result=real_run(argv,**kwargs)
+ if mode=='lost-response':
+  raise subprocess.TimeoutExpired(argv,30)
+ return result
+first=job.dispatch_job(manager,'probe','job-one',runner=runner)
+assert first['state']==('dispatch_unknown' if mode=='lost-response' else 'dispatch_accepted'),first
 second=job.dispatch_job(manager,'probe','job-one')
 assert second['state']=='dispatch_already_recorded' and not second['replayed']
+assert len(calls)==1
+if mode=='source-drift':
+ deadline=time.monotonic()+10
+ while True:
+  queued=real_run(['/usr/bin/systemctl','show',first['unit'],'--property=SubState','--value'],check=True,capture_output=True,text=True).stdout.strip()
+  if queued=='start-pre': break
+  assert time.monotonic()<deadline,'test did not observe queued start-pre window'
+  time.sleep(.05)
+ value=json.loads(active); value['release_version']='0.0.0-test-drift'
+ (root/'active.json').write_text(json.dumps(value))
 try: helper._assert_no_package_intent(registry)
 except helper.HelperError: pass
 else: raise AssertionError('queued job must fence starts')
 deadline=time.monotonic()+90
+if mode=='source-drift':
+ while True:
+  status=real_run(['/usr/bin/systemctl','show',first['unit'],'--property=ActiveState','--value'],check=True,capture_output=True,text=True).stdout.strip()
+  if status=='failed': break
+  assert time.monotonic()<deadline,'worker did not reject source drift'
+  time.sleep(.1)
+ assert not stem.with_suffix('.apply-intent.json').exists()
+ assert not stem.with_suffix('.sender.json').exists()
+ assert not stem.with_suffix('.package.log').exists()
+ assert stem.with_suffix('.job-intent.json').exists()
+ error=Path('/var/lib/ai-device/worker-test-error.log').read_text()
+ assert 'source active changed' in error,error
+ (root/'active.json').write_bytes(active)
+ print(json.dumps({'state':'queued_source_drift_refused','dispatch_once':True,'package_executed':False,'persistent_fence_retained':True,'test_active_restored':True}))
+ raise SystemExit(0)
 while not stem.with_suffix('.outcome.json').exists():
  if time.monotonic()>deadline:
   subprocess.run(['/usr/bin/journalctl','-u',first['unit'],'--no-pager','-n','40'],check=False)

@@ -518,3 +518,17 @@ helper启动/登记和其他包apply被持久job意图阻断。worker从完整�
 脚本全部断言通过并输出ACCEPTANCE_EXIT=0；随后systemctl --force poweroff只关闭该一次性临时容器，外层container run返回130，不把130当测试通过码，实际验收以脚本终态与断言证据为准。--rm容器已退出，无后台遗留。完整源码回归仍为ae1acb4的949 passed/3 skipped（新增脚本未改核心，本轮未重跑完整），sh-n/diff通过。证据仅覆盖真实systemd派发与包保护拒绝，不覆盖成功升级、派发失响应真实注入、排队源漂移动态拒绝或激活。
 
 下一步仍需独立job只读诊断/显式恢复入口、排队源漂移与失响应真实故障、稳定版本化包布局、任务收口/准确停止、准确包许可及激活恢复。P1未完成；原包保护不变，P2—P5未开始。
+
+## 35. 派发失响应与排队源漂移（重启前未提交现场）
+
+扩展accept-native-update-job.sh两个真实隔离systemd故障：lost-response在真实systemd-run成功后抛调用方TimeoutExpired，准确dispatch_unknown、同ID不重派，后续包保护仍拒绝、sender/outcome匹配；source-drift以测试专用--no-block/ExecStartPre有限sleep确认SubState=start-pre后改变临时active，worker报source active changed，未创建apply-intent/sender/package.log，job持久门禁保留，测试active恢复。两项最终均ACCEPTANCE_EXIT=0，容器关机外层130单独记录，不混同验收返回码。
+
+源漂移首次未真正命中排队窗口，90秒断言失败；改no-block并观测start-pre后命中，第二轮journal无日志导致证据断言失败；改测试专用stderr文件后准确原因通过。后台63215已回收，所有临时容器已关机退出，无后台遗留、无宿主服务操作。源码核心仍5f92fd4/v18 wheel，未解除包保护。
+
+重启通知到达时新增observe_job只读诊断草稿，尚无单测/动态验证，只有ruff通过；不宣称诊断或显式恢复完成。本轮未提交：验收脚本、native_update_job.py以及本节。HEAD仍5f92fd4，未跑新完整回归，上一核心949+3skip不能背书诊断草稿。git diff-check/sh-n通过。恢复后优先复核诊断的证据绑定/只读副作用并补回归，正式记录本轮故障证据再保存检查点；不得丢弃未提交改动。安全重启由外部处理，本会话未执行重启。
+
+## 36. 重启后只读job诊断审核与回归
+
+外部重启后核实服务running、ses-14204/pro-1非私密、唯一execution和停止检查开关保持，3文件现场及HEAD 5f92fd4完整；重启等待解除。审核observe_job草稿发现复用_transaction会创建锁/目录，改直接读取可信已有registry/updates，不初始化或补写台账。诊断严格绑定事务ID/准确批准/完整apply目标和快照摘要、sender intent/state/整数returncode、outcome intent与枚举；pending必须命令0且准确包数据库目标匹配。systemctl只show，失败或超时保持unknown；任何状态retry_allowed=false，保留持久门禁，不自动恢复。
+
+新增6项回归：active/failed/inactive分类、读取前后全部文件内容及mtime不变/不创建锁、缺目录不初始化、query超时、sender失败不许宣称成功。完整955 passed/3 Linux skipped（88.07s），ruff/format/sh-n/diff通过，后台81358已回收。该函数尚未在新构建runtime内动态调用；第35节真实失响应/排队漂移证据仍来自v18，不能混算为新诊断动态验收。显式恢复及unknown解除仍未实现。原包保护、P1边界不变。
