@@ -205,7 +205,8 @@ def render_helper_unit(*, bootstrap_python, registry, socket_path, group):
         "After=local-fs.target\n\n[Service]\nType=simple\nUser=root\nGroup=root\n"
         f"ExecStart={python} -I -B -m device_runtime.native_helper serve "
         f"--registry {registry} --socket {socket_path} --group {group}\n"
-        "UMask=0077\nNoNewPrivileges=yes\nRestart=no\n"
+        "# The start guard owns inherited leases until its sender is reaped.\n"
+        "KillMode=process\nUMask=0077\nNoNewPrivileges=yes\nRestart=no\n"
         "# No ExecStartPre unlink: an orphan socket requires explicit reconciliation.\n"
         "\n[Install]\nWantedBy=multi-user.target\n"
     )

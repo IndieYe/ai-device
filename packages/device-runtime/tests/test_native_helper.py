@@ -525,6 +525,8 @@ def test_deploy_helper_no_start_and_no_replace(deployment):
     content = unit.read_text()
     assert "RuntimeDirectory=runtime\n" in content
     assert "RuntimeDirectoryPreserve=yes" in content
+    assert "KillMode=process\n" in content
+    assert "Restart=no\n" in content
     assert "ExecStartPre" in content and "ExecStartPre=" not in content
     assert "--group 12345" in content
     with pytest.raises(nh.HelperError, match="already exists"):
