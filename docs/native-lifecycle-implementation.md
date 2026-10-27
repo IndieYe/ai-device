@@ -1033,3 +1033,10 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 `accept-native-verified-handshake.sh` 在无网络一次性 Linux 6.18 amd64/Rosetta 容器安装第122节准确 `57714ae` 未签名 DEB（摘要 `b172b35a6882eb61b89b48dba4b27808f3bf6da1d06da8510cb31ca4f2e45d03`），无需覆盖源码。独立 bootstrap 发布并校验候选字节，随后测试性篡改候选路径；父持 daemon 双锁 fork，子从继承的验证字节加载候选并以 SEQPACKET 回应随机挑战。父核对直接子 pidfd、逐记录 PID/UID、活性和双锁互斥，子退出后释放租约。输出 `VERIFIED_CANDIDATE_PIDFD_HANDSHAKE_FIXTURE_OK`，日志 `20261027-221821-c360ce.log`；ruff与shell语法检查通过。
 
 实验代码不是生产监督器，未绑定公开 socket 实际处理者或 systemd invocation，未验证父死亡、持久事务及unknown；测试握手不得授权新 job 派发。未操作真实设备或服务。
+
+
+## 130. 准确 DEB 复验候选 socket 与父退出
+
+新入口 `scripts/accept-native-exact-parent-exit.sh` 在一次性无网络 Linux 6.18 amd64/Rosetta 容器安装第122节准确 `57714ae` DEB，校验 SHA256 `b172b35a6882eb61b89b48dba4b27808f3bf6da1d06da8510cb31ca4f2e45d03`，不挂载或覆盖源码；复用第120节 `probe-native-verified-parent-exit.py`。候选字节经独立 bootstrap 验证后，子加载继承内存字节并 bind socket，观察到 peer 为子且持双锁；监督父退出后，实验 watchdog 观察父 pidfd 并令子退出，双锁释放，陈旧 socket 文件保留且连接拒绝。`VERIFIED_PARENT_EXIT_PIDFD_FIXTURE_OK`，日志 `20261027-222019-747f97.log`，shell语法检查通过。
+
+这消除了第120节旧包源码覆盖的制品歧义，但仍是内部 `_serve` 与测试 watchdog，非生产监督器、systemd invocation、逐消息实际处理者、事务恢复或宿主重启验收；不开放派发，不自动删除陈旧 socket。
