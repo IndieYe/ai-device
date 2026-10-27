@@ -162,8 +162,32 @@ def test_read_rejects_recovery_bound_to_different_intent(helper):
     intent = {"action": "start", "instance_id": "probe", "operation_id": "one"}
     (service.registry / "op-probe-one.json").write_text(json.dumps(intent))
     (service.registry / "recovery-probe-one.json").write_text('{"intent":{}}')
-    with pytest.raises(nh.HelperError, match="recovery identity differs"):
+    with pytest.raises(nh.HelperError, match="invalid recovery evidence"):
         service.handle(req("reconcile"), peer_uid=record["uid"])
+
+
+@pytest.mark.parametrize("action", ["resolve-running", "resolve-stopped", "start", "reconcile"])
+@pytest.mark.parametrize("change", ["intent", "state", "replayed"])
+def test_existing_recovery_must_remain_bound(helper, action, change):
+    service, adapter, record = helper
+    adapter.failure = True
+    service.handle(req("start"), peer_uid=record["uid"])
+    adapter.failure = False
+    adapter.active = "active"
+    service.handle(req("resolve-running"), peer_uid=record["uid"])
+    path = service.registry / "recovery-probe-one.json"
+    recovery = json.loads(path.read_text())
+    if change == "intent":
+        recovery["intent"]["operation_id"] = "other"
+    elif change == "state":
+        recovery["state"] = "unknown"
+    else:
+        recovery["start_replayed"] = True
+    path.write_text(json.dumps(recovery))
+    before = sum(name == "start" for name, _ in adapter.calls)
+    with pytest.raises(nh.HelperError, match="invalid recovery evidence"):
+        service.handle(req(action), peer_uid=record["uid"])
+    assert sum(name == "start" for name, _ in adapter.calls) == before
 
 
 def test_start_idempotency(helper):

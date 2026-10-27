@@ -135,6 +135,18 @@ def _pending_package_jobs(directory):
     return [path for path in Path(directory).glob("*.job-intent.json") if not _job_retired(path)]
 
 
+def _read_start_recovery(path, intent):
+    recovery = json.loads(path.read_text())
+    if (
+        not isinstance(recovery, dict)
+        or recovery.get("state") not in ("confirmed_running", "confirmed_stopped")
+        or recovery.get("intent") != intent
+        or recovery.get("start_replayed") is not False
+    ):
+        raise HelperError("invalid recovery evidence")
+    return recovery
+
+
 def _assert_no_package_intent(registry):
     directory = Path(registry) / "updates"
     if not os.path.lexists(directory):
@@ -617,7 +629,7 @@ class Helper:
                 if stored_intent != expected:
                     raise HelperError("matching start intent required for recovery")
                 if recovery_path.exists():
-                    return {**result, "recovery": json.loads(recovery_path.read_text())}
+                    return {**result, "recovery": _read_start_recovery(recovery_path, expected)}
                 if (
                     result_path.exists()
                     and json.loads(result_path.read_text()).get("state") != "unknown"
@@ -712,13 +724,10 @@ class Helper:
                     json.loads(stored_result.read_text()) if stored_result.exists() else None
                 )
                 result["recovery"] = (
-                    json.loads(recovery_path.read_text()) if recovery_path.exists() else None
+                    _read_start_recovery(recovery_path, result["intent"])
+                    if recovery_path.exists()
+                    else None
                 )
-                if result["recovery"] is not None and (
-                    not isinstance(result["recovery"], dict)
-                    or result["recovery"].get("intent") != result["intent"]
-                ):
-                    raise HelperError("operation recovery identity differs")
                 return result
             intent_path = self.registry / f"op-{instance_id}-{operation_id}.json"
             result_path = self.registry / f"result-{instance_id}-{operation_id}.json"
@@ -743,7 +752,7 @@ class Helper:
                     if result_path.exists()
                     else {"state": "unknown"},
                     "replayed": False,
-                    "recovery": json.loads(recovery_path.read_text())
+                    "recovery": _read_start_recovery(recovery_path, existing_intent)
                     if recovery_path.exists()
                     else None,
                 }
@@ -763,12 +772,7 @@ class Helper:
                         raise HelperError(
                             "unconfirmed operation blocks a new start; reconcile first"
                         )
-                    recovery = json.loads(recovered.read_text())
-                    if recovery.get("state") not in {
-                        "confirmed_running",
-                        "confirmed_stopped",
-                    } or recovery.get("intent") != json.loads(pending.read_text()):
-                        raise HelperError("invalid recovery evidence")
+                    _read_start_recovery(recovered, json.loads(pending.read_text()))
             if snapshot["ActiveState"] not in {"inactive", "failed", "active"}:
                 raise HelperError("service transition requires read-only reconciliation")
             with (
