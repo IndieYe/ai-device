@@ -31,7 +31,9 @@ chmod 755 "$root/usr/bin/ai-device-native-install"
 # Independent standard-library-only administrator bootstrap, never client imports.
 bootstrap=/opt/ai-device/bootstrap/0.2.2-native1
 mkdir -p "$root$bootstrap"
-tar -xzf "$archive" -C "$root$bootstrap"
+# Exclude upstream bytecode while creating this new bootstrap, not by altering
+# an existing installation. Candidate identity checks require source-only code.
+tar --exclude='*/__pycache__' --exclude='*.pyc' --exclude='*.pyo' -xzf "$archive" -C "$root$bootstrap"
 mv "$root$bootstrap/python" "$root$bootstrap/runtime"
 site="$root$bootstrap/runtime/lib/python3.13/site-packages"
 rm -rf "$site"

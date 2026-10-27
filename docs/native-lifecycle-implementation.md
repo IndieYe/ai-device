@@ -688,3 +688,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 70. helper 候选字节码缓存门禁
 
 隔离 Python 实验复现：源文件改变但大小和时间戳保持不变时，`python -B` 仍可读取旧 `.pyc`，因此源码 SHA 及 `-B` 本身不能证明实际执行了对应源码。helper 候选 inspect 与已发布候选 read 在校验快照 inventory 后拒绝任何 `__pycache__`、`.pyc`、`.pyo`；不自动删除缓存，且不改变普通事务快照。新增 inspect 和 read 的拒绝回归，完整 Device 回归 1012 passed、3 skipped，ruff 通过。该保守门禁可能拒绝带常规缓存的 runtime，尚未验证当前完整制品能否满足，需后续隔离构建验收；它只排除字节码歧义，不证明运行进程加载了指定源码、systemd 互斥或持续身份。生产派发仍关闭，包保护不变。
+
+
+## 71. 无缓存 bootstrap 候选隔离探测
+
+锁定 CPython 归档包含 3 个 `encodings/__pycache__` 条目，原样构建会触发第70节候选门禁。Linux 包构建脚本现仅在创建新的独立 bootstrap 时用 tar 排除 `__pycache__`、`.pyc` 和 `.pyo`，不清理已有安装，也不改变客户端 runtime。测试从实际脚本提取 tar 命令，验证保留源码并排除缓存。在一次性 amd64 Linux 容器中，以锁定归档和当前源码组装无缓存独立 runtime，实际 snapshot_runtime 与 inspect_helper_candidate 成功；快照 SHA256 `7b912930b12deec5fe32a32a72cf7cd1bde18980f3e9ae32e065c251bcd4258c`、helper SHA256 `60988d0c8f2f14d416f1b9183d48c5879c9434354f5e378ef814e7991d2a77ec`，候选未激活。探测不是完整包构建或安装，也不证明运行代码身份、systemd互斥和故障恢复；生产派发仍关闭，包保护不变。首次单文件 bind mount 被容器工具拒绝，改为目录只读挂载后成功。

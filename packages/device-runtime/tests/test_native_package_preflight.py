@@ -50,3 +50,32 @@ def test_deb_preflight_rejects_dangling_layout_symlink(tmp_path, name):
     )
     result = subprocess.run(["/bin/sh"], input=script, text=True, capture_output=True, check=False)
     assert result.returncode != 0
+
+def test_bootstrap_extract_excludes_bytecode_but_keeps_source(tmp_path):
+    import subprocess
+    import tarfile
+
+    builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
+    line = next(
+        line for line in builder.read_text().splitlines()
+        if line.startswith("tar --exclude=") and '"$root$bootstrap"' in line
+    )
+    source = tmp_path / "source/python/lib/python3.13/encodings"
+    (source / "__pycache__").mkdir(parents=True)
+    (source / "__init__.py").write_text("source")
+    (source / "__pycache__/__init__.cpython-313.pyc").write_bytes(b"cache")
+    (source / "legacy.pyc").write_bytes(b"cache")
+    archive = tmp_path / "runtime.tar.gz"
+    with tarfile.open(archive, "w:gz") as stream:
+        stream.add(tmp_path / "source/python", arcname="python")
+    output = tmp_path / "root/bootstrap"
+    output.mkdir(parents=True)
+    subprocess.run(
+        ["sh", "-c", line], check=True,
+        env={"PATH": "/usr/bin:/bin", "archive": str(archive), "root": str(tmp_path / "root"),
+             "bootstrap": "/bootstrap"},
+    )
+    extracted = output / "python/lib/python3.13/encodings"
+    assert (extracted / "__init__.py").read_text() == "source"
+    assert not (extracted / "__pycache__").exists()
+    assert not (extracted / "legacy.pyc").exists()
