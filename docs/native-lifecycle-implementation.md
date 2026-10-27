@@ -602,3 +602,9 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 50. 旧helper兼容缺口可复现隔离回归
 
 新增一次性Linux容器脚本accept-native-old-helper-fence.sh，使用v17 DEB内真实旧bootstrap helper及v28当前wheel，在同一个隔离registry上验证：旧helper忽略未退休job-intent；新helper阻塞该意图；新dispatch默认在写job-intent/receipt及调用systemd前拒绝。脚本需显式old-helper-fence-v1标记，实际隔离运行三项均通过。daemon锁仅持有至进程退出，不能作为跨重启的持久屏障；该回归不验证服务重启、派发竞态或旧运行代码迁移，不解除新派发默认门禁。无产品代码修改，本轮未重跑完整回归；之前979 passed/3 skipped。P1未完成。
+
+## 51. 旧helper迁移锁证据与尚未实现的门禁
+
+在一次性Linux容器中从v17 DEB提取实际旧bootstrap helper，启动独立进程取得`helper-daemon.lock`：另一进程获取被拒；原持有进程自然退出后另一进程立即可取得。证明该锁具有进程存活期间的互斥，但不证明宿主重启后、systemd或人工启动时旧helper不会重新出现。未停止真实服务、未执行迁移。
+
+迁移设计至少须在解除派发关闭前证明：实际运行的旧helper及已接受启动sender收口；systemd等启动入口和旧版本未来启动在持久边界内被协调；未终态start/job/apply按原ID和证据安全恢复或继续阻塞；候选helper及实际加载进程版本绑定且支持相同屏障；切换与崩溃/重启恢复有持久、可重入且不重放的证据；旧版本不能仅因锁空闲或磁盘代码更新被当作已退出。仅有daemon锁、unit摘要或一次PID查询均不足。新job派发仍默认关闭，不能把本实验作为互斥完成或授权切换的证明。当前无实现跨重启持久协议，P1未完成。
