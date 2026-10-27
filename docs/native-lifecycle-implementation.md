@@ -1415,3 +1415,12 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 准确 `0fde77a` DEB 在无网络隔离 systemd 容器中干净安装；fixture 以独立 unit 占用测试专用 helper unit 名，主进程接收固定请求、fork 子进程写入 fixture 文件并等待其退出，再由主进程发送响应。使用准确包内 `scoped_helper_unit_peer` 做前后 unit/pidfd 只读观察，以 `SO_PASSCRED` 检查响应 sender PID 与 unit peer 相等，同时读取 fixture 动作 PID，确认动作 PID 不同；输出 `MATCHING_UNIT_RESPONSE_WITH_DISTINCT_FIXTURE_ACTION_PROCESS` 和 `RESPONSE_CREDENTIALS_DO_NOT_PROVE_ACTION_PROVENANCE`（`20261028-022213-9e93a8.log`）。专用 fixture 自行结束，容器停止。
 
 该例不是实际 helper 或真实升级行为，只是严格限制第177节一次真实只读 query 的结论：响应来源匹配不能单独证明业务副作用实际处理者，更不能建立受控 invocation／worker／guard 的原子绑定。仍须设计受控进程树、请求和终态协调并覆盖故障与旧版本；生产派发与恢复门禁保持关闭。
+
+
+## 180. 当前源码的 job worker 新动作默认拒绝
+
+检查发现新 job 派发虽默认拒绝，但已有 job intent 仍可进入 `Updates.apply(..., job_intent_sha256=...)`；使用有效 intent、测试替身包管理器及快照校验替身的回归先失败（`20261028-022447-0bd298.log`），说明当前源码未对该入口默认拒绝，**不证明真实旧 job 已执行或真实包动作发生**。
+
+当前源码在实例锁→package EX→service lease 内、close 标记检查后、新 apply intent 创建之前，对带 job 摘要的新动作调用 `_require_proven_job_execution_fence` 并默认拒绝。原 job intent/围栏保留，不删除、不重试；已有 apply intent 仍走原只读观察，直接 apply 保持原有行为。worker 内部旧校验测试通过显式测试替身绕过该新门禁以覆盖原逻辑；真实门禁测试不替换它。定向 131 项及 ruff 通过（`20261028-022540-d34e9e.log`），完整 1162 项通过、10 项跳过（`20261028-022548-5959a9.log`）。
+
+此收紧不影响已冻结的旧 worker snapshot、已启动进程或真实 package guard，不证明 worker 身份、完整进程树或 invocation 绑定；旧环境仍须管理员维护窗口手动退休。真实准确新包验收尚未完成，派发和恢复继续默认拒绝，包覆盖保护不放宽。

@@ -708,9 +708,47 @@ def test_queued_job_blocks_direct_apply_and_start(update):
     assert packages.calls == 0
 
 
+def test_existing_job_worker_refuses_new_apply_without_proven_fence(update, monkeypatch):
+    import hashlib
+
+    manager, packages, _helper, _package = update
+    stem = manager.registry / "updates/5-probe--one"
+    snapshot = stem.with_suffix(".bootstrap")
+    snapshot.mkdir()
+    (snapshot / "snapshot.json").write_text("snapshot")
+    monkeypatch.setattr(nu.nb, "validate_snapshot", lambda directory: {})
+    path = stem.with_suffix(".job-intent.json")
+    path.write_text(json.dumps({
+        "schema_version": 1, "state": "job_dispatch_intent", "close_protocol": "package-lease-v1",
+        "unit": "ai-device-package-" + hashlib.sha256(str(stem).encode()).hexdigest() + ".service",
+        "instance_id": "probe", "operation_id": "one",
+        "prepared_sha256": nh._digest(stem.with_suffix(".prepared.json")),
+        "runtime_snapshot_sha256": nh._digest(snapshot / "snapshot.json"),
+    }))
+    before = {p.name: p.read_bytes() for p in stem.parent.iterdir() if p.is_file()}
+    with pytest.raises(nu.UpdateError, match="job worker disabled: execution fence unproven"):
+        manager.apply("probe", "one", job_intent_sha256=nh._digest(path))
+    assert packages.calls == 0
+    assert not stem.with_suffix(".apply-intent.json").exists()
+    assert {p.name: p.read_bytes() for p in stem.parent.iterdir() if p.is_file()} == before
+
+
+def test_existing_apply_remains_observable_with_job_worker_gate(update):
+    manager, packages, _helper, _package = update
+    first = manager.apply("probe", "one")
+    stem = manager.registry / "updates/5-probe--one"
+    before = {p.name: p.read_bytes() for p in stem.parent.iterdir() if p.is_file()}
+    observed = manager.apply("probe", "one", job_intent_sha256="fixture-digest")
+    assert observed == first
+    assert packages.calls == 1
+    assert {p.name: p.read_bytes() for p in stem.parent.iterdir() if p.is_file()} == before
+
+
 def test_worker_rechecks_job_intent_and_source(update, monkeypatch):
     import hashlib
 
+    # Exercise dormant validation after the real default-deny is tested separately.
+    monkeypatch.setattr(nu, "_require_proven_job_execution_fence", lambda: None)
     manager, packages, helper, _package = update
     stem = manager.registry / "updates/5-probe--one"
     snapshot = stem.with_suffix(".bootstrap")

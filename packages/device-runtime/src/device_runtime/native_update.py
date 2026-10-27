@@ -26,6 +26,11 @@ class UpdateError(ValueError):
     pass
 
 
+def _require_proven_job_execution_fence():
+    """Block new job actions until actual worker identity and fencing are proven."""
+    raise UpdateError("job worker disabled: execution fence unproven")
+
+
 def _require_proven_job_recovery_fence():
     """Keep job recovery closed until worker completion is coordinated durably."""
     raise UpdateError("job recovery disabled: worker completion fence unproven")
@@ -441,6 +446,8 @@ class Updates:
                 # protects publication of apply-intent. It never clears fences.
                 if os.path.lexists(stem.with_suffix(".job-closed.json")):
                     raise UpdateError("package job closed before execution")
+                if job_intent_sha256 is not None:
+                    _require_proven_job_execution_fence()
                 for pending_job in nh._pending_package_jobs(stem.parent):
                     if pending_job != job_path or job_intent_sha256 is None:
                         raise UpdateError("queued package job blocks direct apply")
