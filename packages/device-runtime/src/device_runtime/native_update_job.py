@@ -89,6 +89,12 @@ def describe_job(stem):
     return {"descriptor": descriptor, "unit_content": content}
 
 
+def _require_proven_job_fence():
+    # An old daemon can start after a point-in-time identity check. Until a
+    # persistent cross-version barrier exists, no new dispatch is safe.
+    raise JobError("new dispatch disabled: helper job-fence compatibility unproven")
+
+
 def dispatch_job(manager, instance_id, operation_id, *, runner=None):
     """Explicit administrator dispatch, once only, without waiting for execution.
 
@@ -115,6 +121,7 @@ def dispatch_job(manager, instance_id, operation_id, *, runner=None):
                 "intent": json.loads(path.read_bytes()),
                 "replayed": False,
             }
+        _require_proven_job_fence()
         with manager._apply_lease(manager.registry / "package-manager"):
             if any(stem.parent.glob("*.apply-intent.json")) or helper._pending_package_jobs(
                 stem.parent

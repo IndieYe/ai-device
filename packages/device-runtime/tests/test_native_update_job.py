@@ -109,6 +109,8 @@ def test_dispatch_records_once_without_replay(transaction, monkeypatch, lost):
         if lost:
             raise subprocess.TimeoutExpired(argv, 30)
 
+    # Test the dormant dispatcher mechanics only; production gate is tested separately.
+    monkeypatch.setattr(job, "_require_proven_job_fence", lambda: None)
     first = job.dispatch_job(manager, "probe", "one", runner=runner)
     assert first["state"] == ("dispatch_unknown" if lost else "dispatch_accepted")
     assert first["package_execution_confirmed"] is False
@@ -239,3 +241,57 @@ def test_observe_query_timeout_keeps_unknown(transaction):
         SimpleNamespace(registry=transaction.parent.parent), "probe", "one", runner=runner
     )
     assert result["state"] == "dispatch_unknown" and not result["retry_allowed"]
+
+
+def test_new_dispatch_fails_closed_without_cross_version_fence(transaction, monkeypatch):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from device_runtime import native_update as update
+
+    monkeypatch.setattr(job.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(__import__("sys"), "platform", "linux")
+    transaction.with_suffix(".apply-intent.json").unlink()
+
+    @contextmanager
+    def txn(*args):
+        yield {}, transaction
+
+    manager = SimpleNamespace(
+        packages=update.Debian(),
+        registry=transaction.parent.parent,
+        _transaction=txn,
+        _prepared=lambda *args: {},
+    )
+    calls = []
+    with pytest.raises(job.JobError, match="compatibility unproven"):
+        job.dispatch_job(manager, "probe", "one", runner=lambda *a, **k: calls.append(a))
+    assert not calls
+    assert not transaction.with_suffix(".job-intent.json").exists()
+    assert not transaction.with_suffix(".job-dispatch.json").exists()
+
+
+def test_existing_job_observation_survives_dispatch_gate(transaction, monkeypatch):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from device_runtime import native_update as update
+
+    monkeypatch.setattr(job.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(__import__("sys"), "platform", "linux")
+    transaction.with_suffix(".job-intent.json").write_text('{"state":"job_dispatch_intent"}')
+
+    @contextmanager
+    def txn(*args):
+        yield {}, transaction
+
+    manager = SimpleNamespace(
+        packages=update.Debian(),
+        registry=transaction.parent.parent,
+        _transaction=txn,
+        _prepared=lambda *args: {},
+    )
+    result = job.dispatch_job(
+        manager, "probe", "one", runner=lambda *a, **k: pytest.fail("replayed")
+    )
+    assert result["state"] == "dispatch_already_recorded" and not result["replayed"]

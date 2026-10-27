@@ -594,3 +594,7 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 隔离提取v17 DEB，直接用包内独立bootstrap的原helper读取测试registry：仅存在未退休job-intent时，旧`_assert_no_package_intent`返回允许，其源码只检查apply-intent；新helper对精确退休fixture可放行，但不改变旧helper行为。故前文第41节及其他“旧helper仍保守阻塞”的描述对v17错误：**旧helper在job派发到apply-intent落盘之间可能允许启动**。这不是退休证据损坏或旧helper已经升级的证明，也不是生产现场核查。
 
 硬门禁：不得把job派发/退休原型与不识别job-intent的旧helper混合用于真实设备，不得以新wheel或磁盘文件更新推断运行进程已加载新helper；必须先实现并验证版本/进程身份、旧helper受控迁移及未终态台账兼容，或用独立持久屏障在旧helper也认识的协议下覆盖派发间隙。不得删意图、放宽原包钩子或依靠短暂窗口。隔离实验分别验证新helper接受模拟退休记录、v17旧helper忽略未退休job；未验证真实服务运行版本，也未触发真实设备操作。P1阻塞于此兼容缺口，继续隔离整改。
+
+## 49. 新job派发默认失败关闭
+
+针对第48节v17旧helper忽略job意图的已证实派发窗口风险，dispatch_job在已存在job的观察返回之后、任何新job意图/快照/系统调用之前调用固定失败关闭门禁；不得根据静态文件、当前PID或一次能力查询放行，因为旧daemon可在检查后启动。已存在job仍按原ID观察，不重派；恢复与退休不删除原台账。历史第41节的新ID派发仅表示当时隔离实验，现行生产入口关闭，新ID不能派发。测试只在明确monkeypatch门禁时覆盖旧派发机制；独立测试验证默认拒绝、无job意图/receipt/systemd调用，既有job不重放。完整979 passed/3 Linux skipped（46.49s）。此门禁只保护加载了新代码的调用者，不约束已运行旧调度器；未实现跨版本持久屏障、旧helper迁移或真实服务升级，原包保护不变，P1未完成。
