@@ -693,3 +693,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 71. 无缓存 bootstrap 候选隔离探测
 
 锁定 CPython 归档包含 3 个 `encodings/__pycache__` 条目，原样构建会触发第70节候选门禁。Linux 包构建脚本现仅在创建新的独立 bootstrap 时用 tar 排除 `__pycache__`、`.pyc` 和 `.pyo`，不清理已有安装，也不改变客户端 runtime。测试从实际脚本提取 tar 命令，验证保留源码并排除缓存。在一次性 amd64 Linux 容器中，以锁定归档和当前源码组装无缓存独立 runtime，实际 snapshot_runtime 与 inspect_helper_candidate 成功；快照 SHA256 `7b912930b12deec5fe32a32a72cf7cd1bde18980f3e9ae32e065c251bcd4258c`、helper SHA256 `60988d0c8f2f14d416f1b9183d48c5879c9434354f5e378ef814e7991d2a77ec`，候选未激活。探测不是完整包构建或安装，也不证明运行代码身份、systemd互斥和故障恢复；生产派发仍关闭，包保护不变。首次单文件 bind mount 被容器工具拒绝，改为目录只读挂载后成功。
+
+
+## 72. 无缓存完整 DEB 构建探测（非发布制品）
+
+在当前源码 `9db38cf` 离线构建 Device wheel（SHA256 `ed2f384155815d5454e18b954300e54d25de0225883c29b138a591f644e91f2a`），在一次性 amd64 Linux 容器中复制 `9debfb6` 历史 payload 并仅在临时副本替换 Device wheel，运行当前 `build-native-linux.sh` 构建 DEB。实验包 SHA256 `0127f17a3b3bcfe80626301dcd63dc1f6cc25deec0639cfc48b686768d7c1f9a`；解包后 bootstrap 无 `__pycache__`/`.pyc`/`.pyo`，其中 `native_helper.py` 与当前源码逐字节一致，SHA256 `60988d0c8f2f14d416f1b9183d48c5879c9434354f5e378ef814e7991d2a77ec`。临时替换未重建 payload 来源清单，该包不是准确来源闭环或正式发布制品；容器和包随实验结束，不用于安装。未验证 RPM、实际运行代码绑定、真实 systemd 互斥或故障恢复；生产派发关闭及包保护未改变。
