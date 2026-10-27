@@ -1243,3 +1243,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 干净 `1c3fb38dd0b8532f792c948394e1ca072d236fa2` 离线构建三包，Device wheel SHA256 `cf43cebede8824e08607094bdc43ef939b5561eb014ebab28943be81bc6536d8`，六个关键模块逐字节匹配 Git（`20261028-003649-de464a.log`）。一次性无网络 Linux amd64/Rosetta 构建未签名 DEB：`build/native-packages-p1-1c3fb38/ai-device-native-client_0.2.2-1_amd64.deb`，109820584 字节，SHA256 `43323671e97174928c4b5b22ace2981716af5c8f2093b027005ab35055d647ac`（`20261028-003700-d70a03.log`）。独立干净安装校验主 runtime 六模块及 bootstrap 四模块、批准/退休 fixture 和覆盖保护通过（`20261028-003746-dc5023.log`）。
 
 另一个无网络 systemd 容器核对准确 DEB 与 wheel，生产 gate 原样拒绝且 runner 0、无 intent；仅测试进程替换 gate 后真实 job 被包保护拒绝，保持 unknown、active 不变。注入孤立 job-recovery 而无底层 recovery，`ORPHAN_JOB_RECOVERY_REFUSED_BEFORE_WRITE`，所有已有测试台账字节不变，无额外包动作；随后移除仅属于该临时 fixture 的回执，正常显式对账及两种类型漂移拒绝通过（`20261028-003808-617ab4.log`）。该 job fixture 解包 DEB 后重装同批准确 wheel；独立新装的包内模块核验见上。容器已停止（`20261028-003848-4dc057.log`）。不能外推为生产 dispatch、更新成功、systemd 观察与恢复原子化、受控处理者身份、真实机器或 RPM 已验收。
+
+
+## 157. 通用恢复入口不绕过 job 台账
+
+复现：已存在 job intent 的事务调用通用 `Updates.recover` 时，原实现不要求 job 绑定即可写底层 recovery（`20261028-004052-2f1f63.log`），绕过 job 专用入口的 systemd 观察和意图核验。现于实例锁与 package EX 内，发现本事务 job intent 或 job-recovery 路径（包括悬空符号链接）且调用未提供 job intent 摘要时拒绝，保留原台账；不影响无 job 的直接更新恢复。定向覆盖通用入口拒绝、悬空标记、无新增证据、包动作不增加、合法 job 对账和原有非 job 恢复；相关测试 113 项通过，完整源码回归 1143 通过、4 跳过（`20261028-004131-2864d6.log`）。真实隔离验收脚本已加入入口负例，尚待新包验证。
+
+此门禁不把调用者提供摘要当认证，也不消除 `recover_job` 的 systemd 观察与持久化之间竞态；已获 root 权限的可信本机代码可调用内部 API，生产派发仍默认关闭，不能视为生产身份绑定。

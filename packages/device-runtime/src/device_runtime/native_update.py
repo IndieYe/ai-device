@@ -561,6 +561,11 @@ class Updates:
         with self._transaction(instance_id, operation_id) as (binding, stem):
             value = self._prepared(binding, stem)
             with self._apply_lease(self.registry / "package-manager", existing=True):
+                if job_intent_sha256 is None and (
+                    os.path.lexists(stem.with_suffix(".job-intent.json"))
+                    or os.path.lexists(stem.with_suffix(".job-recovery.json"))
+                ):
+                    raise UpdateError("job recovery requires explicit job binding")
                 if job_intent_sha256 is not None:
                     try:
                         _verify_job_intent(stem, instance_id, operation_id, job_intent_sha256)

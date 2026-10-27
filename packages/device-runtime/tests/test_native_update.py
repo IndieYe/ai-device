@@ -796,6 +796,28 @@ def test_explicit_job_recovery_retains_fence_and_never_replays(update, monkeypat
     }
     stem.with_suffix(".job-intent.json").write_text(json.dumps(intent))
 
+    # General update recovery must not bypass job-specific observation/binding.
+    before_direct = {p.name: p.read_bytes() for p in stem.parent.iterdir() if p.is_file()}
+    with pytest.raises(nu.UpdateError, match="job recovery requires explicit job binding"):
+        manager.recover("probe", "one")
+    assert {p.name: p.read_bytes() for p in stem.parent.iterdir() if p.is_file()} == before_direct
+    assert packages.calls == 1
+    job_intent_path = stem.with_suffix(".job-intent.json")
+    job_intent_path.unlink()  # Isolated fixture only; retain its exact content in intent.
+    try:
+        for suffix in (".job-intent.json", ".job-recovery.json"):
+            marker = stem.with_suffix(suffix)
+            marker.symlink_to(stem.parent / "missing-fixture-target")
+            try:
+                with pytest.raises(nu.UpdateError, match="job recovery requires explicit job binding"):
+                    manager.recover("probe", "one")
+                assert not stem.with_suffix(".recovery.json").exists()
+                assert marker.is_symlink() and packages.calls == 1
+            finally:
+                marker.unlink()
+    finally:
+        job_intent_path.write_text(json.dumps(intent))
+
     for key, bad in (("schema_version", True), ("close_protocol", "unknown"),
                      ("state", "unexpected"), ("unit", "wrong.service"),
                      ("runtime_snapshot_sha256", "wrong"), ("extra", True)):

@@ -387,6 +387,14 @@ while True:
  if unit.get('LoadState')=='loaded' and (unit.get('ActiveState') in ('inactive','failed') or (unit.get('ActiveState')=='active' and unit.get('SubState')=='exited' and unit.get('Result')=='success')) and unit.get('MainPID')=='0' and unit.get('Job') in ('','0'): break
  assert time.monotonic()<deadline,'unit did not reach observable terminal state'
  time.sleep(.1)
+# General recovery must not bypass the job-specific entry when an intent exists.
+before={p.name:p.read_bytes() for p in stem.parent.iterdir() if p.is_file()}
+try: manager.recover('probe','job-one')
+except update.UpdateError as error: assert 'job recovery requires explicit job binding' in str(error)
+else: raise AssertionError('generic recovery accepted job intent')
+assert {p.name:p.read_bytes() for p in stem.parent.iterdir() if p.is_file()}==before
+assert len(calls)==1 and (root/'active.json').read_bytes()==active
+print('GENERIC_RECOVERY_JOB_INTENT_REFUSED')
 orphan=stem.with_suffix('.job-recovery.json')
 orphan.write_text(json.dumps({'retry_allowed':0,'fence_retained':1}))
 before={p.name:p.read_bytes() for p in stem.parent.iterdir() if p.is_file()}
