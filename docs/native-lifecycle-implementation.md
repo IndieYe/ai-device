@@ -1019,3 +1019,10 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 重启后只读核实 AI Assistant 服务运行、当前会话唯一 execution 及停止检查开关、原 Worktree 干净并处于 `efa1479`；未重启或修改真实服务。新增 `probe-native-pidfd-record.py`，一次性无网络 Linux 6.18 amd64/Rosetta 容器中，观察者对等待握手的直接子进程取得 pidfd，接受预期 worker 记录，拒绝继承同一端点的后代记录；子发送最后记录后退出，pidfd 已就绪但该记录仍可读取且凭据正确。输出 `PIDFD_CREDENTIALS_DESCENDANT_REJECTED_QUEUED_AFTER_EXIT`，日志 `20261027-221331-1e89b9.log`，ruff通过。
 
 逐记录身份只说明发送时主体，不能代替读取时 pidfd 活性、动作时序与未知恢复；活性检查后仍有竞态。该机制实验不含真实候选、公开 stream、systemd invocation 或生产监督器；生产派发仍关闭。
+
+
+## 128. 隔离直接子进程 pidfd/逐记录挑战握手
+
+`probe-native-pidfd-handshake.py` 在一次性无网络 Linux 6.18 amd64/Rosetta 容器组合直接子 pidfd、SEQPACKET/SO_PASSCRED、有界一次性挑战及读取前后活性检查。正常仅得 `observed_not_authorized`，错误挑战、后代冒用继承端点、子退出和有界超时均拒绝。`PIDFD_RECORD_HANDSHAKE_FIXTURE_OK`，日志 `20261027-221612-c43041.log`，ruff通过。
+
+挑战不证明加载代码或公开 socket 实际处理者；退出检查与后续动作非原子，也不处理 systemd invocation、生产双锁交接、消息重放持久状态或 unknown 恢复。仅为机制原型，不改变生产 IPC 或 default-deny。

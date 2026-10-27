@@ -132,3 +132,10 @@
 一次性无网络 Linux amd64/Rosetta 容器运行 `scripts/probe-native-pidfd-record.py`：观察者从尚在握手等待的直接子进程建立 pidfd，以 SO_PASSCRED 严格接收其记录，并拒绝继承同一端点的后代记录；子进程发送最后一条记录后退出，观察者先见 pidfd 就绪，仍能接收凭据正确的排队记录。输出 `PIDFD_CREDENTIALS_DESCENDANT_REJECTED_QUEUED_AFTER_EXIT`，日志 `20261027-221331-1e89b9.log`。
 
 消息凭据说明发送时主体，不证明读取时存活；必须分别处理进程活性、记录时序与退出后的队列，且一次 pidfd 检查与后续动作仍不原子。该探针未绑定真实候选、systemd invocation、公开 stream、生产监督器或事务，不能授权派发。
+
+
+## 直接子进程 pidfd 与一次性逐记录握手原型
+
+`scripts/probe-native-pidfd-handshake.py` 在无网络一次性 Linux 6.18 amd64/Rosetta 容器中，用等待挑战的直接 fork 子进程获取 pidfd，父发送 32 字节随机挑战，子通过 SEQPACKET 回复有界记录；父按 SO_PASSCRED 校验实际发送 PID/UID、比较挑战，并在读取前后检查 pidfd。正常场景仅返回 `observed_not_authorized`；错误挑战、继承端点后代发送、子进程退出及有限等待超时均拒绝。`PIDFD_RECORD_HANDSHAKE_FIXTURE_OK`，日志 `20261027-221612-c43041.log`，ruff通过。
+
+这是隔离原型：挑战只关联本次握手，不证明候选代码、公开 socket 实际处理者或 systemd invocation；前后活性检查也不能消除检查后死亡及消息排队竞态。缺少生产父子启动、锁所有权与完整 FD 清理、事务和 unknown 对账；不接入现有 IPC，不开放派发。
