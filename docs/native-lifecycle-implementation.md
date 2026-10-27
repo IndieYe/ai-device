@@ -893,3 +893,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 用户确认采用 registry 稳定维护前提：helper运行或存在未终态事务时不替换registry、必要祖先及挂载；不能确认则拒绝启动/恢复，迁移需管理员维护窗口、旧入口停用和事务收口，不自动迁移清理。`_daemon_lease` 先对可信registry目录取非阻塞独占flock、核对打开FD与路径dev/inode，再获取原daemon文件锁；`serve`与`recover_socket`既有调用自动使用两锁。测试覆盖目录内锁文件替换时仍冲突、获取时目录替换拒绝、旧文件锁竞争，以及隔离Linux fork后父关闭子进程仍保持租约（日志 `20261027-210107-8b2b2f.log`）。相关154测试、完整Device 1043通过3跳过（日志 `20261027-210141-099b46.log`）、ruff及diff检查通过。
 
 这是daemon和socket恢复的局部锚点，不解决管理员违反稳定前提导致整个目录/祖先/挂载替换；旧helper必须事先手动退休。更新器/包事务入口尚未形成共同目录协议，受控启动、活peer绑定、故障恢复、真实systemd与准确制品尚未验收。保留原文件锁，生产派发继续default-deny；P1未完成。
+
+
+## 110. daemon 与更新器的持久意图交接设计
+
+基于现有普通UID socket权限、daemon长期registry目录独占锁、实例锁→package锁及job close/retire路径，新增 `native-helper-dispatch-handoff-design.md`：候选方向为受控daemon在严格root-only分支协调锁内持久intent，worker按锁序复核后独立执行，更新器不重新取得daemon长期目录锁；明确故障矩阵、同ID一致性、daemon退出和跨崩溃围栏、普通用户权限及验收门禁。当前 `dispatch_job` 已有intent分支直接返回记录，不能据此声称同ID完整请求一致性；新设计须核验。此为设计草案，不新增IPC、不开启派发、不修改生产代码；受控启动、实际peer和systemd故障、准确制品和P1整体仍未完成。用户确认的registry稳定维护前提不替代运行身份或事务协议。
