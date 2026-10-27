@@ -656,3 +656,7 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 63. 当前DEB隔离依赖检查
 
 对第61节SHA256为`9b37b30b0f915bcbd15dd8d2475559d2e98648438e1ca5f98d4fb63bcab9d00c`的当前源码开发DEB，在一次性amd64 Linux容器fresh安装后，包内client Python的`pip check`报告无损坏依赖；导入ssl、sqlite3、ctypes、zlib、cryptography、zstandard并执行Ed25519签名成功；独立bootstrap Python导入选定标准库和native_helper成功。两个运行时目录的普通`*.so`和`*.so.*`逐一ldd未报告`not found`，非动态对象的ldd错误被忽略。该证据不覆盖全部extras、可执行文件、延迟加载、目标实机或完整升级；不是正式签名/发布。旧helper跨重启迁移仍缺，新job派发关闭，原包保护不变，未操作真实设备。
+
+## 64. 当前源码RPM隔离构建与验收
+
+使用第61节以`9debfb6c6d94ac6bdc7162fe1df496e094db1e50`为基线的冻结payload和锁定CPython，在一次性Rocky9 amd64容器临时安装rpm-build并构建未签名RPM：`build/native-rpm-current-9debfb6/ai-device-native-client-0.2.2-1.x86_64.rpm`，111037249字节，SHA256 `35e4c70cc438c98fedc84a57dc525eeb20097803bf97c0a50817598eefb0d9a4`。另一一次性Rocky9容器不带nodeps安装成功，client pip check和选定ssl/sqlite3/ctypes/zlib/cryptography/zstandard导入通过，native_helper及native_update_job字节与构建源码一致，新job派发默认拒绝。单独容器预置其他版本目录时，真实RPM pretrans明确拒绝，哨兵不变、目标目录未创建。未证明全部动态依赖、目标实机、成功升级或跨重启迁移；RPM未签名未发布，旧helper迁移仍缺，原包保护不变，未操作真实设备。
