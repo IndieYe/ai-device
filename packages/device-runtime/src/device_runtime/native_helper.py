@@ -203,7 +203,7 @@ def render_helper_unit(*, bootstrap_python, registry, socket_path, group):
     return (
         "[Unit]\nDescription=Device bounded native management helper\n"
         "After=local-fs.target\n\n[Service]\nType=simple\nUser=root\nGroup=root\n"
-        f"ExecStart={python} -I -m device_runtime.native_helper serve "
+        f"ExecStart={python} -I -B -m device_runtime.native_helper serve "
         f"--registry {registry} --socket {socket_path} --group {group}\n"
         "UMask=0077\nNoNewPrivileges=yes\nRestart=no\n"
         "# No ExecStartPre unlink: an orphan socket requires explicit reconciliation.\n"

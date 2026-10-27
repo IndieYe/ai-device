@@ -79,3 +79,11 @@ def test_bootstrap_extract_excludes_bytecode_but_keeps_source(tmp_path):
     assert (extracted / "__init__.py").read_text() == "source"
     assert not (extracted / "__pycache__").exists()
     assert not (extracted / "legacy.pyc").exists()
+
+def test_packaged_helper_entry_disables_bytecode_writes():
+    builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
+    script = builder.read_text()
+    assert (
+        "exec /opt/ai-device/bootstrap/0.2.2-native1/runtime/bin/python3.13 "
+        "-I -B -m device_runtime.native_helper" in script
+    )

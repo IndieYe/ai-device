@@ -708,3 +708,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 74. 实际 helper 的 systemd/peer 观察及磁盘漂移
 
 一次性 amd64 Linux systemd 容器使用锁定 CPython 及当前源码启动真正的 `native_helper serve`，不是第69节的 socket 替身。`Type=simple` 的首次观察在 socket 就绪前发生并报不存在；随后确认单元 active/running 且 socket 已建立，`observe_helper_unit_peer` 成功关联实际 peer 和 systemd MainPID/InvocationID，结果仍 `loaded_code_verified=false`、`dispatch_allowed=false`。仅在该容器追加修改启动后 helper 源码，观察仍明确不认证加载代码，证明不能把磁盘内容或进程匹配当作运行代码身份。未验证干净安装的包、真实 job/start、进程重启或完整绑定；未打开生产派发。实验容器正常关机命令超时，随后容器列表确认一次性实例不存在。未操作真实设备服务。
+
+
+## 75. helper 启动禁止写入新字节码
+
+发现第71节只在新 bootstrap 提取时排除缓存，但 systemd 单元和包内 helper 命令此前均用 `python -I -m`，运行时仍可能写入新缓存。两处入口均改为 `-I -B -m`，新增渲染和包入口回归，相关 helper/包保护/bootstrap 142 项通过，ruff 与 shell 语法检查通过。`-B` 不阻止读取已有缓存，仍须第70节候选门禁与干净制品；既有系统 unit 不会自动修改，不做真实服务变更。该修复不证明执行代码身份或持续互斥，派发仍默认关闭，原包保护不变。

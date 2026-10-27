@@ -353,7 +353,7 @@ def test_render_helper_uses_independent_bootstrap(tmp_path):
     assert "User=root" in result
     assert "Restart=no" in result
     assert "ExecStartPre=" not in result
-    assert "native_helper serve" in result
+    assert f"ExecStart={tmp_path / 'python'} -I -B -m device_runtime.native_helper serve " in result
 
 
 def test_peer_process_rejects_non_root_and_unsupported_kernel(monkeypatch):

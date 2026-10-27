@@ -44,7 +44,7 @@ done
 cat > "$root/usr/bin/ai-device-native-helper" <<'EOF'
 #!/bin/sh
 set -eu
-exec /opt/ai-device/bootstrap/0.2.2-native1/runtime/bin/python3.13 -I -m device_runtime.native_helper "$@"
+exec /opt/ai-device/bootstrap/0.2.2-native1/runtime/bin/python3.13 -I -B -m device_runtime.native_helper "$@"
 EOF
 chmod 755 "$root/usr/bin/ai-device-native-helper"
 # Upstream CPython files can be group-writable. Published system programs must
