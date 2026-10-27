@@ -468,3 +468,11 @@ Debian apply意图前准备副本，将snapshot.json摘要绑定意图；guard�
 首轮发现实际生产路径错误：guard PATH=/usr/bin:/bin使dpkg找不到ldconfig/start-stop-daemon并返回2，未替换；补固定/usr/sbin:/usr/bin:/sbin:/bin并增加单测断言。第二轮标准包替换成功，但父进程写pycache造成源目录残留，原“整个目录消失”断言错误；父进程改-B并直接验证解释器及标准库文件移除，复跑通过。无手工删除或绕过dpkg；所有--rm容器已退出，无后台遗留。
 
 最终931 passed/3 Linux skipped（47.72s）、ruff、sh -n与diff检查通过。该证据仅覆盖独立发送者副本跨真实包替换存活，尚未覆盖整个管理器独立job、Device真实包覆盖许可、激活恢复、RPM或目标实机。P1未完成、包保护不变。下一步整个管理器独立job与标准包事务准确许可；不进入P2。
+
+## 29. 独立guard包观察与终态持久化
+
+将生产Debian发送者的包数据库准确观察及outcome持久化移入快照guard。apply意图加入准确target_package（name/version/architecture），guard等待dpkg回收后先发布匹配sender回执，再有界dpkg-query观察，只有命令0且准确installed目标才记录package_applied_pending_activation；命令失败/观察超时或异常均unknown。不激活、不清意图。dpkg输出直接写私有事务.package.log并fsync，不经父进程PIPE，父管理器不再猜测/覆盖生产outcome。guard缺终态仍unknown；旧意图恢复路径保留。
+
+3项直接执行可信guard源码回归覆盖成功、命令失败及观察超时；隔离Linux真实fixture包v1→v2移除源解释器后独立记录准确终态。进一步BOOTSTRAP_PARENT_EXIT=1启动guard后发起进程os._exit(23)，观察进程确认父已退出，guard仍完成标准dpkg替换、源解释器及标准库移除、匹配回执和pending终态、副本保持有效。没有kill或宿主服务操作。所有容器--rm退出，无后台遗留。
+
+最终934 passed/3 Linux skipped（48.18s），ruff/format/sh-n/diff通过。这证明发起进程退出不阻断独立发送与结果落盘，尚不等于完整systemd独立job或整个管理器切换；锁/任务收口/包钩子准确许可/激活恢复仍需后续验收。Device包保护未解除，P1仍未完成。

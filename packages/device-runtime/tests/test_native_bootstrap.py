@@ -104,3 +104,44 @@ def test_debian_sender_uses_only_bound_snapshot(runtime, monkeypatch):
     with pytest.raises(update.UpdateError, match="snapshot changed"):
         adapter.apply(source / "package.deb", lease_fd=3, receipt_path=receipt, intent={})
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("code,query_ok", [(0, True), (1, True), (0, False)])
+def test_guard_owns_durable_outcome(runtime, monkeypatch, code, query_ok):
+    import json
+    import subprocess
+    from types import SimpleNamespace
+
+    from device_runtime import native_update as update
+
+    source, destination = runtime
+    stem = destination.parent / "guard"
+    monkeypatch.setattr(update.sys, "base_prefix", str(source))
+    adapter = update.Debian()
+    intent = adapter.prepare_execution(stem)
+    intent["target_package"] = {"name": "fixture", "version": "2", "architecture": "amd64"}
+    captured = []
+    monkeypatch.setattr(update.subprocess, "run", lambda argv, **kw: captured.append(argv))
+    receipt = stem.with_suffix(".sender.json")
+    adapter.apply(source / "fixture.deb", lease_fd=3, receipt_path=receipt, intent=intent)
+    argv = captured[0]
+
+    def command(command, **kw):
+        if command[0] == "/usr/bin/dpkg":
+            assert kw["stdout"].name.endswith(".package.log")
+            return SimpleNamespace(returncode=code)
+        if not query_ok:
+            raise subprocess.TimeoutExpired(command, 30)
+        return SimpleNamespace(returncode=0, stdout="install ok installed\n2\namd64\n")
+
+    monkeypatch.setattr(update.subprocess, "run", command)
+    monkeypatch.setattr(update.sys, "argv", ["guard", *argv[5:]])
+    with pytest.raises(SystemExit) as exited:
+        # Execute only the captured repository-owned guard, never external input.
+        exec(compile(argv[4], "independent-guard", "exec"), {})  # noqa: S102
+    assert exited.value.code == code
+    completion = json.loads(receipt.read_bytes())
+    assert completion["intent"] == intent and completion["returncode"] == code
+    outcome = json.loads(stem.with_suffix(".outcome.json").read_bytes())
+    expected = "package_applied_pending_activation" if code == 0 and query_ok else "unknown"
+    assert outcome["state"] == expected and outcome["intent"] == intent

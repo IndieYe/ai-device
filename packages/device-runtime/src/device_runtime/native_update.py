@@ -63,15 +63,30 @@ class Debian:
     def apply(self, path, *, lease_fd, receipt_path, intent):
         # dpkg is not killed on a timeout. A separate supervised process must own
         # this call; any lost completion remains unknown, never auto-replayed.
-        guard = """import json,os,subprocess,sys,tempfile
+        guard = r"""import json,os,subprocess,sys,tempfile
 from pathlib import Path
 receipt=Path(sys.argv[1]); intent=json.loads(sys.argv[2])
-r=subprocess.run(['/usr/bin/dpkg','--install',sys.argv[3]],check=False)
-fd,tmp=tempfile.mkstemp(prefix='.package-',dir=receipt.parent)
-with os.fdopen(fd,'w') as stream:
- json.dump({'state':'sender_reaped','intent':intent,'returncode':r.returncode},stream); stream.flush(); os.fsync(stream.fileno())
-os.link(tmp,receipt); os.unlink(tmp)
-fd=os.open(receipt.parent,os.O_RDONLY|os.O_DIRECTORY); os.fsync(fd); os.close(fd)
+def publish(path,value):
+ fd,tmp=tempfile.mkstemp(prefix='.package-',dir=path.parent)
+ with os.fdopen(fd,'w') as stream:
+  json.dump(value,stream); stream.flush(); os.fsync(stream.fileno())
+ os.link(tmp,path); os.unlink(tmp)
+ fd=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY); os.fsync(fd); os.close(fd)
+with receipt.with_suffix('').with_suffix('.package.log').open('xb') as log:
+ r=subprocess.run(['/usr/bin/dpkg','--install',sys.argv[3]],check=False,stdout=log,stderr=subprocess.STDOUT)
+ log.flush(); os.fsync(log.fileno())
+publish(receipt,{'state':'sender_reaped','intent':intent,'returncode':r.returncode})
+if 'target_package' in intent:
+ target=intent['target_package']; observed=None
+ try:
+  query=subprocess.run(['/usr/bin/dpkg-query','-W','-f=${Status}\\n${Version}\\n${Architecture}\\n',target['name']],check=False,capture_output=True,text=True,timeout=30)
+  lines=query.stdout.splitlines()
+  if query.returncode==0 and len(lines)==3:
+   observed=dict(zip(('status','version','architecture'),lines))
+ except (OSError,subprocess.SubprocessError): pass
+ expected={'status':'install ok installed','version':target['version'],'architecture':target['architecture']}
+ state='package_applied_pending_activation' if r.returncode==0 and observed==expected else 'unknown'
+ publish(receipt.with_suffix('').with_suffix('.outcome.json'),{'state':state,'package_observation':observed,'intent':intent})
 sys.exit(r.returncode)
 """
         directory = receipt_path.with_suffix("").with_suffix(".bootstrap")
@@ -414,6 +429,11 @@ class Updates:
                     # Complete and verify the independent runtime before the
                     # irreversible intent; incomplete snapshots never recopy.
                     apply_intent.update(self.packages.prepare_execution(stem))
+                    apply_intent["target_package"] = {
+                        "name": value["metadata"]["Package"],
+                        "version": value["metadata"]["Version"],
+                        "architecture": value["metadata"]["Architecture"],
+                    }
                 _atomic(started, apply_intent)
                 try:
                     self.packages.apply(
@@ -422,15 +442,24 @@ class Updates:
                         receipt_path=stem.with_suffix(".sender.json"),
                         intent=apply_intent,
                     )
-                    observed = self.packages.installed(value["metadata"]["Package"])
-                    state = (
-                        "package_applied_pending_activation"
-                        if self._target(value, observed)
-                        else "unknown"
-                    )
+                    if not isinstance(self.packages, Debian):
+                        observed = self.packages.installed(value["metadata"]["Package"])
+                        state = (
+                            "package_applied_pending_activation"
+                            if self._target(value, observed)
+                            else "unknown"
+                        )
                 except (OSError, subprocess.SubprocessError):
                     observed, state = None, "unknown"
-                _atomic(outcome, {"state": state, "package_observation": observed})
+                if isinstance(self.packages, Debian):
+                    # The independent guard owns the outcome. Its absence is
+                    # unknown, never authority for the parent to guess success.
+                    if outcome.exists():
+                        nh._trusted(outcome)
+                        if json.loads(outcome.read_bytes()).get("intent") != apply_intent:
+                            raise UpdateError("package guard outcome intent differs")
+                else:
+                    _atomic(outcome, {"state": state, "package_observation": observed})
             return self._observation(stem, value)
 
     @staticmethod

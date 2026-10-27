@@ -27,7 +27,7 @@ done
 dpkg --install "$base/fixture-1.deb"
 export PYTHONPATH="$repo/packages/device-runtime/src"
 "$source/bin/python3.13" -B - "$manager" "$source" "$base/fixture-2.deb" <<'PY'
-import fcntl,json,os,subprocess,sys
+import fcntl,json,os,subprocess,sys,time
 from pathlib import Path
 from device_runtime import native_update as update
 from device_runtime import native_bootstrap as bootstrap
@@ -36,24 +36,45 @@ stem=manager/'transactions/replacement'
 adapter=update.Debian()
 intent=adapter.prepare_execution(stem)
 intent['prepared_sha256']='disposable-fixture-not-a-device-approval'
+intent['target_package']={'name':'device-bootstrap-disposable-fixture','version':'2','architecture':'amd64'}
 receipt=stem.with_suffix('.sender.json')
 with (manager/'execution.lock').open('xb') as lease:
  fcntl.flock(lease,fcntl.LOCK_EX|fcntl.LOCK_NB)
- try:
-  adapter.apply(package,lease_fd=lease.fileno(),receipt_path=receipt,intent=intent)
- except subprocess.CalledProcessError as exc:
-  print(exc.stdout.decode(errors='replace'),file=sys.stderr)
-  print(exc.stderr.decode(errors='replace'),file=sys.stderr)
-  raise
+ if os.environ.get('BOOTSTRAP_PARENT_EXIT')=='1':
+  child=os.fork()
+  if child==0:
+   def abandon(argv,**kwargs):
+    # Exercise the real guard argv, but exit its invoking manager immediately.
+    subprocess.Popen(argv,pass_fds=kwargs['pass_fds'],env=kwargs['env'],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
+    os._exit(23)
+   subprocess.run=abandon
+   adapter.apply(package,lease_fd=lease.fileno(),receipt_path=receipt,intent=intent)
+   os._exit(99)
+  _,status=os.waitpid(child,0)
+  assert os.waitstatus_to_exitcode(status)==23
+  deadline=time.monotonic()+60
+  while not stem.with_suffix('.outcome.json').exists():
+   assert time.monotonic()<deadline, 'abandoned guard did not publish outcome'
+   time.sleep(.05)
+ else:
+  try:
+   adapter.apply(package,lease_fd=lease.fileno(),receipt_path=receipt,intent=intent)
+  except subprocess.CalledProcessError as exc:
+   print(exc.stdout.decode(errors='replace'),file=sys.stderr)
+   print(exc.stderr.decode(errors='replace'),file=sys.stderr)
+   raise
 assert not (source/'bin/python3.13').exists(), 'dpkg did not remove the original interpreter'
 assert not (source/'lib/python3.13/os.py').exists(), 'dpkg did not remove source stdlib'
 value=json.loads(receipt.read_bytes())
 assert value=={'state':'sender_reaped','intent':intent,'returncode':0}
 assert adapter.installed('device-bootstrap-disposable-fixture')['version']=='2'
+outcome=json.loads(stem.with_suffix('.outcome.json').read_bytes())
+assert outcome['intent']==intent and outcome['state']=='package_applied_pending_activation'
+assert outcome['package_observation']=={'status':'install ok installed','version':'2','architecture':'amd64'}
 snapshot=stem.with_suffix('.bootstrap')
 bootstrap.validate_snapshot(snapshot)
 python=snapshot/'runtime/bin/python3.13'
 probe=subprocess.run([str(python),'-I','-B','-c','import ssl,sqlite3,ctypes; print("survived")'],check=True,capture_output=True,text=True)
 assert probe.stdout.strip()=='survived'
-print(json.dumps({'state':'replacement_guard_verified','original_runtime_removed':True,'matched_receipt':True,'snapshot_still_valid':True,'fixture_version':'2','device_package_installed':False}))
+print(json.dumps({'state':'replacement_guard_verified','original_runtime_removed':True,'matched_receipt':True,'snapshot_still_valid':True,'fixture_version':'2','device_package_installed':False,'parent_exited':os.environ.get('BOOTSTRAP_PARENT_EXIT')=='1'}))
 PY

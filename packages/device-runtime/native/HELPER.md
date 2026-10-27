@@ -215,3 +215,5 @@ apply意图绑定snapshot回执SHA256，启动前重新核对副本内容及回�
 `packages/device-runtime/scripts/accept-native-bootstrap.py --source <可信CPython根> --destination <管理器事务目录下新目录>` 用于隔离root验证。实际副本6238成员，独立inode、同ID稳定、重定位prefix及ssl/sqlite3/ctypes加载通过；未运行真实dpkg替换，未构建包含此模块的新制品，不能视为完整升级验收。现有包保护和多实例拒绝不变。
 
 独立发送者跨替换已增加标准dpkg验收：`accept-native-bootstrap-replacement.sh V15_DEB REPOSITORY` 仅在标记 `DEVICE_DISPOSABLE_CONTAINER=bootstrap-replacement-v1` 的新root Linux临时容器中运行。脚本构建独立名测试包v1/v2，替换移除原CPython解释器及标准库后验证快照guard匹配回执和副本继续可用；不会安装Device包或授予其覆盖许可。真实实验同时修复Debian guard缺少sbin的PATH：固定为 `/usr/sbin:/usr/bin:/sbin:/bin`，不继承调用方PATH。该证据不代表整个管理器已脱离待替换包；独立job、正式包钩子许可和激活恢复仍缺。
+
+快照guard现在独立执行准确包数据库观察并无覆盖/fsync发布outcome：意图绑定target_package，只有dpkg返回0且dpkg-query准确status/version/architecture匹配才为pending activation，其余unknown。dpkg日志写事务.package.log，不依赖父进程管道。sender回执仍先于outcome，缺outcome不猜成功；不解除持久意图或执行激活。隔离替换脚本可加 `BOOTSTRAP_PARENT_EXIT=1` 注入发起进程exit23，已验证其退出后guard仍完成替换及终态落盘。这不是完整systemd独立job/任务收口或Device包覆盖许可。
