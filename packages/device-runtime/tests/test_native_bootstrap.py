@@ -408,13 +408,16 @@ def test_verified_helper_candidate_executes_checked_bytes(runtime, monkeypatch):
 
     monkeypatch.setattr(bootstrap, "validate_snapshot", verify_and_replace)
     original_package = sys.modules["device_runtime"]
-    bootstrap.run_verified_helper_candidate(candidate.parent, "v1", registry="r", socket_path="s", group=7)
+    bootstrap.run_verified_helper_candidate(
+        candidate.parent, "v1", registry="r", socket_path="s", group=7,
+        expected_snapshot_sha256=evidence["snapshot_sha256"],
+    )
     assert sys.modules["device_runtime"] is original_package
     assert snapshot["inventory"] and calls == 2
     assert real_sys is sys
 
 
-@pytest.mark.parametrize("failure", ["interpreter", "candidate_interpreter", "not_isolated", "bytecode", "source_drift"])
+@pytest.mark.parametrize("failure", ["interpreter", "candidate_interpreter", "not_isolated", "bytecode", "source_drift", "unit_digest_mismatch", "unit_digest_invalid"])
 def test_verified_helper_candidate_refuses_untrusted_launch(runtime, monkeypatch, failure):
     import hashlib
     import sys
@@ -448,8 +451,12 @@ def test_verified_helper_candidate_refuses_untrusted_launch(runtime, monkeypatch
         (candidate / "runtime/lib/python3.13/site-packages/device_runtime/native_helper.py").write_text(
             "# changed\n"
         )
+    expected_digest = {"unit_digest_mismatch": "a" * 64, "unit_digest_invalid": "not-a-digest"}.get(failure)
     with pytest.raises(bootstrap.BootstrapError):
-        bootstrap.run_verified_helper_candidate(candidate.parent, "v1", registry="r", socket_path="s", group=7)
+        bootstrap.run_verified_helper_candidate(
+            candidate.parent, "v1", registry="r", socket_path="s", group=7,
+            expected_snapshot_sha256=expected_digest,
+        )
 
 
 def test_candidate_daemon_entry_uses_fixed_registry_candidates(monkeypatch, tmp_path):
@@ -472,6 +479,7 @@ def test_candidate_daemon_entry_uses_fixed_registry_candidates(monkeypatch, tmp_
     assert observed == {
         "candidates": registry / "bootstrap-candidates", "version": "v1",
         "registry": registry, "socket_path": bootstrap.Path("/run/example.sock"), "group": 123,
+        "expected_snapshot_sha256": None,
     }
 
 

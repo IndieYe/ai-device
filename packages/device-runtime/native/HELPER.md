@@ -257,3 +257,5 @@ accept-native-old-helper-fence.sh在一次性容器复现v17旧helper忽略未�
 
 
 实验性干净部署可显式使用 `deploy --candidate-version <版本>`，必须指定固定独立 bootstrap 的 Python，registry 中已有经发布并校验的候选及包锁；部署在独占包锁下先复核候选，只写新 unit，不覆盖、reload、启用或启动。unit 经独立 bootstrap 在启动时再次核验并执行候选字节；默认不提供版本时仍使用原 helper 入口。此 unit 仅是受控启动路径，不证明正在运行的 socket peer 已加载指定代码，不授权 job 派发或替代事务锁交接；旧测试环境仍须人工退休。
+
+候选 unit 还固定部署时校验出的 snapshot SHA256；实验 bootstrap 启动时如接到该摘要，必须匹配当前已验证候选，再执行已校验字节。已有旧候选 unit 不自动改写；直接实验入口仍允许不传摘要，不能据此作为受控 unit 或派发证明。该固定只约束 unit 所指定内容，不能证明活 socket peer 或阻止可信管理员更改 unit。

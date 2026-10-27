@@ -7,6 +7,7 @@ never cleaned or repaired here. An incomplete directory remains blocked.
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import sys
@@ -272,7 +273,7 @@ def read_helper_candidate(candidates_dir, version):
     return evidence
 
 
-def run_verified_helper_candidate(candidates_dir, version, *, registry, socket_path, group):
+def run_verified_helper_candidate(candidates_dir, version, *, registry, socket_path, group, expected_snapshot_sha256=None):
     """Execute verified candidate helper bytes in the independent bootstrap.
 
     This experimental entry point does not provision a unit, prove the caller's
@@ -304,6 +305,12 @@ def run_verified_helper_candidate(candidates_dir, version, *, registry, socket_p
     for path in (bootstrap, python, site / "native_bootstrap.py", site / "native_helper.py", site / "management_lock.py"):
         helper._trusted(path, directory=path == bootstrap)
     evidence = read_helper_candidate(candidates_dir, version)
+    if expected_snapshot_sha256 is not None and (
+        not isinstance(expected_snapshot_sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_snapshot_sha256)
+        or evidence["snapshot_sha256"] != expected_snapshot_sha256
+    ):
+        raise BootstrapError("candidate snapshot differs from unit")
     snapshot = validate_snapshot(candidate)
     if _digest(candidate / "snapshot.json") != evidence["snapshot_sha256"]:
         raise BootstrapError("candidate snapshot changed")
@@ -403,12 +410,14 @@ def main():
     parser.add_argument("--socket", type=Path, required=True)
     parser.add_argument("--group", type=int, required=True)
     parser.add_argument("--version", required=True)
+    parser.add_argument("--snapshot-sha256")
     args = parser.parse_args()
     try:
         registry = helper._path(args.registry)
         run_verified_helper_candidate(
             registry / "bootstrap-candidates", args.version,
             registry=registry, socket_path=args.socket, group=args.group,
+            expected_snapshot_sha256=args.snapshot_sha256,
         )
     except (BootstrapError, helper.HelperError, OSError, ValueError, KeyError) as exc:
         parser.exit(1, f"candidate helper refused: {exc}\n")

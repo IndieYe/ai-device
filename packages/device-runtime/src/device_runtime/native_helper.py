@@ -196,17 +196,21 @@ def render_client_unit(*, instance_id, root, uid, gid, environment_file):
     )
 
 
-def render_helper_unit(*, bootstrap_python, registry, socket_path, group, candidate_version=None):
+def render_helper_unit(*, bootstrap_python, registry, socket_path, group, candidate_version=None, candidate_sha256=None):
     python, registry, socket_path = map(_path, (bootstrap_python, registry, socket_path))
     if type(group) is not int or group < 0:
         raise HelperError("explicit socket group required")
     if candidate_version is None:
+        if candidate_sha256 is not None:
+            raise HelperError("candidate digest requires version")
         entry = "device_runtime.native_helper serve"
         version_arg = ""
     else:
         _identifier(candidate_version)
+        if not isinstance(candidate_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", candidate_sha256):
+            raise HelperError("candidate snapshot digest required")
         entry = "device_runtime.native_bootstrap"
-        version_arg = f" --version {candidate_version}"
+        version_arg = f" --version {candidate_version} --snapshot-sha256 {candidate_sha256}"
     return (
         "[Unit]\nDescription=Device bounded native management helper\n"
         "After=local-fs.target\n\n[Service]\nType=simple\nUser=root\nGroup=root\n"
@@ -226,13 +230,8 @@ def deploy_helper(*, bootstrap_python, registry, unit_dir, runtime_dir, group, c
     python, registry, unit_dir, runtime_dir = map(
         _path, (bootstrap_python, registry, unit_dir, runtime_dir)
     )
-    content = render_helper_unit(
-        bootstrap_python=python,
-        registry=registry,
-        socket_path=runtime_dir / "helper.sock",
-        group=group,
-        candidate_version=candidate_version,
-    )
+    if candidate_version is not None:
+        _identifier(candidate_version)
     _trusted(python)
     if not python.is_file() or not os.access(python, os.X_OK):
         raise HelperError("executable bootstrap required")
@@ -242,6 +241,7 @@ def deploy_helper(*, bootstrap_python, registry, unit_dir, runtime_dir, group, c
     unit = unit_dir / "ai-device-native-helper.service"
     if unit.exists() or unit.is_symlink():
         raise HelperError("helper unit already exists; explicit reconciliation required")
+    candidate_sha256 = None
     if candidate_version is not None:
         from . import native_bootstrap
 
@@ -249,7 +249,12 @@ def deploy_helper(*, bootstrap_python, registry, unit_dir, runtime_dir, group, c
             raise HelperError("independent bootstrap required for candidate deployment")
         _trusted(registry, directory=True)
         with package_lease(registry, exclusive=True, existing=True):
-            native_bootstrap.read_helper_candidate(registry / "bootstrap-candidates", candidate_version)
+            evidence = native_bootstrap.read_helper_candidate(registry / "bootstrap-candidates", candidate_version)
+            candidate_sha256 = evidence["snapshot_sha256"]
+    content = render_helper_unit(
+        bootstrap_python=python, registry=registry, socket_path=runtime_dir / "helper.sock",
+        group=group, candidate_version=candidate_version, candidate_sha256=candidate_sha256,
+    )
     for directory in (registry, runtime_dir):
         if not directory.exists():
             _trusted(directory.parent, directory=True)

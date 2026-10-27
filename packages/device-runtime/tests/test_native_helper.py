@@ -547,14 +547,19 @@ def test_deploy_candidate_unit_requires_fixed_bootstrap_and_verified_candidate(d
     registry.mkdir()
     (registry / "package-manager.execution.lock").touch(mode=0o600)
     observed = []
-    monkeypatch.setattr(bootstrap, "read_helper_candidate", lambda path, version: observed.append((path, version)))
+    def read_candidate(path, version):
+        observed.append((path, version))
+        return {"snapshot_sha256": "a" * 64}
+
+    monkeypatch.setattr(bootstrap, "read_helper_candidate", read_candidate)
     options = {**deployment, "bootstrap_python": python, "candidate_version": "release-1"}
     result = nh.deploy_helper(**options)
     unit = Path(result["unit"])
     content = unit.read_text()
     assert observed == [(registry / "bootstrap-candidates", "release-1")]
     assert f"{python} -I -B -m device_runtime.native_bootstrap" in content
-    assert "--version release-1" in content and "KillMode=process" in content
+    assert "--version release-1" in content and "--snapshot-sha256 " + "a" * 64 in content
+    assert "KillMode=process" in content
     assert result["started"] is False and result["enabled"] is False
     with pytest.raises(nh.HelperError, match="already exists"):
         nh.deploy_helper(**options)
