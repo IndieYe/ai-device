@@ -1593,3 +1593,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 以该准确包在无网络 amd64 隔离 systemd 容器中干净安装、普通用户安装实例并启动实际 helper；包内 bootstrap 和 runtime 的 helper 字节均匹配 wheel。慢速未完成帧约 5.004 秒得到拒绝，前后正常 query 成功，Device unit inactive、MainPID 0（`20261028-041213-a9b773.log`，脚本 `scripts/accept-native-helper-deadline-1a58f6d.sh`）；容器已停止。该实验只测请求读取时限和正常响应，不证明宿主重启、逐消息认证、动作身份或更新恢复。
 
 本轮额外检查发现：超时拒绝路径发送响应时仍继承最后一次 recv 的剩余超时，可能缩短原 5 秒写入期限；socketpair 包装观察超时时先失败，慢帧实际为约 0.46 秒（`20261028-041319-13230d.log`）。因此发送所有响应前重新设置 5 秒写入超时，成功路径执行 handler 前的设置保留；不保证网络压力下响应必达，也不扩大读取 deadline。定向 `220 passed, 1 skipped`（`20261028-041401-de6943.log`），完整 `1202 passed, 16 skipped`（`20261028-041419-5ffdf8.log`），ruff 与脚本语法检查通过。上述准确 DEB 早于此后一行修复，不能把其验收当作新代码的包内验收；旧 helper/snapshot 不自动更新。
+
+
+## 204. 响应写入修复后的准确包验收
+
+从干净提交 `121c5e926ce5438cc2e73e724bf58be89655449c` 离线构建未签名 DEB `build/native-packages-p1-121c5e9/ai-device-native-client_0.2.2-1_amd64.deb`，109835950 字节，SHA256 `05d057cad34fd885b530b660fb152e92004678781bcdd2c980c56f4e30b25ea6`；Device wheel SHA256 `c94514170ce13a09488571b9ae5d9a1c11e1c434025c45f7eab9bc98e4677674`，34 个 Python 模块逐字节匹配冻结提交（`20261028-041615-8ee521.log`）。
+
+无网络 amd64 隔离 systemd 容器干净安装准确包并以普通用户安装实例，真实 bootstrap/helper 启动后校验 bootstrap、runtime helper 文件均与 wheel 相同；缓慢未完成帧在 5.008 秒获得拒绝，前后正常 query 成功，Device unit inactive、MainPID 0（`20261028-041725-a2cf7f.log`，`scripts/accept-native-helper-deadline-121c5e9.sh`）。容器已停止。此实验未模拟响应背压，写入 5 秒设置由源码与 socketpair 定向测试覆盖；不能声称响应必达或验证真实设备、宿主重启、动作身份、外部 job 终态。旧包/旧 helper 不会自动更新；派发、恢复及覆盖保护仍关闭或维持原门禁，P1 未完成。
