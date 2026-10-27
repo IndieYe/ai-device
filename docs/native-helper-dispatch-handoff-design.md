@@ -110,3 +110,7 @@
 第182节以真实保存流程故障注入：close 的 hardlink 已可见但目录 fsync 失败；旧退休入口重读可见 close 后仍发布 retired，且退休目录 fsync 也失败；旧结构校验仍返回退休。无法仅凭两个可见文件判断关闭标记在崩溃后仍存在；若之后新事务依赖退休放行，旧 worker 的迟到行为可能不再受该关闭记录约束。实验未模拟掉电，不证明真实竞态已经发生。
 
 在持久关闭及旧 worker 协调的完整协议、恢复和崩溃验收成立前，当前源码拒绝新退休、所有 job intent 均保留包围栏（包括既有结构正确的退休记录）。这不会自动修改旧 helper 或冻结 snapshot 的行为，不能用新代码推断旧进程安全。故障记录保留，不自动删除或放行。
+
+### start sender 的未接入候选
+
+`native_start_sender.py` 提供 `systemd-start-tree-subreaper-v1` 候选，只在直接 systemctl 与被收养后代回收后发布绑定 intent 的结构化回执；独立实验见实施记录第190节。该候选未接入当前 start 或恢复，不能证明 systemd 管理的外部 job 或 unit 完成、回执来源及持久性，也不能在锁空闲或存在回执时解除生产门禁。须先设计绑定受控 handler、invocation、sender、外部 systemd 动作和持久终态的完整协议，并覆盖旧快照、并发与崩溃恢复，再考虑接入。

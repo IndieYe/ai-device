@@ -1495,3 +1495,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 从 `09486d1319cfac4b9cb9d85292d041906e4c161d` 干净源码离线构建未签名 DEB：`build/native-packages-p1-09486d1/ai-device-native-client_0.2.2-1_amd64.deb`，109820404字节，SHA256 `156ca247130f6a0808b9cd82cb4a4d062b4d255de08c7f5c5ed312e2c72a3792`；Device wheel SHA `64f6beea3c6f3ff9cbb2d0dfc71b1074f6befb0825b4b424a4759ff4a9b07db9`，33 Python 源与提交逐字节一致。干净安装、主 runtime六模块及 bootstrap四模块比对、原地覆盖保护通过（`20261028-030335-72d419.log`）；以普通用户运行包内6项 sender树门禁测试通过（`20261028-030353-5c925d.log`）。
 
 无网络隔离 systemd 干净安装并注册普通用户实例，启动真实 helper，构造版本2 unknown intent 和直接 sender 回执：直接与 socket 的 resolve-running/resolve-stopped 拒绝且不写 recovery；构造历史 recovery 后 query 可读，但 direct/socket 新 start 拒绝；替换测试 result 为 `started` 时 direct 新 start 也拒绝，原测试 result 恢复，无新 intent，Device unit inactive/MainPID 0（`20261028-030439-9a90cc.log`，脚本 `scripts/accept-native-sender-tree-fence-09486d1.sh`）。这是构造台账，不是在真实 systemctl 制造后代或完整恢复验收；仅替身实验说明直接 sender 回执不覆盖后代。隔离容器已停止，RPM 未构建，旧 helper/snapshot 不受新源码自动保护。
+
+
+## 190. 未接入生产的 start sender 子孙回收候选
+
+新增 `native_start_sender.py`：候选协议 `systemd-start-tree-subreaper-v1` 在固定 `/usr/bin/systemctl start` 前启用 Linux subreaper，直接 sender 完成或超时后继续等待收养后代直至 ECHILD，再以文件 fsync、无覆盖 link 和目录 fsync 写版本化回执；回执结构使用类型敏感完整 intent 比较。候选不被当前生产调用；调用者仍须独立保障固定 runtime、intent 与执行/包锁的持有，不能将结构匹配当作来源、持久性或恢复授权。守卫持锁时间不保证有界；guard 异常退出不会终止后代。
+
+`probe-native-start-tree-candidate.py` 在无网络一次性 Linux PID1 容器中替换容器内 systemctl 为惰性 fixture，验证旧协议与已有文件/悬挂符号链接在动作前拒绝、后代活动时无回执且继承的 lease 持续被守卫持有、正常退出后才发布回执；杀死该测试守卫后，锁空闲但后代仍活且无回执；测试专用缩短超时显示直接 sender 超时后仍等待后代；在 link 后注入目录 fsync 故障时回执可见但终态未知（`20261028-031552-3b5947.log`）。不涉及真实 systemctl、Device 或掉电，不证明外部 systemd 工作结束。完整 Device 回归 `1177 passed, 16 skipped`（macOS，6 个新增 Linux 单测跳过，Linux fixture 独立覆盖对应拒绝）；ruff 通过。旧 helper/snapshot 和现有 unknown/started/包更新门禁均不改变，P1 未完成。
