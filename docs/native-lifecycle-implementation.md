@@ -728,3 +728,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 78. 排队 job 意图与真实 helper start
 
 扩展隔离 `accept-native-update-job.sh` 的 source-drift 场景：先核验生产 dispatch 默认拒绝，之后仅在 disposable 脚本进程启用测试替身并让 systemd transient job 停留在 `ExecStartPre` 窗口。启动真实 helper daemon，通过 Unix socket 发送 `start`；在 job-intent 已持久化期间收到拒绝，未生成 start 意图，client unit 仍 inactive/MainPID=0。随后改变隔离测试的 source active，worker 拒绝执行包、持久门禁保留，并恢复测试 active。一次性 amd64 systemd 容器实验通过，使用历史 `9b37b30...` DEB 和 `cc01329` wheel；不是当前 HEAD 制品，不证明生产可派发、相反方向的真实 start/job 竞争、运行代码身份或完整故障恢复。容器正常关机请求超时，列表确认实例不存在；真实服务未操作，包保护不变。
+
+
+## 79. 真实 helper start 持锁与反向竞争
+
+在 disposable systemd job 验收新增 `start-lock` 场景：隔离注册时给 client unit 添加测试专用 `ExecStartPre=sleep 8`，以真实 helper daemon 的 Unix socket 发起 start，并等待实际 systemd `start-pre` 和持久 start 意图。此窗口独立尝试同一 registry 的独占 package lease，实际返回锁冲突；在脚本进程内显式替换派发门禁后，同实例 job 调用在实例管理锁处拒绝，未生成 job 意图、未调用 runner。真实 start 正常结束后独占 package lease 可获取。运行前真实生产派发门禁仍先拒绝。一次性 amd64 Linux systemd 容器通过；输入为历史 `9b37b30...` DEB 和 `cc01329` wheel，非当前 HEAD 制品。此证据区分实例锁拒绝与独立包锁探针，不证明 job 实际走到包锁、不覆盖 sender 崩溃或运行代码身份，也不授权开放派发。容器关机请求超时，列表确认实例不存在；真实服务和包保护未变。

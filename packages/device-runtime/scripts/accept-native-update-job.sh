@@ -34,6 +34,11 @@ from pathlib import Path
 from device_runtime import native_helper as helper
 from device_runtime import native_update as update
 from device_runtime import native_update_job as job
+if os.environ.get('DEVICE_JOB_FAULT')=='start-lock':
+ original_render=helper.render_client_unit
+ def delayed_unit(**kwargs):
+  return original_render(**kwargs).replace('[Service]\n','[Service]\nExecStartPre=/usr/bin/sleep 8\n')
+ helper.render_client_unit=delayed_unit
 registry=Path('/var/lib/ai-device/manager')
 root=Path('/home/probe/instance')
 package=Path('/var/lib/ai-device/inputs/candidate.deb')
@@ -58,7 +63,7 @@ def diagnostic(expected):
  assert snapshot()==before,'diagnostic changed persistent files/directories'
  return report
 mode=os.environ.get('DEVICE_JOB_FAULT','none')
-assert mode in ('none','lost-response','source-drift','close-before-apply','retire-retry')
+assert mode in ('none','lost-response','source-drift','close-before-apply','retire-retry','start-lock')
 calls=[]
 real_run=subprocess.run
 def runner(argv,**kwargs):
@@ -79,6 +84,46 @@ else:
  raise AssertionError('production dispatch fence unexpectedly allowed a new job')
 assert not stem.with_suffix('.job-intent.json').exists() and not calls
 print(json.dumps({'state':'production_dispatch_fence_refused','runner_calls':0,'intent_created':False}))
+if mode=='start-lock':
+ import threading
+ runtime=Path('/run/device-helper-acceptance'); runtime.mkdir(mode=0o755)
+ socket_path=runtime/'helper.sock'
+ unit=Path('/etc/systemd/system/ai-device-native-helper.service')
+ unit.write_text(helper.render_helper_unit(bootstrap_python=Path(sys.executable),registry=registry,socket_path=socket_path,group=0))
+ real_run(['/usr/bin/systemctl','daemon-reload'],check=True)
+ real_run(['/usr/bin/systemctl','start','ai-device-native-helper.service'],check=True)
+ deadline=time.monotonic()+10
+ while not socket_path.exists():
+  assert time.monotonic()<deadline,'helper socket not ready'
+  time.sleep(.05)
+ replies=[]; errors=[]
+ def start():
+  try: replies.append(helper.call_helper(socket_path,{'action':'start','instance_id':'probe','operation_id':'start-lock'}))
+  except Exception as exc: errors.append(str(exc))
+ thread=threading.Thread(target=start); thread.start()
+ try:
+  deadline=time.monotonic()+10
+  while True:
+   sub=real_run(['/usr/bin/systemctl','show','ai-device-client-probe.service','--property=SubState','--value'],check=True,capture_output=True,text=True).stdout.strip()
+   if sub=='start-pre': break
+   assert time.monotonic()<deadline,'client did not enter start-pre'
+   time.sleep(.05)
+  assert (registry/'op-probe-start-lock.json').exists()
+  try:
+   with helper.package_lease(registry,exclusive=True): pass
+  except helper.HelperError as error: assert 'still executing' in str(error),error
+  else: raise AssertionError('package lease not held by start')
+  job._require_proven_job_fence=lambda: None
+  try: job.dispatch_job(manager,'probe','job-one',runner=runner)
+  except (helper.HelperError,update.UpdateError) as error: print(json.dumps({'state':'same_instance_job_refused','error':str(error)}))
+  else: raise AssertionError('job overlapped helper start')
+  assert not stem.with_suffix('.job-intent.json').exists() and not calls
+ finally:
+  thread.join(timeout=30)
+ assert not thread.is_alive() and not errors and replies and replies[0].get('ok') is True,(errors,replies)
+ with helper.package_lease(registry,exclusive=True): pass
+ print(json.dumps({'state':'real_start_holds_package_lease','opposing_lease_refused':True,'released_after_start':True,'job_intent_created':False}))
+ raise SystemExit(0)
 # All remaining dispatch behavior is a deliberately isolated test substitute.
 # It is not evidence that production dispatch is authorized or safe to enable.
 job._require_proven_job_fence=lambda: None
