@@ -818,3 +818,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 96. 候选 unit 固定快照摘要
 
 修复候选 unit 仅固定版本名、未固定部署时内容的问题：deploy 在独占包锁下读取已验证候选的 snapshot SHA256，并写入新 unit 的 `--snapshot-sha256`；bootstrap 在执行候选前验证摘要格式与已验证候选相等。当前 unit 不会因同版本候选及其自有记录一起变更而静默执行另一快照。旧 unit 不改写，原实验命令允许省略摘要且不构成受控 unit；已有候选不覆盖、不自动启用或启动。测试覆盖匹配、不同摘要、非法摘要及 unit 生成，相关148通过、完整1037通过3跳过，ruff/diff检查通过。本次尚未进行新制品隔离systemd验收；unit 摘要不证明当前socket peer加载的代码、事务锁连续性或防止可信管理员修改 unit；生产派发仍关闭，包保护不变。
+
+
+## 97. 固定候选摘要的隔离 systemd 对照
+
+以干净 `38b63599c782e2015b09d4a24b5720b0c932c275` 离线构建 Device wheel SHA256 `352394c7881a83fa7a016ddca6eef88f738e1642db7ceac14a1f53d186f23d51`，四个 bootstrap 模块逐字节等于提交；用锁定依赖构建未签名 DEB `a60910a675dd7b4384f691ae88caad1e927b3decffd9d8ffc97b7e1eb8c096ba`，在无网络 Ubuntu 24.04 amd64 systemd 容器全新安装，核对 bootstrap 模块摘要。发布 `pinned` 候选、用稳定命令 deploy，仅生成未启用 unit；显式启动后 unit 固定摘要 `9abdcd7ce956e92f4068213b8fd680ba8067ec60c6c587307876c3350b78622e`，真实 peer 与 MainPID/InvocationID 对应，仍报告代码未证明、派发不允许。首次立即查询 socket 早于就绪失败，稍后核实 unit active/socket 存在再查询成功。隔离停止 helper、显式恢复 socket 后，以不同源码目录生成相同版本名、完整自洽的另一个候选 `c53537d7cc9e44c46419b9c76d52a60250206f3e093c6c60ed46e57fb70ff4db`，先独立 read 成功，再仅在容器内交换：原 unit failed、无 socket，直接入口报告 `candidate snapshot differs from unit`。恢复原候选后，同一 unit 启动成功并观察到新的 peer/invocation。容器关机请求超时后列表确认 --rm 实例已退出，DEB 未保留。此实验只验证 unit 对自洽候选替换的拒绝，不证明当前 peer 执行代码的连续身份、事务锁、目标设备或正式发布；派发保持关闭。完整回归沿用第96节1037通过3跳过，本轮未重跑。
