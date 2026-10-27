@@ -1095,3 +1095,10 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 无网络一次性 Linux amd64/Rosetta 容器构建 `build/native-packages-p1-b4158df/ai-device-native-client_0.2.2-1_amd64.deb`，109830426 字节，SHA256 `0d3ccfd5647bf27b1d6965fec90c0ed20e18cb486939e7837e8231af4df10001`（`20261027-230057-5aad2e.log`）。另一个干净容器安装该准确包，主 runtime 六模块、独立 bootstrap 四模块与冻结源码对应；安装模块的完整 job 意图校验 fixture 接受正确/拒绝 bool schema，派发仍拒绝，原 preinst/prerm 存在且重装受保护拒绝。脚本 `scripts/accept-native-b4158df-deb.sh`，`B4158DF_DEB_FRESH_INSTALL_AND_PROTECTION_OK`（`20261027-230230-23075f.log`）；fixture 的 snapshot 验证使用替身，不代表真实 job 执行。
 
 独立无网络 systemd 容器安装同一准确包，普通用户 UID12345、稳定 PID、非 owner 拒绝和服务基线通过（`20261027-230309-2e66aa.log`）；真实隔离 systemd start 丢响应、损坏回执阻止恢复与新 ID、恢复回执后显式对账通过（`SYSTEMD_RECEIPT_UNKNOWN_RECOVERY_OK`，`20261027-230327-3b16e9.log`）。测试容器已关闭。这些结果不覆盖真实包 job 派发或 invocation 竞态、正式设备、中心、宿主重启与崩溃。当前构建镜像无 rpmbuild（`20261027-230400-16ea2c.log`），未联网安装、未构建新 RPM；旧 RPM 不能代表本提交。生产派发关闭，P1 未验收。
+
+
+## 138. b4158df 事务 snapshot 及依赖验证
+
+独立无网络 Linux 容器对准确 b4158df DEB 执行已有 `accept-native-manager-package.sh`：新旧 preinst 一致、覆盖拒绝、包内 `pip check` 通过，独立事务 snapshot 验证通过，snapshot 内 cryptography Ed25519 和 zstandard 实际操作成功、模块从 snapshot 自身导入；没有安装或启动服务，日志 `20261027-230511-832315.log`。
+
+另一个干净容器安装准确 DEB，以 `scripts/accept-native-b4158df-snapshot.sh` 创建真实事务 snapshot，逐字节核对 snapshot 的 native_update、native_update_job、native_helper、native_bootstrap、management_lock 与包内模块一致；snapshot 独立解释器可加载完整意图校验，派发门禁仍拒绝。`B4158DF_TRANSACTION_SNAPSHOT_MODULES_MATCH_GATE_CLOSED`，日志 `20261027-230555-9bf5aa.log`。这些是候选快照和依赖验证，不是活跃 worker 身份、真实包事务或恢复闭环，不覆盖旧 snapshot，也不改变 P1 或生产派发状态。
