@@ -39,6 +39,12 @@
 - 监督器启动证据必须说明谁持有 pidfd、谁验证启动字节、如何识别 systemd invocation/进程退出以及重启后旧记录失效。监督器退出但子进程继续存在时，旧证据如何失效、是否允许新实例启动、残留 socket 和 guard 如何处理仍未解决。不得将方案标记为已证明或开放派发。
 - 即使处理者身份可证，也不取代事务围栏：实例锁→包锁→服务锁；锁内复核身份、批准和冲突 intent；唯一 intent 文件与父目录 fsync 后才跨释放锁/请求 worker 的间隙；所有入口和新实例均需在锁内遵守 intent。未确定 fsync、请求结果或进程树回收时保持 unknown，同 ID 显式对账，不因锁空闲、PID 消失或超时自动重放。
 
+## 现有代码的局部锁序核查（非闭环证明）
+
+- `Helper.handle` 的 start 路径在实例管理锁下取得 execution lease 与共享 package lease，再检查 `_assert_no_package_intent` 并 `_save_new` start intent；需要启动时才在实例 service lease 下调用 sender，向 sender 传递 execution 与 package fd。该描述限于所读代码，不证明进程树全部故障均收敛。
+- `dispatch_job` 先实例事务，再无条件 `_require_proven_job_fence` 拒绝；其当前不可达的新派发路径在包独占锁下检查 pending intents、保存 job intent，释放租约之后才调用 systemd。`_save_new` 对文件及父目录 fsync 并 hardlink no-replace，发布/持久化异常仍需按 unknown 对账。
+- `Updates.apply` 取得实例事务、包独占锁与实例 service lease 后核查 job/close、其他 intent、批准与 snapshot 等；这不证明其他入口无遗漏，也不证明实际运行的 helper 是理解围栏的版本。除非独立启动、实例与身份绑定及全入口动态验收通过，不能据此更改 default-deny。
+
 ## 后续验收门禁
 
 1. 对监督器父进程的实际 fork/exec 与候选内存字节执行顺序给出实现级设计，定义在子进程获得运行许可前监督器已验证的证据；证明验证后不从可变路径重新加载。
