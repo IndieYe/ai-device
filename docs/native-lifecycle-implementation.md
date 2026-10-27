@@ -758,3 +758,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 84. 候选 daemon 入口与隔离启动
 
 `native_bootstrap` 增加仅接受 registry、socket、group 和候选版本的实验 daemon 入口，固定从 registry 的 `bootstrap-candidates` 读取候选，调用第83节校验字节执行原型；Linux 包构建时将该模块纳入独立 bootstrap，原有稳定 helper 入口和 unit 不改、不自动激活候选。一次性无网络 amd64 systemd 容器以锁定 CPython 和当前源码创建独立候选，候选 snapshot SHA256 `8d12cc4e0a7988e4707dc8c8079b1b038a0ae179b7414a83ec8322747f75b5e5`、helper SHA256 `bfa1e31ebb262c60f78a3dce0dcc8d9a2079e24c187fd63eacb12e21c5522e90`；真实候选解释器以 `-I -B -m device_runtime.native_bootstrap` 启动测试 daemon，socket 返回预期拒绝响应。停止该隔离 daemon、显式恢复 socket 后改写候选锁模块，新启动失败且 socket 未创建。首次准备因容器 sh 不支持花括号展开而失败，候选尚未创建；改用逐文件复制后完成。实验实例关机后确认不存在。完整 Device 1027 passed、3 skipped，ruff、shell 语法和 diff 检查通过。实验启动器自身从候选解释器导入，尚未建立独立信任锚、与 socket peer 的连续身份或正式制品验证；未接入生产部署，派发仍关闭，不证明完整身份绑定。
+
+
+## 85. socket peer 观察作用域
+
+新增 `scoped_helper_unit_peer`：在 socket 的 SO_PEERPIDFD 仍持有期间读取固定 helper systemd unit，要求 MainPID 与实际 peer 一致；作用域正常退出时再次读取并要求整个 unit 观察相同，pidfd 退出检查及关闭由内层作用域完成。调用异常时仍关闭 pidfd；测试覆盖调用期间 InvocationID 漂移和异常清理。原 `observe_helper_unit_peer` 改为复用该作用域，保持原只读返回契约。该能力只供只读观察：退出时才检测到漂移，不可在作用域内提交不可逆动作；也不证明运行代码、启动器来源、阻止重启或授权派发。相关153项、完整1027项通过、3项跳过，ruff 和 diff 检查通过；本节仅单元测试，未在真实systemd验证新作用域。生产派发保持关闭。

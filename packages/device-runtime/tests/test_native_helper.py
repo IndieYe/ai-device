@@ -425,6 +425,32 @@ def test_helper_unit_peer_observation_refuses_drift_and_pid_mismatch(monkeypatch
     with pytest.raises(nh.HelperError, match="incomplete"):
         nh.observe_helper_unit_peer(None, runner=run_with({"MainPID": "123"}))
 
+    events = []
+
+    @contextmanager
+    def tracked_peer(_connection):
+        events.append("opened")
+        try:
+            yield {"pid": 123, "uid": 0, "gid": 0, "pidfd": 7}
+        finally:
+            events.append("closed")
+
+    monkeypatch.setattr(nh, "_socket_peer_process", tracked_peer)
+    with (
+        pytest.raises(nh.HelperError, match="differ or changed"),
+        nh.scoped_helper_unit_peer(None, runner=run_with(fields, changed)) as scoped,
+    ):
+        assert scoped["dispatch_allowed"] is False
+        assert events == ["opened"]
+    assert events == ["opened", "closed"]
+    events.clear()
+    with (
+        pytest.raises(RuntimeError, match="caller failed"),
+        nh.scoped_helper_unit_peer(None, runner=run_with(fields)),
+    ):
+        raise RuntimeError("caller failed")
+    assert events == ["opened", "closed"]
+
 
 def test_call_helper_does_not_retry(tmp_path):
     import socket

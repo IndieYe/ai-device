@@ -987,20 +987,21 @@ def _helper_unit_observation(*, runner=subprocess.run):
         raise HelperError("cannot observe helper unit") from exc
 
 
-def observe_helper_unit_peer(connection, *, runner=subprocess.run):
-    """Bind this socket peer to a stable systemd observation, not loaded code.
+@contextmanager
+def scoped_helper_unit_peer(connection, *, runner=subprocess.run):
+    """Pin a socket peer across a read-only observation scope, not authorization.
 
-    This read-only result does not authorize dispatch or guarantee that the
-    same daemon will be running after this function returns.
+    A successful exit requires the same systemd invocation and a live pidfd.
+    The caller must not commit an irreversible action within this scope: a
+    changed invocation may only be detected when the scope exits.
     """
     if sys.platform != "linux" or os.geteuid() != 0:
         raise HelperError("Linux administrator required")
     with _socket_peer_process(connection) as peer:
         before = _helper_unit_observation(runner=runner)
-        after = _helper_unit_observation(runner=runner)
-        if before != after or int(before["MainPID"]) != peer["pid"]:
+        if int(before["MainPID"]) != peer["pid"]:
             raise HelperError("helper unit and socket peer differ or changed")
-        result = {
+        yield {
             "state": "helper_unit_peer_observed_not_authorized",
             "pid": peer["pid"],
             "invocation_id": before["InvocationID"],
@@ -1008,7 +1009,14 @@ def observe_helper_unit_peer(connection, *, runner=subprocess.run):
             "loaded_code_verified": False,
             "dispatch_allowed": False,
         }
-    return result
+        if before != _helper_unit_observation(runner=runner):
+            raise HelperError("helper unit and socket peer differ or changed")
+
+
+def observe_helper_unit_peer(connection, *, runner=subprocess.run):
+    """Take an instantaneous read-only observation, not loaded-code proof."""
+    with scoped_helper_unit_peer(connection, runner=runner) as result:
+        return result
 
 
 def call_helper(socket_path, request):
