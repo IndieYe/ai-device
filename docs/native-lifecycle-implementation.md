@@ -1355,3 +1355,12 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 现有 dormant dispatcher 只对 `native_update.py`、`native_update_job.py` 和 `native_helper.py` 比较快照与当前模块字节，未覆盖 helper 实际导入、控制实例互斥的 `management_lock.py`。仅在测试中替换生产派发默认拒绝门禁、虚构快照锁模块新旧摘要差异后，原实现仍可创建 job intent（`20261028-014603-9041b1.log`）；不代表真实生产派发已开放或真实旧快照已运行。
 
 新建 job intent 前增加锁模块精确摘要比较，漂移时在发布 intent 和调用 runner 前拒绝；保留既有 intent 原有只读/不重放行为，不自动修改旧快照。定向回归 118 通过（`20261028-014656-919acb.log`），完整 1149 通过、10 跳过（`20261028-014706-3cc067.log`）。此四模块校验只是必要子集，`native_bootstrap`、`native_candidate` 等其余依赖、包树候选和完整 worker 版本封闭仍需明确，不能据此证明身份或开放生产派发；原恢复门禁不变。准确新包尚未构建。
+
+
+## 172. 快照锁模块校验的准确 DEB 验收
+
+从干净 `a9e3bdc8bdf1d49e3074f5fb2dc7cb2dbc89f5c5` 离线构建新 wheel、payload 与未签名开发 DEB。Device wheel SHA256 `5728f6489e2507e3835dfb7605b106e6a3b0a3f1ed71104ff9ee3eafcc9724ff`；七核心模块逐字节匹配 Git（`20261028-014854-5d7469.log`）。DEB `build/native-packages-p1-a9e3bdc/ai-device-native-client_0.2.2-1_amd64.deb`，109817516 字节，SHA256 `aeea9832291d111a44bac128b887fe33796ede9704098e20d47fb37786d8bc09`（`20261028-014855-e16a00.log`）。
+
+干净无网络容器安装、主 runtime 六模块/bootstrap 四模块与源码比对及重装保护通过（`20261028-014957-57d84b.log`）。包内 job 模块运行锁快照漂移测试通过（`20261028-015048-f94048.log`），其中测试明确替换生产派发门禁，实际 runner 未被调用；初次测试因 macOS 测试依赖目录优先于包内 Linux `pydantic_core` 而导入失败（`20261028-015001-32bdb9.log`），修正路径优先级后使用包内 Linux 原生依赖重跑。
+
+独立隔离 systemd 验证生产派发以及两个恢复门禁均拒绝，后续仅测试进程替身执行旧逻辑，包钩子仍拒绝且 active 不变（`20261028-015004-334220.log`、`20261028-015100-7313fd.log`）；fixture 解包后重装同批 wheel，并非真实升级成功。专属容器已停止。P1 未完成，其他 worker 依赖闭包、准确调用身份和新包树协议仍未完成。
