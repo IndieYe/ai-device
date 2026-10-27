@@ -18,6 +18,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
@@ -1037,6 +1038,7 @@ def _serve(registry, socket_path, *, group):
         while True:
             connection, _ = server.accept()
             with connection:
+                deadline = time.monotonic() + 5
                 connection.settimeout(5)
                 try:
                     uid = struct.unpack(
@@ -1047,12 +1049,19 @@ def _serve(registry, socket_path, *, group):
                     )[1]
                     data = bytearray()
                     while not data.endswith(b"\n"):
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise HelperError("request deadline exceeded")
+                        connection.settimeout(remaining)
                         chunk = connection.recv(min(1024, MAX_REQUEST + 1 - len(data)))
                         if not chunk:
                             raise HelperError("incomplete request")
                         data.extend(chunk)
                         if len(data) > MAX_REQUEST:
                             raise HelperError("request too large")
+                    if time.monotonic() >= deadline:
+                        raise HelperError("request deadline exceeded")
+                    connection.settimeout(5)
                     result = helper.handle(json.loads(data), peer_uid=uid)
                     response = {"ok": True, "result": result}
                 except (HelperError, ValueError, KeyError, OSError, subprocess.SubprocessError):

@@ -1577,3 +1577,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 新增未接入生产的 `probe-native-request-listener-credentials.py`，在无网络一次性 Linux PID1 容器用真实 Unix listener/connect：listener 在 bind/listen 前设置 `SO_PASSCRED`，子进程发送数据后父进程才 accept；accepted socket 开关为1，root 预排队请求获得子进程正确凭据。非 root、超长、同次读取多帧、半帧断连及读超时均拒绝（`20261028-035540-4135e1.log`）。
 
 实验还验证单次 socket timeout 不保证整帧限时：两次间隔0.15秒的分片均短于0.25秒，但整帧超过0.25秒仍成功（`20261028-035605-066c93.log`）。在未接入的 `receive_root_frame` 增加可选 monotonic 绝对 deadline，从读取起限定整帧时间，同样慢速输入被拒（`20261028-035641-acb564.log`）；原逐段凭据、异常控制及FD清理实验复跑通过（`20261028-035655-fcdbcb.log`）。ruff通过，容器 `--rm`；不涉及生产 listener、真实 handler、动作、systemd 或设备。deadline 不覆盖 accept 前排队和业务执行，仍须设计整体预算、身份/动作/invocation 绑定、并发和崩溃终态。本轮未重跑完整回归、未构建新包，生产门禁不变。
+
+
+## 202. helper 请求整帧读取总时限
+
+现有 `_serve` 串行处理连接，每次 `recv` 的5秒超时会随分片重新计时。本机真实 socketpair、假 listener 和假 handler 的回归中，间隔0.5秒发送空白，超过5秒后再发送合法请求，原代码仍调用 handler（`20261028-040019-f76122.log`）。实验未启动真实服务或 Device。
+
+修改生产 `_serve`：accept 后以 monotonic 设定5秒整帧读取截止时间，每次读取使用剩余时间，完整帧后再次检查 deadline；超时进入既有通用拒绝响应，快速合法请求仍调用 handler，响应写入保留原5秒超时。该时限不包括 accept 队列、handler 执行或响应完成，不改变连接级 `SO_PEERCRED`、动作白名单、更新授权及派发/恢复门禁，也不构成逐消息身份绑定。helper/bootstrap 定向 `220 passed, 1 skipped`（`20261028-040148-29a285.log`），完整 `1202 passed, 16 skipped`（`20261028-040208-2e3198.log`），ruff通过。测试使用 macOS socketpair 与假的 peer/监听器；未做真实 Linux helper 系统验收、未构建新包，旧 helper/snapshot 不自动更新。
