@@ -823,3 +823,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 97. 固定候选摘要的隔离 systemd 对照
 
 以干净 `38b63599c782e2015b09d4a24b5720b0c932c275` 离线构建 Device wheel SHA256 `352394c7881a83fa7a016ddca6eef88f738e1642db7ceac14a1f53d186f23d51`，四个 bootstrap 模块逐字节等于提交；用锁定依赖构建未签名 DEB `a60910a675dd7b4384f691ae88caad1e927b3decffd9d8ffc97b7e1eb8c096ba`，在无网络 Ubuntu 24.04 amd64 systemd 容器全新安装，核对 bootstrap 模块摘要。发布 `pinned` 候选、用稳定命令 deploy，仅生成未启用 unit；显式启动后 unit 固定摘要 `9abdcd7ce956e92f4068213b8fd680ba8067ec60c6c587307876c3350b78622e`，真实 peer 与 MainPID/InvocationID 对应，仍报告代码未证明、派发不允许。首次立即查询 socket 早于就绪失败，稍后核实 unit active/socket 存在再查询成功。隔离停止 helper、显式恢复 socket 后，以不同源码目录生成相同版本名、完整自洽的另一个候选 `c53537d7cc9e44c46419b9c76d52a60250206f3e093c6c60ed46e57fb70ff4db`，先独立 read 成功，再仅在容器内交换：原 unit failed、无 socket，直接入口报告 `candidate snapshot differs from unit`。恢复原候选后，同一 unit 启动成功并观察到新的 peer/invocation。容器关机请求超时后列表确认 --rm 实例已退出，DEB 未保留。此实验只验证 unit 对自洽候选替换的拒绝，不证明当前 peer 执行代码的连续身份、事务锁、目标设备或正式发布；派发保持关闭。完整回归沿用第96节1037通过3跳过，本轮未重跑。
+
+
+## 98. Linux peer 身份反例与监督器方案评审
+
+在网络隔离的一次性 amd64/Rosetta Linux 6.18.15 容器执行 `scripts/probe-native-peer-identity.py`：fork 前 socketpair 的 SO_PEERCRED 指向创建者，而数据报 SCM_CREDENTIALS 指向实际子发送者；父进程 bind、子进程 accept 时客户端 SO_PEERCRED/SO_PEERPIDFD 指向父进程；子进程 bind 时 pidfd 对应并能观察其退出；创建者 fork 后代由后代 accept/响应时，客户端 peer 仍指向创建者。最终 `PEER_PROBE_OK`，日志 `20261027-200712-01d01c.log`，实验容器退出；脚本 ruff 通过。详细反例、设计修正和门禁见 `native-helper-peer-protocol-review.md`。证据不证明候选代码执行身份、真实 systemd、宿主重启或事务围栏；仍须验证消息凭据和描述符继承以及监督器死亡后的恢复。未实现监督器，不改产品 default-deny 或包保护；完整回归沿用第96节，本轮未重跑。
