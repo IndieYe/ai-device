@@ -898,3 +898,10 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 110. daemon 与更新器的持久意图交接设计
 
 基于现有普通UID socket权限、daemon长期registry目录独占锁、实例锁→package锁及job close/retire路径，新增 `native-helper-dispatch-handoff-design.md`：候选方向为受控daemon在严格root-only分支协调锁内持久intent，worker按锁序复核后独立执行，更新器不重新取得daemon长期目录锁；明确故障矩阵、同ID一致性、daemon退出和跨崩溃围栏、普通用户权限及验收门禁。当前 `dispatch_job` 已有intent分支直接返回记录，不能据此声称同ID完整请求一致性；新设计须核验。此为设计草案，不新增IPC、不开启派发、不修改生产代码；受控启动、实际peer和systemd故障、准确制品和P1整体仍未完成。用户确认的registry稳定维护前提不替代运行身份或事务协议。
+
+
+## 111. job intent fsync 失败不派发的限定回归
+
+为 `dispatch_job` 的 dormant 测试路径注入 intent 文件 fsync 和目录 fsync 错误：两种情况均传播异常且未调用 systemd runner；目录 fsync 失败后 intent 仍可见时，同 ID 仅返回已记录且不重派。仅测试中 monkeypatch 关闭 default-deny；生产门禁未变。job 测试17通过，ruff通过，日志 `20261027-211245-8b6320.log`。静态核查 `Updates.apply` 在调用包管理器前 `_atomic` 写 apply intent，但本轮未对该路径注入故障。
+
+修正第110节草案：对严格保证 `_save_new` 成功返回后才派发、且文件系统持久性和所有参与者遵守该顺序的路径，fsync 失败后 intent 可能消失并不单独证明外部动作已执行；不能无条件断言必须增加独立durable围栏。全入口、成功返回后的实际崩溃/文件系统保证、响应丢失和未知对账尚未验证，不可因此解除阻塞或开放派发。完整回归本轮未跑。

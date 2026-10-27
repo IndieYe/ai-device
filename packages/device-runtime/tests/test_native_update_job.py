@@ -125,6 +125,63 @@ def test_dispatch_records_once_without_replay(transaction, monkeypatch, lost):
     assert "--property=RemainAfterExit=yes" in calls[0]
 
 
+@pytest.mark.parametrize("failure_stage", ["file", "directory"])
+def test_dispatch_fsync_failure_never_calls_runner(transaction, monkeypatch, failure_stage):
+    import os
+    import stat
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from device_runtime import native_update as update
+
+    monkeypatch.setattr(job.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(__import__("sys"), "platform", "linux")
+    monkeypatch.setattr(job, "_require_proven_job_fence", lambda: None)
+    transaction.with_suffix(".apply-intent.json").unlink()
+    monkeypatch.setattr(job.bootstrap, "snapshot_runtime", lambda *args: {})
+    original_digest = job.helper._digest
+
+    def digest(path):
+        if path.name in ("native_update.py", "native_update_job.py", "native_helper.py"):
+            return "same-worker-bytes"
+        return original_digest(path)
+
+    monkeypatch.setattr(job.helper, "_digest", digest)
+
+    @contextmanager
+    def txn(*args):
+        yield {}, transaction
+
+    @contextmanager
+    def lease(*args):
+        yield
+
+    manager = SimpleNamespace(
+        packages=update.Debian(), registry=transaction.parent.parent,
+        _transaction=txn, _prepared=lambda *args: {}, _apply_lease=lease,
+    )
+    original_fsync = os.fsync
+
+    def fail_fsync(fd):
+        is_directory = stat.S_ISDIR(os.fstat(fd).st_mode)
+        if is_directory == (failure_stage == "directory"):
+            raise OSError("injected fsync failure")
+        original_fsync(fd)
+
+    monkeypatch.setattr(job.helper.os, "fsync", fail_fsync)
+    calls = []
+    with pytest.raises(OSError, match="injected fsync failure"):
+        job.dispatch_job(manager, "probe", "one", runner=lambda *args, **kwargs: calls.append(args))
+    assert not calls
+    intent = transaction.with_suffix(".job-intent.json")
+    assert intent.exists() is (failure_stage == "directory")
+    if intent.exists():
+        result = job.dispatch_job(manager, "probe", "one", runner=lambda *args, **kwargs: calls.append(args))
+        assert result["state"] == "dispatch_already_recorded"
+        assert result["replayed"] is False
+        assert not calls
+
+
 def test_dispatch_rejected_by_real_shared_start_sender_lock(transaction, monkeypatch):
     from contextlib import contextmanager
     from types import SimpleNamespace
@@ -151,9 +208,11 @@ def test_dispatch_rejected_by_real_shared_start_sender_lock(transaction, monkeyp
         _prepared=lambda *args: {}, _apply_lease=lease,
     )
     calls = []
-    with job.helper.package_lease(registry):
-        with pytest.raises(job.helper.HelperError, match="still executing"):
-            job.dispatch_job(manager, "probe", "one", runner=lambda *a, **k: calls.append(a))
+    with (
+        job.helper.package_lease(registry),
+        pytest.raises(job.helper.HelperError, match="still executing"),
+    ):
+        job.dispatch_job(manager, "probe", "one", runner=lambda *a, **k: calls.append(a))
     assert not transaction.with_suffix(".job-intent.json").exists()
     assert not calls
 

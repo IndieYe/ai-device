@@ -21,7 +21,7 @@
 
 - `PREPARED`：已经验证来源、准备和 root 批准；不意味着许可派发。
 - `INTENT_DURABLE`：受控 daemon 在实例锁→package EX 下，重新验证绑定、活动/unknown start、批准、snapshot、所有冲突 intent，并把唯一 job intent 用 no-replace、文件 fsync、父目录 fsync 持久发布；内容绑定 instance、operation、prepared/approval、worker snapshot、unit、协议版本和受控启动实例证据。intent 的成功持久发布是在所有参与者均遵守相同包锁和 intent 协议的前提下排除新 start 的线性化点；持久化或响应不确定时按 unknown。
-- **持久化未知与重启缺口**：如果 link 已成功但目录 fsync 未确认，崩溃后 intent 名称可能消失。仅扫描当前文件找不到 intent，无法证明未提交，也无法识别操作 ID。必须先设计并验证一个在受理请求之前已 durable 的独立不干净启动/事务登记围栏（或等价权威机制），覆盖全部可能的写入不确定窗口；重启时即使没有 intent，也必须依据该围栏进入人工对账并拒绝冲突操作。若无法恢复确切 ID 或证明没有动作，保持阻塞，不得自行清理或凭一次目录扫描放行。该机制尚未实现，不能将当前 `_save_new` 调用的异常处理当作已解决。
+- **持久化未知与重启缺口**：如果 link 已成功但目录 fsync 未确认，崩溃后 intent 名称可能消失。对当前 dormant `dispatch_job`，代码在 `_save_new` 成功返回后才调用 systemd；隔离单元故障注入显示文件或目录 fsync 抛错时 runner 未被调用，目录失败且文件仍可见时同 ID 不重派。因此，在明确文件系统持久化语义且证明**所有可能引发该外部动作的路径都严格等待成功返回**的前提下，单个“fsync 未返回且文件丢失”并不单独证明存在已派发动作，不应无条件要求额外围栏。然而仍须验证成功返回后持久性、进程崩溃/独立参与者、所有动作入口及原操作 ID 对账；若不能证明上述顺序，必须采用预先 durable 的不干净/事务围栏或等价机制，未知时保持阻塞。当前仅有注入测试，并未证明宿主崩溃、文件系统或全部入口语义。
 - `DISPATCH_UNKNOWN` / `DISPATCH_ACCEPTED`：释放锁后仅针对相同 intent 请求一次固定 systemd unit；响应丢失或进程崩溃保持 unknown。同一 ID 不重派；已存在 intent 必须核验与当前请求全部一致，不能仅因文件存在就视为同一请求。
 - `APPLY_STARTED` / `OUTCOME`：worker 重新取得锁并校验 intent，记录持久 apply intent 后才执行包操作。任何未知、缺 guard 回执或不一致不自动重放、不清 intent，active 与包状态分别观察。
 - `CLOSED/RETIRED`：只允许既有精确 pre-apply close/retire 证据的范围，保持迟到 worker 必须在包锁内检查 close。不得把锁空闲、PID 消失、超时或 systemd unit 不存在当成操作未发生的充分证据。
@@ -34,7 +34,7 @@
 | --- | --- |
 | daemon 验证 peer 前或锁前退出 | 不提交 intent；更新方返回拒绝/未知，查权威状态，不新 ID 自动重试。 |
 | 已取得锁、尚未持久发布 | 锁和进程状态需对账；写入结果不确定时不声称没有 intent。 |
-| 文件已 link、目录 fsync 未确认 | 未证明 durable；保持 unknown，不派发。若崩溃后文件消失，必须有已 durable 的独立不干净/事务围栏阻止新操作，不能仅靠同 ID 文件查找或目录扫描恢复；该围栏目前尚未实现。 |
+| 文件已 link、目录 fsync 未确认 | 当前被测 dispatcher 在 `_save_new` 抛错时不调用 runner；文件仍可见则同 ID 不重派。崩溃后名称可能消失，只有在证明所有动作路径均等待成功持久化及相应文件系统语义成立时，才可判断该次未派发；否则需独立 durable 围栏或等价机制并保持阻塞。 |
 | intent durable 后、响应或 systemd 调用前 daemon 退出 | intent 持续围栏；管理方查询原 ID，不能仅凭未见响应重派。 |
 | systemd 调用已受理但回执丢失 | 原 ID unknown；查询对应 unit/job、intent、worker/guard回执和包状态，不重放。 |
 | daemon 重启，旧 guard/worker 仍持锁 | 新 daemon 获目录锁与 socket 后，start 的包 SH 及 intent 检查阻断冲突；缺证据保持 unknown。目录锁不能替代 package guard 或证明 worker 已退出。 |
