@@ -133,6 +133,25 @@ if mode in ('start-lock','start-guard-crash'):
     assert response.get('ok') is False,response
    assert not (registry/'op-probe-after-crash.json').exists()
    assert not (registry/f'recovery-probe-{mode}.json').exists()
+   # Stop only the isolated test daemon, preserving its real ledger and socket.
+   result_path=registry/f'result-probe-{mode}.json'
+   before=result_path.read_bytes()
+   real_run(['/usr/bin/systemctl','stop','ai-device-native-helper.service'],check=True)
+   assert socket_path.exists(),'expected preserved stale socket'
+   assert helper.recover_socket(registry,socket_path)['removed'] is True
+   real_run(['/usr/bin/systemctl','start','ai-device-native-helper.service'],check=True)
+   deadline=time.monotonic()+10
+   while not socket_path.exists():
+    assert time.monotonic()<deadline,'restarted helper socket not ready'
+    time.sleep(.05)
+   same=helper.call_helper(socket_path,{'action':'start','instance_id':'probe','operation_id':mode})
+   assert same['ok'] and same['result']['result']['state']=='unknown' and same['result']['replayed'] is False,same
+   for action,operation in [('resolve-running',mode),('start','after-restart')]:
+    response=helper.call_helper(socket_path,{'action':action,'instance_id':'probe','operation_id':operation})
+    assert response.get('ok') is False,response
+   assert result_path.read_bytes()==before and not (registry/'op-probe-after-restart.json').exists()
+   assert not (registry/f'recovery-probe-{mode}.json').exists()
+   print(json.dumps({'state':'restarted_daemon_preserves_unknown','socket_recovered_explicitly':True,'same_id_not_replayed':True,'new_start_refused':True}))
    print(json.dumps({'state':'real_guard_crash_remains_unknown','missing_receipt':True,'recovery_refused':True,'new_start_refused':True,'systemd_job_terminal':True}))
    raise SystemExit(0)
   try:

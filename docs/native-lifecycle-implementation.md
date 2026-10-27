@@ -743,3 +743,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 81. 真实 helper 启动 guard 异常退出隔离实验
 
 在一次性无网络 amd64 systemd 容器中，真实 helper 经 Unix socket 启动已登记测试实例，测试专用 ExecStartPre 保持 systemd 启动等待。确认生产 job 门禁拒绝后，按 systemd MainPID、进程父子关系及 guard 命令行识别该隔离 daemon 的 guard，向其注入 SIGKILL；实际 start 结果为 unknown，sender 回执缺失。等待 systemd Job 终态后，真实 helper 拒绝 resolve-running 和不同 ID 的新 start，未生成恢复或新启动意图。使用历史 DEB `9b37b30...` 与 `cc01329` wheel，不是当前 HEAD 制品；实验不覆盖 daemon 重启、resolve-stopped、包应用或运行代码身份，不证明可恢复或允许派发。首次实验因容器不提供 `/proc/.../children` 在注入前失败；改用 `ps` 父子关系并核验 guard 命令后在干净容器成功。两次实例均经关机请求并核实不存在；相关 133 项、shell 语法与 diff 检查通过。真实设备服务及包保护未改变。
+
+
+## 82. guard 崩溃后的真实隔离 daemon 重启
+
+延续第81节场景，在 guard 异常退出且真实 systemd Job 已终态后，仅对一次性容器内测试 helper 执行停止；保留未知台账和遗留 socket，调用管理员 `recover_socket` 显式检查并移除孤立 socket，然后启动同一测试 unit。通过新连接验证同 ID 仍为 unknown 且 `replayed=false`，原结果字节不变，恢复和新 ID start 仍被拒绝、没有新的意图或恢复证据。实验使用历史 `9b37b30...` DEB 与 `cc01329` wheel，不是当前 HEAD 制品；不证明加载代码身份、宿主重启或可解除阻塞。真实生产派发门禁先拒绝；实例关机请求超时后再次正常关机并确认不存在，未操作真实设备。
