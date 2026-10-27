@@ -1174,3 +1174,12 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 针对 `_job_retired` 只检查 schema/state/protocol 的缺口，构造缺失或漂移 instance、operation、unit、prepared/snapshot 摘要及多余字段的七组证据，并重算 close/retire 摘要；修复前七组均错误放行。现要求完整字段集、严格 schema、合法 ID 与事务 stem 匹配、确定性 unit 及两摘要的严格 SHA256 格式，再检查原关闭/退休证据与无 apply/sender/outcome。失败保留原字节并阻挡 start；合法退休与迟到 worker 测试不变。不读取或重建历史 snapshot，不把格式一致宣称为批准或执行来源认证。
 
 helper/update/job 266 通过、1 跳过；Device 全量 1125 通过、4 跳过，ruff/diff 检查通过。第146节 DEB 源码 `46c2f06` 不含本次更改；须重新构建准确包和相关隔离验收。旧快照不自动迁移，生产派发仍关闭。
+
+
+## 148. baa0797 准确 DEB 与退休身份隔离验收
+
+干净提交 `baa0797e641c7c6f59ef10511b7e6e2d3059fff6` 离线构建 `build/native-wheels-p1-baa0797/`；Device wheel SHA256 `820c683653980dc149eda1f625c348ee22dd30d90064191f451ad79bd9ab0a54`，Bash `aee883b74bb2fc816abb77ba428ed4339c6901726a9ac3098a3ba8737fa16dd3`、FS `b872aa775eaacc9836c0ec94a2abf1e41c8395ef725eecb37d05b521053ab626`，六个关键模块逐字节匹配提交。锁定输入组装 `build/native-payload-p1-baa0797/`，一次性离线 Linux 容器构建未签名开发包 `build/native-packages-p1-baa0797/ai-device-native-client_0.2.2-1_amd64.deb`，109816504 字节，SHA256 `7f0935ad186ece580d3d3e6e7aba6c0c128c52ace649b9dff8866f07257ae542`；不覆盖或发布。
+
+固定 Hash 的 `scripts/accept-native-baa0797-deb.sh` 在干净容器核对包内六模块及独立 bootstrap 四模块与源码一致，用包内解释器测试合法及不完整退休身份、类型漂移、批准回执、派发默认拒绝和重装保护，日志 `20261027-235221-a95165.log`。两次独立真实隔离 systemd job 实验先验证生产门禁拒绝，再仅以测试进程替换门禁：`close-before-apply` 的迟到 worker 在包动作前拒绝并保留围栏（`20261027-235243-d48952.log`）；默认模式包 preinst 拒绝，missing sender 阻恢复、显式对账幂等、一次派发且 active 不变（`20261027-235333-d32e6b.log`）。两个容器已退出。
+
+这是隔离 fixture 和 systemd 证据，不证明生产监督、实际处理者、固定 invocation、成功升级、真实宿主或正式签名。RPM 无离线 rpmbuild，仍未构建；旧快照不迁移，生产派发关闭。
