@@ -1116,3 +1116,15 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 独立无网络 systemd 容器用同一准确 b4158df DEB 和三 wheel、既有 `accept-native-update-job.sh` 的 `DEVICE_JOB_FAULT=lost-response` 运行故障场景。该 fixture 在真实 systemd-run 返回后由测试 runner 模拟 TimeoutExpired，原调度报告 unknown；同 ID 重入不重派，原包 preinst 仍拒绝覆盖、sender 匹配且包 outcome unknown、active 不变；缺 sender 显式恢复拒绝，复原证据后原 ID 对账幂等并保留围栏。生产派发门禁首先拒绝，之后仅测试进程替换门禁。日志 `20261027-230922-e35ac6.log`，容器已退出。
 
 该实验只模拟返回丢失，不证明 systemd 内部失败、宿主断电、生产派发授权、实际处理者或 invocation 连续性；P1 和 RPM 新制品仍未完成。
+
+
+## 141. b4158df 隔离 systemd 互斥、guard 退出与迟到 worker
+
+四个独立无网络 Linux amd64/Rosetta systemd 容器均核对准确 b4158df DEB SHA `0d3ccfd5647bf27b1d6965fec90c0ed20e18cb486939e7837e8231af4df10001` 并使用对应三 wheel，运行既有 `accept-native-update-job.sh` 的不同故障模式：
+
+- `start-lock`：真实 helper start 的有限排队窗口持有 package lease，排他竞争拒绝；同实例 job 请求因实例管理忙拒绝，未生成 job intent；start 完成后包锁可取得。`real_start_holds_package_lease`，日志 `20261027-231302-51395d.log`。
+- `source-drift`：真实隔离 systemd job 排队、持久 intent 存在时，真实 helper IPC start 拒绝且无 start intent；随后测试漂移 active，worker 在包操作前拒绝，job 围栏保留。`real_helper_start_fenced_by_queued_job` / `queued_source_drift_refused`，日志 `20261027-231418-9c4cb4.log`。
+- `start-guard-crash`：仅对该容器的已识别测试 guard 注入异常，缺 sender 回执时显式恢复与新 start 拒绝；测试 daemon 停止、显式恢复残留 socket 并重启后，原 ID 不重放且新 start 仍拒绝。`real_guard_crash_remains_unknown` / `restarted_daemon_preserves_unknown`，日志 `20261027-231529-9bc504.log`。
+- `close-before-apply`：systemd job 处于受控排队窗口时先持锁 close，迟到 worker 拒绝执行包，持久围栏保留。`delayed_worker_refused_after_close`，日志 `20261027-231627-0d16bf.log`。
+
+每次先证明生产派发门禁拒绝、未创建 intent；涉及 job 派发的场景仅在隔离测试进程替换该门禁，未修改产品代码或放宽 DEB 包保护。容器均已退出。测试范围不覆盖生产受控启动、实际消息处理者与 invocation 绑定、任意并发时序、宿主断电、目标设备或 RPM；生产派发继续关闭，P1 未完成。
