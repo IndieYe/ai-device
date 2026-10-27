@@ -478,3 +478,9 @@ Debian apply意图前准备副本，将snapshot.json摘要绑定意图；guard�
 最终934 passed/3 Linux skipped（48.18s），ruff/format/sh-n/diff通过。这证明发起进程退出不阻断独立发送与结果落盘，尚不等于完整systemd独立job或整个管理器切换；锁/任务收口/包钩子准确许可/激活恢复仍需后续验收。Device包保护未解除，P1仍未完成。
 
 第29节后续复核：recover原仅接受旧prepared_sha256单字段意图，会错误拒绝新快照意图。修复为旧意图保持严格原格式，新意图必须完整匹配prepared摘要、快照回执摘要与准确target_package，并重新验证副本；未知附加字段和目标漂移仍拒绝。新增恢复成功/目标漂移回归，确认不重新执行包。最终完整935 passed/3 skipped（51.65s），ruff/format/diff通过；该修复独立检查点保存，不改写前一提交历史。
+
+## 30. 独立systemd job静态绑定设计（未接执行）
+
+新增native_update_job.describe_job仅返回静态描述和unit候选，不写systemd目录、不创建worker/launch gate、不启动。要求既有准确管理员批准、apply意图、有效独立快照及准确target全部匹配，unit名取canonical事务路径SHA256，固定root/oneshot/Restart=no/无限包事务超时，无Install段。描述明确staged_not_dispatchable、dispatch_allowed=false；ConditionPathExists默认不满足。4项回归验证幂等、无文件副作用及批准/目标/快照漂移拒绝；完整939 passed/3 skipped（46.54s）。
+
+检查实际接入依赖发现v15包仍不含最新native_update模块/原生验签依赖，不能把当前静态描述当作完整管理器job。排队锁交接与worker侧准确源/批准复核尚未实现；试写的job-intent启动阻断已撤回，现有行为不变。下一步先构建含最新模块、native依赖的完整离线运行时并验证快照内模块导入，再接一次性job意图与二次校验，最后隔离systemd动态验收。静态job描述不构成systemd运行证据或包许可；P1未完成。
