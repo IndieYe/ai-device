@@ -1250,3 +1250,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 复现：已存在 job intent 的事务调用通用 `Updates.recover` 时，原实现不要求 job 绑定即可写底层 recovery（`20261028-004052-2f1f63.log`），绕过 job 专用入口的 systemd 观察和意图核验。现于实例锁与 package EX 内，发现本事务 job intent 或 job-recovery 路径（包括悬空符号链接）且调用未提供 job intent 摘要时拒绝，保留原台账；不影响无 job 的直接更新恢复。定向覆盖通用入口拒绝、悬空标记、无新增证据、包动作不增加、合法 job 对账和原有非 job 恢复；相关测试 113 项通过，完整源码回归 1143 通过、4 跳过（`20261028-004131-2864d6.log`）。真实隔离验收脚本已加入入口负例，尚待新包验证。
 
 此门禁不把调用者提供摘要当认证，也不消除 `recover_job` 的 systemd 观察与持久化之间竞态；已获 root 权限的可信本机代码可调用内部 API，生产派发仍默认关闭，不能视为生产身份绑定。
+
+
+## 158. 通用恢复入口修复的准确制品验收
+
+干净 `cf18a80e09152a30c0262d387e8eb7ad182d4214` 离线构建三包，Device wheel SHA256 `22d43231e25f34855820629c09b8ef1f50a14f370e91b4c6923b152ad7652dbb`，六核心模块逐字节匹配 Git（`20261028-004319-919e0d.log`）。无网络 amd64/Rosetta Linux 构建 DEB：`build/native-packages-p1-cf18a80/ai-device-native-client_0.2.2-1_amd64.deb`，109817244 字节，SHA256 `723f8ed833d6e841ba78775ccdb0a48af765bdf830cea22d8b7fa2c34e01f9ee`（`20261028-004330-8047e8.log`），为未签名开发制品。独立干净安装核对主 runtime 六模块、bootstrap 四模块及覆盖保护通过（`20261028-004417-ec8669.log`）。
+
+另一无网络 systemd 容器核对 DEB 与 wheel，先验证生产 gate 拒绝且零 runner/intent，再仅测试进程替换 gate；候选被原包保护拒绝，保持 unknown 和 active 不变。`GENERIC_RECOVERY_JOB_INTENT_REFUSED`、`ORPHAN_JOB_RECOVERY_REFUSED_BEFORE_WRITE`、`JOB_RECOVERY_TYPE_DRIFT_REFUSED` 均通过，测试台账字节未变，合法显式对账仍幂等（`20261028-004438-361db2.log`）。fixture 解包准确 DEB 并重装同批 wheel；包内无源码安装核对单独见上。容器已停止（`20261028-004517-1bd48c.log`）。仅覆盖该隔离路径，不证明生产 job 派发、升级成功、实际处理者身份、观察与恢复原子化、RPM 或目标设备。
