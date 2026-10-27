@@ -664,3 +664,7 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 65. 当前RPM bootstrap与动态链接检查
 
 对第64节SHA256为`35e4c70cc438c98fedc84a57dc525eeb20097803bf97c0a50817598eefb0d9a4`的当前源码开发RPM，一次性Rocky9 amd64容器fresh安装后，独立bootstrap Python导入ssl、sqlite3、ctypes、zlib及native_helper成功。两个运行时目录中普通`*.so`和`*.so.*`逐一ldd未报告`not found`，非动态对象的ldd错误被忽略。该证据不覆盖所有可执行文件、延迟加载、extras、目标实机或完整升级；未签名发布，旧helper跨重启迁移仍缺，新job派发关闭，原包保护不变，未操作真实设备。
+
+## 66. 用户确认旧测试helper手动退休
+
+用户确认旧helper仅为测试原型，不需要自动迁移或原地保留。当前P1改为管理员在维护窗口手动停止并退休旧测试环境，确认所有旧启动入口、在途sender和未终态操作已收口，再走新版干净安装；不自动接管、删除或改写旧台账。`native-helper-migration-draft.md`已标为历史草案，当前决策见P0设计末尾与HELPER说明。手动退休不是实际运行helper身份或新版互斥的证明；新job仍默认关闭，包覆盖保护不放宽。真实服务停止、清理和部署仍须独立授权，本轮未操作真实环境。后续应验证干净安装、新helper运行身份和新版job/start锁及故障恢复，不再实现旧版本自动接管。

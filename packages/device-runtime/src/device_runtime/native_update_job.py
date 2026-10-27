@@ -90,8 +90,9 @@ def describe_job(stem):
 
 
 def _require_proven_job_fence():
-    # An old daemon can start after a point-in-time identity check. Until a
-    # persistent cross-version barrier exists, no new dispatch is safe.
+    # Legacy test helpers are retired manually, not migrated. This alone does
+    # not prove the live helper identity or the new protocol's runtime fence.
+    # Keep dispatch closed until those clean-install guarantees are verified.
     raise JobError("new dispatch disabled: helper job-fence compatibility unproven")
 
 

@@ -1,5 +1,7 @@
 # 旧 helper 安全迁移协议草案（未实现、不得部署）
 
+> **状态：历史草案，已被用户确认的手动退休方案取代。** 旧helper仅为测试原型，不实施本草案中的自动迁移；当前约束以 `native-lifecycle-p0-design.md` 的“P1范围调整”和 `packages/device-runtime/native/HELPER.md` 的手动退休说明为准。新job派发仍默认关闭，原包覆盖保护不放宽。
+
 ## 范围和结论
 
 目标是把已安装的旧 helper 迁移到支持 job 门禁的版本，且异常中断和重启时不允许旧 helper 与新 job 并行。v17 不检查 job 意图；既有 daemon 锁只在进程存活期间生效。systemd mask 不约束直接执行旧 bootstrap，替换锁路径也无法约束提前打开旧 inode 的进程。不能从新文件已落盘推断旧进程已退出。
