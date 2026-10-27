@@ -1424,3 +1424,14 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 当前源码在实例锁→package EX→service lease 内、close 标记检查后、新 apply intent 创建之前，对带 job 摘要的新动作调用 `_require_proven_job_execution_fence` 并默认拒绝。原 job intent/围栏保留，不删除、不重试；已有 apply intent 仍走原只读观察，直接 apply 保持原有行为。worker 内部旧校验测试通过显式测试替身绕过该新门禁以覆盖原逻辑；真实门禁测试不替换它。定向 131 项及 ruff 通过（`20261028-022540-d34e9e.log`），完整 1162 项通过、10 项跳过（`20261028-022548-5959a9.log`）。
 
 此收紧不影响已冻结的旧 worker snapshot、已启动进程或真实 package guard，不证明 worker 身份、完整进程树或 invocation 绑定；旧环境仍须管理员维护窗口手动退休。真实准确新包验收尚未完成，派发和恢复继续默认拒绝，包覆盖保护不放宽。
+
+
+## 181. job worker 新门禁的准确 DEB 与 systemd 验收
+
+从干净 `8b52ab92f77d6847cd13cc251a394211e952f02b` 源码用锁定离线输入构建未签名开发 DEB：`build/native-packages-p1-8b52ab9/ai-device-native-client_0.2.2-1_amd64.deb`，109822010 字节，SHA256 `f082342286f9b50f15eae29dc1a049fcdef161400fc85f693dbbc095b6070bc6`，Device wheel SHA256 `2388a714f3e09cd2f0062f7439bbfd6c842ad8dd511f5f7f22f3d15c07689524`；wheel 33 个 Python 源码文件与提交逐字节一致（`20261028-022837-31e513.log`）。
+
+无网络容器干净安装该 DEB，比较主 runtime 六模块及 bootstrap 四模块，原地重装被包保护拒绝；独立干净安装后使用包内 runtime 运行新门禁及已有观察测试，3 项通过（`20261028-022853-9d33ab.log`）。无网络隔离 systemd 中采用旧版 inert source fixture，解包新 DEB 并重装同批 wheel、创建普通用户实例、登记批准和独立 snapshot；原生产新派发拒绝且不创建 intent，再人为建立固定测试 job intent，由 systemd 调用 snapshot 实际 worker，确认 stderr 为新门禁拒绝，job intent 不变，无 apply/sender/outcome，active 不变（`20261028-023043-b42855.log`）。该 systemd fixture 不是干净安装或真实升级证据。
+
+首次 systemd 实验仅确认失败但 journal 无输出，不能确认原因（`20261028-023007-ea69ad.log`）；随后在新容器为测试单元指定专用 stderr 文件才完成复验。两个专属容器已停止，不触及真实服务。旧 snapshot、在途 worker 与正式发布仍未验证；RPM 未构建，生产派发和恢复门禁不开放。
+
+验收脚本已保留为 `scripts/accept-native-worker-default-deny-8b52ab9.sh`，固定准确包 SHA 并在全新隔离容器重跑通过（`20261028-023139-b2d484.log`）；仍是解包加重装 wheel 的 fixture，不扩大上述证据范围。
