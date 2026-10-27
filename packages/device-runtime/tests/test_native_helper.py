@@ -1815,3 +1815,48 @@ def test_invalid_start_barrier_blocks_new_operation(helper):
     assert path.read_bytes() == before
     assert not (service.registry / "op-probe-new-id.json").exists()
     assert sum(action == "start" for action, _ in adapter.calls) == starts
+
+
+@pytest.mark.parametrize("drift", ["duplicate", "missing", "extra", "malformed", "large", "nonstring"])
+def test_systemd_query_rejects_ambiguous_output(monkeypatch, drift):
+    from types import SimpleNamespace
+
+    lines = [
+        "ActiveState=active", "SubState=running", "MainPID=123", "Job=",
+        "User=12345", "Group=12345", "FragmentPath=/etc/systemd/system/probe.service",
+        "ExecStart={ path=/fixture/run ; argv[]=/fixture/run client ; ignore_errors=no ; }",
+    ]
+    if drift == "duplicate":
+        lines.insert(0, "ActiveState=failed")
+    elif drift == "missing":
+        lines = [line for line in lines if not line.startswith("Job=")]
+    elif drift == "extra":
+        lines.append("Unknown=value")
+    elif drift == "malformed":
+        lines.append("unparseable")
+    elif drift == "large":
+        lines.append("X=" + "x" * 17000)
+    output = b"not text" if drift == "nonstring" else "\n".join(lines) + "\n"
+    monkeypatch.setattr(nh.subprocess, "run", lambda *a, **kw: SimpleNamespace(stdout=output))
+    with pytest.raises(nh.HelperError, match="systemd.*observation"):
+        nh.Systemd().query("probe.service")
+
+
+def test_systemd_query_accepts_exact_fields_and_empty_job(monkeypatch):
+    from types import SimpleNamespace
+
+    output = (
+        "ActiveState=active\nSubState=running\nMainPID=123\nJob=\n"
+        "User=12345\nGroup=12345\nFragmentPath=/etc/systemd/system/probe.service\n"
+        "ExecStart={ path=/fixture/run ; argv[]=/fixture/run client ; ignore_errors=no ; }\n"
+    )
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(stdout=output)
+
+    monkeypatch.setattr(nh.subprocess, "run", run)
+    result = nh.Systemd().query("probe.service")
+    assert result["Job"] == "" and result["MainPID"] == "123"
+    assert calls[0][0][:3] == ["/usr/bin/systemctl", "show", "probe.service"]

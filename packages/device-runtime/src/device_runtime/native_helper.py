@@ -517,6 +517,7 @@ class Systemd:
                 self.executable,
                 "show",
                 unit,
+                "--all",
                 "--no-pager",
                 "--property=ActiveState,SubState,MainPID,Job,User,Group,FragmentPath,ExecStart",
             ],
@@ -526,7 +527,18 @@ class Systemd:
             timeout=30,
             env={"PATH": "/usr/bin:/bin", "LANG": "C"},
         ).stdout
-        return dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
+        expected = {"ActiveState", "SubState", "MainPID", "Job", "User", "Group", "FragmentPath", "ExecStart"}
+        if not isinstance(output, str) or len(output) > 16384:
+            raise HelperError("invalid systemd unit observation")
+        fields = {}
+        for line in output.splitlines():
+            key, separator, value = line.partition("=")
+            if not separator or key not in expected or key in fields:
+                raise HelperError("invalid systemd unit observation")
+            fields[key] = value
+        if set(fields) != expected:
+            raise HelperError("incomplete systemd unit observation")
+        return fields
 
     def cancel_job(self, job):
         if not str(job).isdigit() or int(job) <= 0:

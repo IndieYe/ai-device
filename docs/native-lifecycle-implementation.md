@@ -1203,3 +1203,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 本验收仅覆盖隔离装包和 systemd 指定故障，不证明真实设备、宿主断电、受控监督/实际处理者、invocation 身份或成功升级。生产派发仍默认关闭，旧证据不迁移；RPM 缺离线 rpmbuild。
 
 准确 `e298fdb` DEB 另在独立无网络 systemd 容器执行 `start-guard-pause`：验证生产 job 门禁拒绝后，核实测试 daemon 与 guard 身份，暂停 guard 并仅注入该 daemon 异常退出；新 daemon 启动后缺回执仍拒绝恢复和新 start，systemd job 已终结时包 EX 仍冲突；guard 恢复并持久产生匹配回执后显式确认运行，同 ID 不重放。日志 `20261028-000914-d66f1b.log`，测试容器已退出。此为 start sender guard 的锁生命周期，不证明受控候选监督器或生产处理者身份。
+
+
+## 151. start/recovery 的 systemd 查询严格解析
+
+`Systemd.query` 先前用字典推导忽略畸形行并覆盖重复字段；六个负向测试复现重复、缺失、额外、畸形、过长和非文本输出未稳定拒绝。现明确 `--all --no-pager`，有界输出且仅接受 ActiveState/SubState/MainPID/Job/User/Group/FragmentPath/ExecStart 各一次；空 Job 合法，其余格式或字段缺失拒绝。helper/update/job 284 通过、1 跳过；完整 Device 1143 通过、4 跳过，ruff/diff 检查通过。
+
+`accept-native-helper-observation.py` 使用准确 e298fdb DEB 的解释器、显式路径核对当前源码，在一次性 systemd 容器验证真实已完成 unit 的八字段和空 Job（`20261028-001450-353d05.log`）。初次探测发现真实不存在 unit 即使 `--all` 仍缺 ExecStart（`20261028-001346-bc62c1.log`），严格解析正确拒绝；未放宽。该实验不代表新包验收，e298fdb 包不含本次修复。严格解析不能证明同一 systemd invocation 在观察与写恢复记录之间未变化；生产派发、监督器和身份闭环仍未完成。
