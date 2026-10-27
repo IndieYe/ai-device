@@ -1655,3 +1655,12 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 共用 `install_instance` 原先把 root 创建及后续所有 `OSError` 都包装为“目标不能已存在”，导致准备过程发生权限错误或磁盘满也被误报；注入 errno 13/28 的 `_prepare` 故障先复现（`20261028-074957-6b6769.log`）。现仅在 root.mkdir 本身的 `FileExistsError` 报目标已存在；目录创建其他错误报告 errno；目录已创建后 I/O 故障报告 errno 和 partial instance retained，保留异常链与现场，不清理、不覆盖、不自动重试。测试覆盖权限、空间、已有实例保护与证据保留；安装及原生安装定向 75 通过（`20261028-075033-76a564.log`），完整 1208 通过、16 跳过（`20261028-075044-966090.log`），ruff 通过。
 
 这只修正诊断，不实现中断安装恢复、自动重建或空间预留，也不保证所有非 OSError 均有该提示。产物尚未重新构建，现有包和运行实例不自动更新，P1 保持未完成。
+
+
+## 212. 准确包安装失败诊断验收
+
+从干净提交 `2437e2062d871851d56eb537748df4cf16346987` 离线构建未签名 DEB `build/native-packages-p1-2437e20/ai-device-native-client_0.2.2-1_amd64.deb`，105251424 字节，SHA256 `3cae4ae3ea54a84e080ef44198413289ebc6ada4afe42db934366d896b51198b`；Device wheel SHA256 `1f2220b78ba734c6d6d5f1a1b63c97f58080c005ca8338df64d7a71e9e94fe6f`，34 个 Python 模块逐字节匹配提交（`20261028-075246-beabe4.log`）。
+
+无网络 amd64 一次性 Linux 容器以 root 安装准确包，包内 uv 检查 17 项依赖，普通 UID 12345 从包内 Python 运行 `native_install.install_payload`，核对安装模块与准确 wheel 字节一致。对 `_prepare` 注入 errno 13 和 28：错误报告 errno、部分实例保留，再调用拒绝已有实例且证据不变；恢复正常路径后普通用户干净安装成功，重复安装拒绝且 active 不变（`20261028-075403-76ac6c.log`；`scripts/accept-native-install-errors-2437e20.sh`）。容器 `--rm`，随后核对已回收（`20261028-075417-be9f56.log`）。
+
+故障是注入而非实际磁盘耗尽；测试直接调用包内函数而非独立 CLI 子进程，未验证真实主机、systemd、安装恢复或重建，旧包不自动更新。生产 job/恢复/覆盖门禁不变，P1 未完成。
