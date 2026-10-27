@@ -847,6 +847,18 @@ def test_explicit_job_recovery_retains_fence_and_never_replays(update, monkeypat
     assert first["fence_retained"] and not first["retry_allowed"]
     assert job.recover_job(manager, "probe", "one", runner=runner) == first
     assert packages.calls == 1
+    receipt_path = stem.with_suffix(".job-recovery.json")
+    original_receipt = receipt_path.read_bytes()
+    for key, bad in (("retry_allowed", 0), ("fence_retained", 1)):
+        drifted = {**first, key: bad}
+        receipt_path.write_text(json.dumps(drifted))
+        before_files = {path.name: path.read_bytes() for path in stem.parent.iterdir() if path.is_file()}
+        with pytest.raises(job.JobError, match="job recovery evidence changed"):
+            job.recover_job(manager, "probe", "one", runner=runner)
+        assert {path.name: path.read_bytes() for path in stem.parent.iterdir() if path.is_file()} == before_files
+        assert packages.calls == 1
+        receipt_path.write_bytes(original_receipt)
+    assert job.recover_job(manager, "probe", "one", runner=runner) == first
     before = {suffix: stem.with_suffix(suffix).read_bytes() for suffix in (
         ".job-intent.json", ".apply-intent.json", ".sender.json", ".recovery.json", ".job-recovery.json"
     )}

@@ -491,7 +491,7 @@ def recover_job(manager, instance_id, operation_id, *, runner=None):
         path = stem.with_suffix(".job-recovery.json")
         if path.exists():
             helper._trusted(path)
-            if json.loads(path.read_bytes()) != receipt:
+            if not helper._same_json(json.loads(path.read_bytes()), receipt):
                 raise JobError("job recovery evidence changed")
         else:
             helper._save_new(path, receipt)
