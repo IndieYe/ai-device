@@ -248,6 +248,18 @@ def test_intent_without_result_never_replays(helper):
     assert not any(action == "start" for action, _ in adapter.calls)
 
 
+@pytest.mark.parametrize("result", [{}, {"state": "failed"}, {"state": []}, []])
+def test_invalid_prior_result_blocks_new_start(helper, result):
+    service, adapter, record = helper
+    service.handle(req("start"), peer_uid=record["uid"])
+    (service.registry / "result-probe-one.json").write_text(json.dumps(result))
+    before = len([call for call in adapter.calls if call[0] == "start"])
+    with pytest.raises(nh.HelperError, match="invalid start result"):
+        service.handle(req("start", "next"), peer_uid=record["uid"])
+    assert len([call for call in adapter.calls if call[0] == "start"]) == before
+    assert not (service.registry / "op-probe-next.json").exists()
+
+
 def test_atomic_save_never_overwrites(tmp_path):
     path = tmp_path / "record.json"
     nh._save_new(path, {"keep": True})

@@ -749,10 +749,15 @@ class Helper:
                 }
             for pending in self.registry.glob(f"op-{instance_id}-*.json"):
                 result_file = pending.with_name(pending.name.replace("op-", "result-", 1))
-                if (
-                    not result_file.exists()
-                    or json.loads(result_file.read_text()).get("state") == "unknown"
-                ):
+                state = None
+                if result_file.exists():
+                    stored = json.loads(result_file.read_text())
+                    if not isinstance(stored, dict) or stored.get("state") not in (
+                        "started", "already_active", "unknown"
+                    ):
+                        raise HelperError("invalid start result blocks a new start")
+                    state = stored["state"]
+                if state in (None, "unknown"):
                     recovered = pending.with_name(pending.name.replace("op-", "recovery-", 1))
                     if not recovered.exists():
                         raise HelperError(
