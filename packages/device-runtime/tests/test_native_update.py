@@ -649,3 +649,80 @@ def test_close_refuses_busy_package_lease_and_prior_apply(update, monkeypatch):
     with pytest.raises(job.JobError, match="apply evidence exists"):
         job.close_before_apply(manager, "probe", "one")
     assert packages.calls == 0 and not stem.with_suffix(".job-closed.json").exists()
+
+
+def test_retired_job_allows_new_id_but_never_replays_old(update, monkeypatch):
+    import hashlib
+
+    from device_runtime import native_update_job as job
+
+    manager, packages, _, package = update
+    stem = manager.registry / "updates/5-probe--one"
+    snapshot = stem.with_suffix(".bootstrap")
+    snapshot.mkdir()
+    (snapshot / "snapshot.json").write_text("snapshot")
+    monkeypatch.setattr(job.bootstrap, "validate_snapshot", lambda *a: {})
+    original_digest = nh._digest
+
+    def digest(path):
+        if path.name in ("native_update.py", "native_update_job.py", "native_helper.py"):
+            return "same-worker"
+        return original_digest(path)
+
+    monkeypatch.setattr(nh, "_digest", digest)
+    intent = {
+        "schema_version": 1,
+        "state": "job_dispatch_intent",
+        "close_protocol": "package-lease-v1",
+        "instance_id": "probe",
+        "operation_id": "one",
+        "unit": "ai-device-package-" + hashlib.sha256(str(stem).encode()).hexdigest() + ".service",
+        "prepared_sha256": nh._digest(stem.with_suffix(".prepared.json")),
+        "runtime_snapshot_sha256": nh._digest(snapshot / "snapshot.json"),
+    }
+    path = stem.with_suffix(".job-intent.json")
+    path.write_text(json.dumps(intent))
+    with manager._apply_lease(manager.registry / "package-manager"):
+        pass
+    job.close_before_apply(manager, "probe", "one")
+    retired = job.retire_closed_job(manager, "probe", "one")
+    assert job.retire_closed_job(manager, "probe", "one") == retired
+    assert nh._job_retired(path)
+    nh._assert_no_package_intent(manager.registry)
+    other = stem.parent / "5-probe--other.job-intent.json"
+    other.write_text("{}")
+    with pytest.raises(nh.HelperError, match="blocks start"):
+        nh._assert_no_package_intent(manager.registry)
+    other.unlink()
+    close_path = stem.with_suffix(".job-closed.json")
+    old_close = close_path.read_bytes()
+    close_path.write_text("{}")
+    with pytest.raises(nh.HelperError, match="blocks start"):
+        nh._assert_no_package_intent(manager.registry)
+    close_path.write_bytes(old_close)
+    nh._assert_no_package_intent(manager.registry)
+    for kwargs in ({}, {"job_intent_sha256": nh._digest(path)}):
+        with pytest.raises(nu.UpdateError, match="closed before execution"):
+            manager.apply("probe", "one", **kwargs)
+    manager.prepare("probe", "two", package, sha256=nh._digest(package), version="2")
+    new = manager.registry / "updates/5-probe--two"
+    manager.approve("probe", "two", prepared_sha256=nh._digest(new.with_suffix(".prepared.json")))
+    result = manager.apply("probe", "two")
+    assert result["outcome"]["state"] == "package_applied_pending_activation"
+    assert packages.calls == 1
+    with pytest.raises(nh.HelperError, match="blocks start"):
+        nh._assert_no_package_intent(manager.registry)
+    assert path.exists() and stem.with_suffix(".job-closed.json").exists()
+
+
+def test_retirement_evidence_fail_closed(update, monkeypatch):
+    manager, _, _, _ = update
+    directory = manager.registry / "updates"
+    path = directory / "5-probe--one.job-intent.json"
+    path.write_text("{}")
+    (directory / "5-probe--one.job-retired.json").write_text("{}")
+    assert not nh._job_retired(path)
+    path.write_text("[]")
+    assert not nh._job_retired(path)
+    with pytest.raises(nh.HelperError, match="blocks start"):
+        nh._assert_no_package_intent(manager.registry)

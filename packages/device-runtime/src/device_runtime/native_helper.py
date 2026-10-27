@@ -88,6 +88,53 @@ def package_lease(registry, *, exclusive=False, existing=False):
         os.close(fd)
 
 
+def _job_retired(path):
+    """Validate immutable close and retirement evidence; malformed evidence blocks."""
+    stem = Path(str(path).removesuffix(".job-intent.json"))
+    closed = stem.with_suffix(".job-closed.json")
+    retired = stem.with_suffix(".job-retired.json")
+    if not os.path.lexists(retired):
+        return False
+    try:
+        for evidence in (path, closed, retired):
+            _trusted(evidence)
+        intent = json.loads(path.read_bytes())
+        if not isinstance(intent, dict):
+            return False
+        close_value = json.loads(closed.read_bytes())
+        retire_value = json.loads(retired.read_bytes())
+        if any(
+            os.path.lexists(stem.with_suffix(suffix))
+            for suffix in (".apply-intent.json", ".sender.json", ".outcome.json")
+        ):
+            return False
+        expected_close = {
+            "state": "closed_before_apply",
+            "job_intent_sha256": _digest(path),
+            "retry_allowed": False,
+            "fence_retained": True,
+        }
+        expected_retire = {
+            "state": "retired_before_apply",
+            "job_intent_sha256": _digest(path),
+            "closed_sha256": _digest(closed),
+            "old_job_replay_allowed": False,
+        }
+        return (
+            intent.get("schema_version") == 1
+            and intent.get("state") == "job_dispatch_intent"
+            and intent.get("close_protocol") == "package-lease-v1"
+            and close_value == expected_close
+            and retire_value == expected_retire
+        )
+    except (OSError, ValueError, TypeError, HelperError):
+        return False
+
+
+def _pending_package_jobs(directory):
+    return [path for path in Path(directory).glob("*.job-intent.json") if not _job_retired(path)]
+
+
 def _assert_no_package_intent(registry):
     directory = Path(registry) / "updates"
     if not os.path.lexists(directory):
@@ -95,7 +142,7 @@ def _assert_no_package_intent(registry):
     _trusted(directory, directory=True)
     # Until activation/repair has a verified terminal protocol, no intent is
     # automatically cleared, including failed or recovered package executions.
-    if any(directory.glob("*.apply-intent.json")) or any(directory.glob("*.job-intent.json")):
+    if any(directory.glob("*.apply-intent.json")) or _pending_package_jobs(directory):
         raise HelperError("package transaction blocks start; administrator recovery required")
 
 

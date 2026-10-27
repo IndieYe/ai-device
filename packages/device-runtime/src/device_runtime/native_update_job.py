@@ -116,8 +116,8 @@ def dispatch_job(manager, instance_id, operation_id, *, runner=None):
                 "replayed": False,
             }
         with manager._apply_lease(manager.registry / "package-manager"):
-            if any(stem.parent.glob("*.apply-intent.json")) or any(
-                stem.parent.glob("*.job-intent.json")
+            if any(stem.parent.glob("*.apply-intent.json")) or helper._pending_package_jobs(
+                stem.parent
             ):
                 raise JobError("existing package transaction blocks dispatch")
             snapshot = stem.with_suffix(".bootstrap")
@@ -249,6 +249,44 @@ def close_before_apply(manager, instance_id, operation_id):
                 raise JobError("close evidence differs")
         else:
             helper._save_new(marker, receipt)
+        return receipt
+
+
+def retire_closed_job(manager, instance_id, operation_id):
+    """Retire only a compatible pre-apply close; never delete its evidence."""
+    closed = close_before_apply(manager, instance_id, operation_id)
+    with (
+        manager._transaction(instance_id, operation_id) as (_binding, stem),
+        manager._apply_lease(manager.registry / "package-manager", existing=True),
+    ):
+        path = stem.with_suffix(".job-intent.json")
+        close_path = stem.with_suffix(".job-closed.json")
+        helper._trusted(path)
+        helper._trusted(close_path)
+        if json.loads(close_path.read_bytes()) != closed or closed[
+            "job_intent_sha256"
+        ] != helper._digest(path):
+            raise JobError("closed evidence changed")
+        if any(
+            os.path.lexists(stem.with_suffix(suffix))
+            for suffix in (".apply-intent.json", ".sender.json", ".outcome.json")
+        ):
+            raise JobError("apply evidence exists; retirement refused")
+        receipt = {
+            "state": "retired_before_apply",
+            "job_intent_sha256": helper._digest(path),
+            "closed_sha256": helper._digest(close_path),
+            "old_job_replay_allowed": False,
+        }
+        retired = stem.with_suffix(".job-retired.json")
+        if os.path.lexists(retired):
+            helper._trusted(retired)
+            if json.loads(retired.read_bytes()) != receipt:
+                raise JobError("retirement evidence changed")
+        else:
+            helper._save_new(retired, receipt)
+        if not helper._job_retired(path):
+            raise JobError("retirement evidence invalid")
         return receipt
 
 

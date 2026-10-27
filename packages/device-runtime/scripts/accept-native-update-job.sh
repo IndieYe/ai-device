@@ -58,12 +58,12 @@ def diagnostic(expected):
  assert snapshot()==before,'diagnostic changed persistent files/directories'
  return report
 mode=os.environ.get('DEVICE_JOB_FAULT','none')
-assert mode in ('none','lost-response','source-drift','close-before-apply')
+assert mode in ('none','lost-response','source-drift','close-before-apply','retire-retry')
 calls=[]
 real_run=subprocess.run
 def runner(argv,**kwargs):
  calls.append(argv)
- if mode in ('source-drift','close-before-apply'):
+ if mode in ('source-drift','close-before-apply','retire-retry'):
   # Test-only bounded queue delay; production dispatch has no arbitrary properties.
   argv=[argv[0],'--no-block','--property=ExecStartPre=/usr/bin/sleep 8','--property=StandardError=file:/var/lib/ai-device/worker-test-error.log',*argv[1:]]
  result=real_run(argv,**kwargs)
@@ -75,7 +75,7 @@ assert first['state']==('dispatch_unknown' if mode=='lost-response' else 'dispat
 second=job.dispatch_job(manager,'probe','job-one')
 assert second['state']=='dispatch_already_recorded' and not second['replayed']
 assert len(calls)==1
-if mode in ('source-drift','close-before-apply'):
+if mode in ('source-drift','close-before-apply','retire-retry'):
  deadline=time.monotonic()+10
  while True:
   queued=real_run(['/usr/bin/systemctl','show',first['unit'],'--property=SubState','--value'],check=True,capture_output=True,text=True).stdout.strip()
@@ -89,11 +89,18 @@ if mode in ('source-drift','close-before-apply'):
   closed=job.close_before_apply(manager,'probe','job-one')
   assert closed['state']=='closed_before_apply' and closed['fence_retained'] and not closed['retry_allowed']
   assert job.close_before_apply(manager,'probe','job-one')==closed
-try: helper._assert_no_package_intent(registry)
-except helper.HelperError: pass
-else: raise AssertionError('queued job must fence starts')
+  if mode=='retire-retry':
+   retired=job.retire_closed_job(manager,'probe','job-one')
+   assert retired['state']=='retired_before_apply' and not retired['old_job_replay_allowed']
+   assert job.retire_closed_job(manager,'probe','job-one')==retired
+if mode=='retire-retry':
+ helper._assert_no_package_intent(registry)
+else:
+ try: helper._assert_no_package_intent(registry)
+ except helper.HelperError: pass
+ else: raise AssertionError('queued job must fence starts')
 deadline=time.monotonic()+90
-if mode in ('source-drift','close-before-apply'):
+if mode in ('source-drift','close-before-apply','retire-retry'):
  while True:
   status=real_run(['/usr/bin/systemctl','show',first['unit'],'--property=ActiveState','--value'],check=True,capture_output=True,text=True).stdout.strip()
   if status=='failed': break
@@ -109,6 +116,27 @@ if mode in ('source-drift','close-before-apply'):
  if mode=='source-drift':
   (root/'active.json').write_bytes(active)
   print(json.dumps({'state':'queued_source_drift_refused','dispatch_once':True,'package_executed':False,'persistent_fence_retained':True,'test_active_restored':True}))
+ elif mode=='retire-retry':
+  assert stem.with_suffix('.job-closed.json').exists() and stem.with_suffix('.job-retired.json').exists()
+  try: manager.apply('probe','job-one')
+  except update.UpdateError: pass
+  else: raise AssertionError('old ID must never replay')
+  manager.prepare('probe','job-two',package,sha256=helper._digest(package),version='0.2.2-1')
+  new=registry/'updates/5-probe--job-two'
+  manager.approve('probe','job-two',prepared_sha256=helper._digest(new.with_suffix('.prepared.json')))
+  again=job.dispatch_job(manager,'probe','job-two')
+  assert again['state']=='dispatch_accepted'
+  deadline=time.monotonic()+90
+  while not new.with_suffix('.outcome.json').exists():
+   assert time.monotonic()<deadline,'new job outcome missing'
+   time.sleep(.1)
+  new_sender=json.loads(new.with_suffix('.sender.json').read_bytes())
+  assert new_sender['returncode']!=0 and 'helper transaction required' in new.with_suffix('.package.log').read_text()
+  assert not stem.with_suffix('.apply-intent.json').exists() and (root/'active.json').read_bytes()==active
+  try: helper._assert_no_package_intent(registry)
+  except helper.HelperError: pass
+  else: raise AssertionError('new job must retain fence')
+  print(json.dumps({'state':'retired_old_delayed_worker_refused_new_id_dispatched','old_job_replayed':False,'new_candidate_guard_refused':True,'new_fence_retained':True}))
  else:
   assert stem.with_suffix('.job-closed.json').exists()
   assert (root/'active.json').read_bytes()==active

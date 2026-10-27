@@ -227,3 +227,5 @@ Python recover_job新增管理员显式对账原型：仅已进入apply、匹配
 已执行job隔离systemd对账验收：新派发unit使用RemainAfterExit=yes；恢复仅额外接受loaded active/exited、Result=success且PID为0、无Job。缺unit不等于退出，旧已回收unit仍阻塞。低版本空源fixture和真实Device候选保护拒绝的隔离测试覆盖缺sender拒绝、幂等和门禁保留；不证明真实设备升级成功，不解除执行前失败job门禁。
 
 执行前关闭屏障原型：新job声明package-lease-v1，管理员close_before_apply在实例锁及全局包EX锁下核验批准、意图与相同worker快照，缺apply/sender/outcome时持久写closed；迟到worker在同一锁检查并拒绝。隔离systemd排队迟到验证通过。此操作不退休job、不清除门禁、不允许新ID；旧快照或旧协议不能适用。
+
+新代码含执行前关闭job的显式退休原型：精确绑定intent及关闭摘要，无apply/sender/outcome，保留全部记录；新门禁识别有效退休，新ID须重新准备批准，旧ID不能重放。已安装旧helper不识别退休，仍保守阻塞；不可把隔离验证当作现有生产bootstrap支持或成功升级。原包钩子不放行。

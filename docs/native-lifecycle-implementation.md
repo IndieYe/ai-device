@@ -558,3 +558,9 @@ helper启动/登记和其他包apply被持久job意图阻断。worker从完整�
 派发释放锁后systemd-run可能迟到，不能以failed或unit缺失证明未来不执行。新派发job意图声明package-lease-v1；管理员Python close_before_apply在实例锁与已有全局包EX锁下核验精确job身份、批准和完整快照，逐字节比对快照内三个worker模块及当前代码，仅在没有apply-intent/sender/outcome时无覆盖持久写job-closed，绑定job摘要。apply worker在同一包锁内检查任何closed标记，存在即拒绝；闭锁和apply意图发布互斥，崩溃缺标记不解锁。重复同证据幂等，旧无协议或代码不同快照拒绝。关闭只阻止本job，不删除意图、不解除启动门禁、不授权重试或新ID；不提供CLI。
 
 隔离v22 wheel真实systemd start-pre排队窗口先关闭，迟到worker报告closed before execution，未写apply/sender/package.log，包未执行、active不变、持久门禁保留，测试exec 0。fixture为低版本空源包，非真实升级。单测覆盖幂等、迟到worker、旧协议、包锁占用和已有apply拒绝；完整958 passed/3 Linux skipped（44.23s）。未来退休需单独设计与验证：确认所有路径认可精确关闭证据、旧job不能重放且新ID不绕过其他apply或unknown；当前未实现退休/解除占用，P1未完成。
+
+## 41. 执行前关闭job安全退休与新ID原型
+
+新增管理员Python retire_closed_job：先按关闭协议校验旧快照与精确批准，再持实例锁和包EX锁复核关闭摘要及无apply/sender/outcome，持久无覆盖写job-retired（绑定原intent及closed摘要）。不删除旧意图/关闭记录；旧ID直接apply和迟到worker均拒绝。新helper统一精确验证退休证据，启动/登记及apply/dispatch忽略合法退休job，但其他未退休或损坏job、任何apply仍阻塞。新ID必须重新prepare/approve并重查绑定、源和停止状态。关闭/退休仅适用于新协议及与当前代码一致快照；既有旧helper不识别退休，仍保守阻塞，未提供升级部署或CLI。原包钩子不变。
+
+v23未提交代码wheel在一次性systemd容器使用低版本空源fixture：旧worker处于start-pre时关闭并退休，迟到启动被拒绝、旧ID不重放；新ID独立准备批准后派发，原Device候选preinst拒绝覆盖，新job门禁保留、active不变。exec 0；不代表设备升级、激活或真实生产许可。单测覆盖退休幂等、旧ID、新ID、损坏与其他未知事务阻塞；完整回归960 passed、3 Linux skipped（46.22s，后附加拒绝断言定向52通过）。P1仍未完成，需bootstrap稳定版本化与旧helper升级方案、事务授权和完整生命周期验收。
