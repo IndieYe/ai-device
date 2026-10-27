@@ -442,7 +442,10 @@ def test_observe_read_only_and_never_grants_retry(transaction, unit_state, expec
 
     def runner(argv, **kw):
         assert argv[:2] == ["/usr/bin/systemctl", "show"]
-        return SimpleNamespace(stdout=f"LoadState=loaded\nActiveState={unit_state}\n")
+        assert "--all" in argv and "--no-pager" in argv
+        return SimpleNamespace(
+            stdout=f"LoadState=loaded\nActiveState={unit_state}\nSubState=dead\nResult=success\nMainPID=0\nJob=\n"
+        )
 
     result = job.observe_job(manager, "probe", "one", runner=runner)
     assert result["state"] == expected and result["retry_allowed"] is False

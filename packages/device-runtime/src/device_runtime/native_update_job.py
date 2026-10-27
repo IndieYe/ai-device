@@ -362,6 +362,8 @@ def observe_job(manager, instance_id, operation_id, *, runner=None):
                 "/usr/bin/systemctl",
                 "show",
                 expected_unit,
+                "--all",
+                "--no-pager",
                 "--property=LoadState,ActiveState,SubState,Result,MainPID,Job",
             ],
             check=True,
@@ -370,13 +372,23 @@ def observe_job(manager, instance_id, operation_id, *, runner=None):
             timeout=15,
             env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C"},
         )
-        fields = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
-        report["unit_observation"] = fields
-        if fields.get("LoadState") == "loaded":
-            if fields.get("ActiveState") in ("activating", "active", "deactivating"):
-                report["state"] = "job_in_progress"
-            elif fields.get("ActiveState") == "failed":
-                report["state"] = "job_failed_requires_review"
+        expected_fields = {"LoadState", "ActiveState", "SubState", "Result", "MainPID", "Job"}
+        fields = {}
+        valid = isinstance(result.stdout, str) and len(result.stdout) <= 16384
+        if valid:
+            for line in result.stdout.splitlines():
+                key, separator, value = line.partition("=")
+                if not separator or key not in expected_fields or key in fields:
+                    valid = False
+                    break
+                fields[key] = value
+        if valid and set(fields) == expected_fields:
+            report["unit_observation"] = fields
+            if fields["LoadState"] == "loaded":
+                if fields["ActiveState"] in ("activating", "active", "deactivating"):
+                    report["state"] = "job_in_progress"
+                elif fields["ActiveState"] == "failed":
+                    report["state"] = "job_failed_requires_review"
     except (OSError, subprocess.SubprocessError):
         pass
     apply_path = stem.with_suffix(".apply-intent.json")

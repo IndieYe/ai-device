@@ -773,12 +773,29 @@ def test_explicit_job_recovery_retains_fence_and_never_replays(update, monkeypat
     stem.with_suffix(".job-intent.json").write_text(json.dumps(intent))
 
     def runner(*a, **kw):
-        return SimpleNamespace(stdout="LoadState=loaded\nActiveState=inactive\nMainPID=0\nJob=0\n")
+        return SimpleNamespace(stdout="LoadState=loaded\nActiveState=inactive\nSubState=dead\nResult=success\nMainPID=0\nJob=\n")
 
     def retained(*a, **kw):
         return SimpleNamespace(
             stdout="LoadState=loaded\nActiveState=active\nSubState=exited\nResult=success\nMainPID=0\nJob=0\n"
         )
+
+    invalid_observations = [
+        (
+            "LoadState=loaded\nActiveState=active\nActiveState=inactive\n"
+            "SubState=exited\nResult=success\nMainPID=0\nJob=0\n"
+        ),
+        "LoadState=loaded\nActiveState=inactive\nSubState=dead\nResult=success\nMainPID=0\n",
+        "LoadState=loaded\nActiveState=inactive\nSubState=dead\nResult=success\nMainPID=0\nJob=0\ninvalid\n",
+        "LoadState=loaded\nActiveState=inactive\nSubState=dead\nResult=success\nMainPID=0\nJob=0\nExtra=x\n",
+        "LoadState=loaded\nActiveState=inactive\nSubState=dead\nResult=" + "x" * 16384 + "\nMainPID=0\nJob=0\n",
+    ]
+    for output in invalid_observations:
+        with pytest.raises(job.JobError, match="completed job"):
+            job.recover_job(manager, "probe", "one", runner=lambda *a, output=output, **kw: SimpleNamespace(stdout=output))
+        assert not stem.with_suffix(".job-recovery.json").exists()
+        assert not stem.with_suffix(".recovery.json").exists()
+        assert packages.calls == 1
 
     first = job.recover_job(manager, "probe", "one", runner=retained)
     assert first["state"] == "job_reconciled_without_replay"
