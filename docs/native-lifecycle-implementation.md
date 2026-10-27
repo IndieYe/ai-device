@@ -919,3 +919,10 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 一次性无网络 Linux 6.18 amd64/Rosetta 容器运行 `scripts/probe-native-daemon-explicit-unlock.py`，实际使用 daemon 目录锚点和文件锁。父子共享 open-file description 时，子进程先 `LOCK_UN` 文件锁，父 FD 仍有效但竞争者可单独取得文件锁；目录锁仍阻止完整 daemon 租约。子再 `LOCK_UN` 目录锁后，父两个 FD 仍有效，竞争者可同时取得完整租约。输出 `INHERITED_EXPLICIT_UNLOCK_CONFIRMED`，日志 `20261027-212307-33dd04.log`，脚本 ruff通过、一次性容器已退出。
 
 此为受控本机进程协作的可靠性反例，不将其描述为恶意 root 防护。必须约束所有持有相同锁描述的参与者不得提前解锁，并设计退出/FD传递/故障语义；有效 FD 不证明锁存在。尚未实现生产监督器，也未验证 systemd invocation、所有参与者、其他内核或宿主崩溃；生产派发仍关闭。
+
+
+## 114. daemon 租约在父进程直接退出后的存续
+
+`probe-native-daemon-parent-exit.py` 在一次性无网络 Linux 6.18 amd64/Rosetta 容器通过实际 `_daemon_lease` 取得双锁，父 fork 后 `os._exit`、不执行上下文清理。父确认退出而子仍存活时，独立完整租约仍拒绝；子退出后租约可取得。`DAEMON_PARENT_EXIT_WORKER_LEASE_OK`，日志 `20261027-212458-725f1d.log`，脚本 ruff通过。
+
+该实验只说明继承锁的内核行为；父死亡不会自动使持锁子退出，不验证 systemd、socket/peer、已校验候选、pidfd握手或生产监督和故障回收。仍须设计可信进程关系及故障关闭，不可用此反例开放派发。
