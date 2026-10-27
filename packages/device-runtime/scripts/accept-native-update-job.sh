@@ -29,7 +29,7 @@ cp "$1" /var/lib/ai-device/inputs/candidate.deb
 printf 'TEST_ONLY=yes\n' > /etc/device-job-fixture.env
 chmod 600 /etc/device-job-fixture.env
 $P/runtime/bin/python3.13 -I -B - <<'PY'
-import json,time,subprocess,os
+import json,time,subprocess,os,sys
 from pathlib import Path
 from device_runtime import native_helper as helper
 from device_runtime import native_update as update
@@ -96,6 +96,25 @@ if mode in ('source-drift','close-before-apply','retire-retry'):
   assert time.monotonic()<deadline,'test did not observe queued start-pre window'
   time.sleep(.05)
  if mode=='source-drift':
+  # Start the real helper only in this disposable systemd environment, then
+  # issue a real IPC start while the test job's persisted intent is queued.
+  runtime=Path('/run/device-helper-acceptance')
+  runtime.mkdir(mode=0o755)
+  socket_path=runtime/'helper.sock'
+  unit=Path('/etc/systemd/system/ai-device-native-helper.service')
+  unit.write_text(helper.render_helper_unit(bootstrap_python=Path(sys.executable),registry=registry,socket_path=socket_path,group=0))
+  real_run(['/usr/bin/systemctl','daemon-reload'],check=True)
+  real_run(['/usr/bin/systemctl','start','ai-device-native-helper.service'],check=True)
+  deadline=time.monotonic()+10
+  while not socket_path.exists():
+   assert time.monotonic()<deadline,'helper socket not ready'
+   time.sleep(.05)
+  reply=helper.call_helper(socket_path,{'action':'start','instance_id':'probe','operation_id':'fence-check'})
+  assert reply=={'ok':False,'error':'helper_request_refused'},reply
+  assert not (registry/'op-probe-fence-check.json').exists()
+  observed=real_run(['/usr/bin/systemctl','show','ai-device-client-probe.service','--property=ActiveState,MainPID','--no-pager'],check=True,capture_output=True,text=True).stdout
+  assert 'ActiveState=inactive' in observed and 'MainPID=0' in observed,observed
+  print(json.dumps({'state':'real_helper_start_fenced_by_queued_job','start_intent_created':False,'client_started':False}))
   value=json.loads(active); value['release_version']='0.0.0-test-drift'
   (root/'active.json').write_text(json.dumps(value))
  else:

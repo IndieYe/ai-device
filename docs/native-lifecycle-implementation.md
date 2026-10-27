@@ -723,3 +723,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 77. 生产派发拒绝与隔离失响应对账
 
 更新 `accept-native-update-job.sh`：先调用未修改的生产派发门禁，要求拒绝且不创建 job-intent、不调用 runner；随后仅在已通过 disposable/systemd/root 空环境门禁的脚本进程内，以明确标记的测试替身继续历史真实 systemd 故障实验，不改产品代码或授权。在一次性 amd64 systemd 容器，历史 DEB `9b37b30...` 作为包保护候选，client runtime 安装 `cc01329` 三 wheel，`lost-response` 模式通过：真实生产门禁先拒绝；测试替身后 systemd 派发响应被模拟丢失，同 ID 不重派，原包钩子拒绝覆盖，缺 sender 对账拒绝，补回后显式对账幂等，门禁保留、active 不变、Device 服务未启动。该证据不是当前HEAD制品、不是成功升级，也不证明实际运行 helper 身份或真实 helper start/job 竞争；测试替身不能授权开放生产派发。容器关机请求超时，列表确认实例不存在。原包保护不变，未操作真实设备服务。
+
+
+## 78. 排队 job 意图与真实 helper start
+
+扩展隔离 `accept-native-update-job.sh` 的 source-drift 场景：先核验生产 dispatch 默认拒绝，之后仅在 disposable 脚本进程启用测试替身并让 systemd transient job 停留在 `ExecStartPre` 窗口。启动真实 helper daemon，通过 Unix socket 发送 `start`；在 job-intent 已持久化期间收到拒绝，未生成 start 意图，client unit 仍 inactive/MainPID=0。随后改变隔离测试的 source active，worker 拒绝执行包、持久门禁保留，并恢复测试 active。一次性 amd64 systemd 容器实验通过，使用历史 `9b37b30...` DEB 和 `cc01329` wheel；不是当前 HEAD 制品，不证明生产可派发、相反方向的真实 start/job 竞争、运行代码身份或完整故障恢复。容器正常关机请求超时，列表确认实例不存在；真实服务未操作，包保护不变。
