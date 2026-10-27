@@ -417,7 +417,7 @@ def observe_job(manager, instance_id, operation_id, *, runner=None):
                 "architecture": prepared["metadata"]["Architecture"],
             },
         }
-        if apply_intent != expected_apply:
+        if not helper._same_json(apply_intent, expected_apply):
             raise JobError("job apply evidence differs")
         report["apply_intent_present"] = True
         if outcome_path.exists():
@@ -427,8 +427,8 @@ def observe_job(manager, instance_id, operation_id, *, runner=None):
             helper._trusted(sender_path)
             sender = json.loads(sender_path.read_bytes())
             if (
-                outcome.get("intent") != apply_intent
-                or sender.get("intent") != apply_intent
+                not helper._same_json(outcome.get("intent"), apply_intent)
+                or not helper._same_json(sender.get("intent"), apply_intent)
                 or sender.get("state") != "sender_reaped"
                 or type(sender.get("returncode")) is not int
                 or outcome.get("state") not in ("unknown", "package_applied_pending_activation")
@@ -440,7 +440,8 @@ def observe_job(manager, instance_id, operation_id, *, runner=None):
                 "architecture": prepared["metadata"]["Architecture"],
             }
             if outcome["state"] == "package_applied_pending_activation" and (
-                sender["returncode"] != 0 or outcome.get("package_observation") != expected_package
+                sender["returncode"] != 0
+                or not helper._same_json(outcome.get("package_observation"), expected_package)
             ):
                 raise JobError("job success evidence differs")
             report["state"] = "package_outcome_recorded"

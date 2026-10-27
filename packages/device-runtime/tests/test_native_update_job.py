@@ -600,3 +600,57 @@ def test_existing_job_observation_survives_dispatch_gate(transaction, monkeypatc
         manager, "probe", "one", runner=lambda *a, **k: pytest.fail("replayed")
     )
     assert result["state"] == "dispatch_already_recorded" and not result["replayed"]
+
+
+@pytest.mark.parametrize("changed_file", ["sender", "outcome", "apply", "package_observation"])
+def test_observe_rejects_json_type_drift_in_nested_intent(transaction, changed_file):
+    import copy
+    import hashlib
+    from types import SimpleNamespace
+
+    prepared_path = transaction.with_suffix(".prepared.json")
+    prepared = json.loads(prepared_path.read_bytes())
+    # Synthetic JSON identity exposes bool/int equivalence; no package is run.
+    prepared["metadata"]["Version"] = 1
+    prepared_path.write_text(json.dumps(prepared))
+    digest = job.helper._digest(prepared_path)
+    transaction.with_suffix(".approved.json").write_text(
+        json.dumps({"prepared_sha256": digest, "approved_by_uid": 0})
+    )
+    apply_intent = json.loads(transaction.with_suffix(".apply-intent.json").read_bytes())
+    apply_intent["prepared_sha256"] = digest
+    apply_intent["target_package"]["version"] = 1
+    transaction.with_suffix(".apply-intent.json").write_text(json.dumps(apply_intent))
+    intent = {
+        "unit": "ai-device-package-" + hashlib.sha256(str(transaction).encode()).hexdigest() + ".service",
+        "instance_id": "probe", "operation_id": "one", "prepared_sha256": digest,
+        "runtime_snapshot_sha256": apply_intent["runtime_snapshot_sha256"],
+    }
+    transaction.with_suffix(".job-intent.json").write_text(json.dumps(intent))
+    sender = {"intent": copy.deepcopy(apply_intent), "state": "sender_reaped", "returncode": 0}
+    outcome = {"intent": copy.deepcopy(apply_intent), "state": "unknown", "package_observation": None}
+    for name, value in (("sender", sender), ("outcome", outcome)):
+        transaction.with_suffix(f".{name}.json").write_text(json.dumps(value))
+    manager = SimpleNamespace(registry=transaction.parent.parent)
+    runner = lambda *a, **kw: SimpleNamespace(stdout="LoadState=loaded\nActiveState=inactive\n")
+    assert job.observe_job(manager, "probe", "one", runner=runner)["state"] == "package_outcome_recorded"
+    if changed_file == "apply":
+        apply_intent["target_package"]["version"] = True
+        transaction.with_suffix(".apply-intent.json").write_text(json.dumps(apply_intent))
+        error = "job apply evidence differs"
+    elif changed_file == "package_observation":
+        outcome["state"] = "package_applied_pending_activation"
+        outcome["package_observation"] = {
+            "status": "install ok installed", "version": True, "architecture": "amd64"
+        }
+        transaction.with_suffix(".outcome.json").write_text(json.dumps(outcome))
+        error = "job success evidence differs"
+    else:
+        changed = sender if changed_file == "sender" else outcome
+        changed["intent"]["target_package"]["version"] = True
+        transaction.with_suffix(f".{changed_file}.json").write_text(json.dumps(changed))
+        error = "job outcome evidence differs"
+    before = {p.name: p.read_bytes() for p in transaction.parent.iterdir() if p.is_file()}
+    with pytest.raises(job.JobError, match=error):
+        job.observe_job(manager, "probe", "one", runner=runner)
+    assert {p.name: p.read_bytes() for p in transaction.parent.iterdir() if p.is_file()} == before
