@@ -580,3 +580,7 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 45. 版本化helper候选发布原型
 
 新增publish_helper_candidate，调用方须持包事务锁，在可信管理候选目录以受限版本ID复制独立运行时快照，执行helper身份自检后无覆盖写candidate.json，绑定来源、快照和helper摘要，显式未激活。重复调用重验快照与证据；不完整目录、来源冲突或证据变化拒绝，不自动删除或修复。v26 wheel在一次性隔离Linux中持包EX锁真实发布并重复验证成功；完整974 passed/3 Linux skipped（42.04s）。此函数尚无管理入口、签名验证、活动指针、跨版本协议兼容或服务切换；不证明旧helper已升级，原包保护保持。P1仍未完成。
+
+## 46. 管理目录受锁候选发布与只读重验
+
+新增publish_managed_helper_candidate，要求预先存在可信manager/bootstrap-candidates目录，由入口持全局包EX锁执行候选发布并复核；低层发布仍要求调用者持锁。新增read_helper_candidate，不执行候选代码，重新校验快照与版本、来源、helper摘要、未激活记录。锁占用拒绝且不创建候选；证据或快照漂移拒绝。定向20通过；v27 wheel在一次性隔离Linux实测包锁占用拒绝、受锁发布和只读重验成功。未跑本轮完整回归，未实现签名、稳定入口或旧helper切换，不启动服务。P1未完成。

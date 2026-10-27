@@ -268,3 +268,59 @@ def test_publish_refuses_invalid_or_incomplete_version(runtime, monkeypatch):
     with pytest.raises(FileNotFoundError):
         bootstrap.publish_helper_candidate(source, destination.parent, "v2")
     assert list(candidate.iterdir()) == []
+
+
+def test_managed_candidate_publishes_under_lock_and_read_rejects_drift(runtime, monkeypatch):
+    from contextlib import contextmanager
+
+    source, destination = runtime
+    module = source / "lib/python3.13/site-packages/device_runtime/native_helper.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("# fixture")
+    registry = destination.parent
+    candidates = registry / "bootstrap-candidates"
+    candidates.mkdir()
+    held = []
+
+    @contextmanager
+    def lease(given, *, exclusive=False):
+        assert given == registry and exclusive
+        held.append(True)
+        try:
+            yield
+        finally:
+            held.pop()
+
+    def inspect(candidate):
+        assert held
+        bootstrap.validate_snapshot(candidate)
+        return {
+            "snapshot_sha256": bootstrap._digest(candidate / "snapshot.json"),
+            "helper_sha256": bootstrap._digest(
+                candidate / "runtime/lib/python3.13/site-packages/device_runtime/native_helper.py"
+            ),
+        }
+
+    monkeypatch.setattr(bootstrap.helper, "package_lease", lease)
+    monkeypatch.setattr(bootstrap, "inspect_helper_candidate", inspect)
+    result = bootstrap.publish_managed_helper_candidate(registry, source, "v1")
+    assert not held and bootstrap.read_helper_candidate(candidates, "v1") == result
+    receipt = candidates / "v1/candidate.json"
+    receipt.write_text("{}")
+    with pytest.raises(bootstrap.BootstrapError, match="publication evidence differs"):
+        bootstrap.read_helper_candidate(candidates, "v1")
+    (candidates / "v1/runtime/bin/python3.13").write_bytes(b"drift")
+    with pytest.raises(bootstrap.BootstrapError, match="drift"):
+        bootstrap.read_helper_candidate(candidates, "v1")
+
+
+def test_managed_candidate_refuses_busy_lock(runtime):
+    source, destination = runtime
+    registry = destination.parent
+    (registry / "bootstrap-candidates").mkdir()
+    with (
+        bootstrap.helper.package_lease(registry, exclusive=True),
+        pytest.raises(ValueError, match="still executing"),
+    ):
+        bootstrap.publish_managed_helper_candidate(registry, source, "v1")
+    assert not (registry / "bootstrap-candidates/v1").exists()

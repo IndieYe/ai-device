@@ -220,3 +220,45 @@ def publish_helper_candidate(source, candidates_dir, version):
     else:
         helper._save_new(path, receipt)
     return receipt
+
+
+def read_helper_candidate(candidates_dir, version):
+    """Verify published candidate evidence without executing or activating code."""
+    helper._identifier(version)
+    candidates_dir = helper._path(candidates_dir)
+    helper._trusted(candidates_dir, directory=True)
+    candidate = candidates_dir / version
+    snapshot = validate_snapshot(candidate)
+    path = candidate / "candidate.json"
+    helper._trusted(path)
+    value = json.loads(path.read_bytes())
+    expected = candidate / "runtime/lib/python3.13/site-packages/device_runtime/native_helper.py"
+    helper._trusted(expected)
+    evidence = {
+        "schema_version": 1,
+        "state": "helper_candidate_published_not_activated",
+        "version": version,
+        "source": snapshot["source"],
+        "snapshot_sha256": _digest(candidate / "snapshot.json"),
+        "helper_sha256": _digest(expected),
+        "activated": False,
+    }
+    if value != evidence:
+        raise BootstrapError("candidate publication evidence differs")
+    return evidence
+
+
+def publish_managed_helper_candidate(registry, source, version):
+    """Publish under the fixed manager directory while holding the package lease."""
+    if sys.platform != "linux" or os.geteuid() != 0:
+        raise BootstrapError("Linux administrator required")
+    registry = helper._path(registry)
+    helper._trusted(registry, directory=True)
+    candidates = registry / "bootstrap-candidates"
+    # Existing administrator-provisioned directory only; no implicit setup.
+    helper._trusted(candidates, directory=True)
+    with helper.package_lease(registry, exclusive=True):
+        result = publish_helper_candidate(source, candidates, version)
+        if read_helper_candidate(candidates, version) != result:
+            raise BootstrapError("candidate publication verification differs")
+        return result
