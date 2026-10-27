@@ -911,6 +911,86 @@ def test_hung_guard_keeps_both_leases_and_unknown(helper, tmp_path):
     assert not (service.registry / "recovery-probe-one.json").exists()
 
 
+def test_paused_guard_retains_leases_until_reaped_receipt(helper, tmp_path, monkeypatch):
+    import signal
+    import threading
+    import time
+
+    service, _adapter, record = stopped_unknown(helper)
+    receipt = service.registry / "sender-probe-one.json"
+    receipt.unlink()
+    intent = json.loads((service.registry / "op-probe-one.json").read_text())
+    executable = tmp_path / "controlled-sender"
+    ready, release, done = (tmp_path / name for name in ("ready", "release", "done"))
+    executable.write_text(
+        f"#!/bin/sh\ntouch '{ready}'\nwhile [ ! -e '{release}' ]; do sleep 0.02; done\ntouch '{done}'\n"
+    )
+    executable.chmod(0o700)
+    guard_started = threading.Event()
+    guard = []
+    errors = []
+
+    def run_child(args, *, check, capture_output, pass_fds, env):
+        child = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, pass_fds=pass_fds, env=env)
+        guard.append(child)
+        guard_started.set()
+        stdout, stderr = child.communicate()
+        if check and child.returncode:
+            raise subprocess.CalledProcessError(child.returncode, args, output=stdout, stderr=stderr)
+        return subprocess.CompletedProcess(args, child.returncode, stdout, stderr)
+
+    monkeypatch.setattr(nh.subprocess, "run", run_child)
+    thread = None
+    paused = False
+    try:
+        with (
+            service._execution_lease("probe", existing=True) as execution_fd,
+            nh.package_lease(service.registry) as package_fd,
+        ):
+            def launch():
+                try:
+                    nh.Systemd(str(executable)).start(
+                        record["unit"], lease_fd=execution_fd, package_fd=package_fd,
+                        receipt_path=receipt, intent=intent,
+                    )
+                except (OSError, subprocess.SubprocessError, nh.HelperError) as exc:
+                    errors.append(exc)
+
+            thread = threading.Thread(target=launch)
+            thread.start()
+            assert guard_started.wait(5)
+            deadline = time.monotonic() + 5
+            while not ready.exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert ready.exists() and guard[0].poll() is None
+            guard[0].send_signal(signal.SIGSTOP)
+            paused = True
+            pid, status = os.waitpid(guard[0].pid, os.WUNTRACED)
+            assert pid == guard[0].pid and os.WIFSTOPPED(status)
+        release.touch()
+        deadline = time.monotonic() + 5
+        while not done.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert done.exists() and guard[0].poll() is None
+        assert not receipt.exists()
+        with pytest.raises(nh.HelperError, match="still active"):
+            service.handle(req("resolve-stopped"), peer_uid=record["uid"])
+        with pytest.raises(nh.HelperError, match="unconfirmed"):
+            service.handle(req("start", "new-id"), peer_uid=record["uid"])
+        with pytest.raises(nh.HelperError), nh.package_lease(service.registry, exclusive=True):
+            pass
+        assert not (service.registry / "recovery-probe-one.json").exists()
+    finally:
+        release.touch()
+        if paused and guard and guard[0].poll() is None:
+            guard[0].send_signal(signal.SIGCONT)
+        if thread is not None:
+            thread.join(timeout=10)
+    assert thread is not None and not thread.is_alive() and not errors
+    assert json.loads(receipt.read_text())["intent"] == intent
+    assert service.handle(req("resolve-stopped"), peer_uid=record["uid"])["recovery"]["state"] == "confirmed_stopped"
+
+
 def test_stopped_cancel_failure_keeps_unknown(helper):
     service, adapter, record = stopped_unknown(helper)
     adapter.override["Job"] = "42 start"

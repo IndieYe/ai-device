@@ -793,3 +793,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 91. guard 持续占用与缺回执回归
 
 新增真实 guard 子进程和受控阻塞 sender 的本地测试：guard 同时继承执行锁和包锁，父侧描述符关闭后，对旧 unknown 的停止对账及新 ID 启动仍被拒绝，独占包锁不可取得；释放测试 sender 后，只有无关回执时仍不得对账。测试通过 finally 释放并回收子进程，不以超时为完成依据。完整 Device 回归 1029 passed、3 skipped；ruff 和 diff 检查通过。此测试模拟 sender 持续阻塞，不是 SIGSTOP guard、systemd 或宿主重启验收，也不证明实际运行代码身份、事务交接或可安全派发。
+
+
+## 92. 暂停 guard 后的持锁与显式对账
+
+新增本地故障测试，对真实 `Systemd.start` 创建的 guard 子进程发 SIGSTOP，并用 waitpid 确认处于暂停状态；随后让受控 sender 退出。父侧描述符已关闭时，guard 仍持有执行锁与包锁，匹配 sender 回执尚未写入，停止对账、新 ID 启动和包锁独占均被拒绝。对测试捕获的该子进程发 SIGCONT 后，guard 回收 sender、写入匹配回执，显式 resolve-stopped 才确认终态。finally 恢复暂停进程并回收测试线程。完整 Device 1030 passed、3 skipped，ruff 与 diff 检查通过；这是本机子进程实验，adapter 为测试替身，不是隔离 systemd、宿主重启或真实设备验收。生产派发仍关闭；Unix socket 传递文件描述符或 inode 匹配本身不能证明预期 flock 正被持有，也不能仅凭单次 peer 存活检查授权不可逆操作，启动实例与事务锁连续绑定仍待完成。
