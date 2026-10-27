@@ -1128,3 +1128,10 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 - `close-before-apply`：systemd job 处于受控排队窗口时先持锁 close，迟到 worker 拒绝执行包，持久围栏保留。`delayed_worker_refused_after_close`，日志 `20261027-231627-0d16bf.log`。
 
 每次先证明生产派发门禁拒绝、未创建 intent；涉及 job 派发的场景仅在隔离测试进程替换该门禁，未修改产品代码或放宽 DEB 包保护。容器均已退出。测试范围不覆盖生产受控启动、实际消息处理者与 invocation 绑定、任意并发时序、宿主断电、目标设备或 RPM；生产派发继续关闭，P1 未完成。
+
+
+## 142. b4158df 隔离 daemon 异常退出与暂停 start guard
+
+一次性无网络 Linux amd64/Rosetta systemd 容器使用准确 b4158df DEB 和对应 wheel，运行 `accept-native-update-job.sh` 的 `start-guard-pause`。真实 helper start 进入 systemd `start-pre` 窗口后，测试先核对容器内 daemon MainPID、guard 直接父子关系及命令行，再暂停 guard 并对该测试 daemon 注入异常退出；显式处理测试残留 socket 并启动新 daemon。systemd job 已终结时 guard 仍暂停、sender 回执缺失、package EX 冲突，恢复拒绝且新 start 无新意图；释放 guard、确认匹配回执后，同 ID 不重放，显式 resolve-running 确认运行。生产新 job 派发门禁先拒绝且无 intent。
+
+输出 `paused_guard_blocks_recovery` 与 `daemon_exit_guard_reaped_and_reconciled`，日志 `20261027-231814-288e12.log`；测试 guard 在脚本 finally 恢复，容器已退出。本实验验证的是 start sender guard 而非尚未实现的候选代码生产监督器；不证明宿主断电、目标设备、实际消息处理者或 systemd invocation 绑定，派发保持关闭。
