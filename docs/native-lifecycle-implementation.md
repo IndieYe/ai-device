@@ -984,3 +984,10 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 在另一个一次性无网络容器中验证包摘要、preinst/prerm 保护文案、全新安装、安装的六个主 runtime 模块与四个独立 bootstrap 模块与源码一致；调用包内 bootstrap helper 验证非整数/缺失 returncode 拒绝、负整数接受，并验证重复安装被原覆盖保护拒绝。`CURRENT_DEB_RECEIPT_GUARD_OK`、`CURRENT_DEB_FRESH_INSTALL_AND_PROTECTION_OK`，日志 `20261027-215650-b18253.log`。脚本 `scripts/accept-native-current-receipt-deb.sh` 固定该包摘要，仅为隔离验收。
 
 该制品是未签名本地开发包，非正式发布，不包含后续文档和验收脚本变更；不证明真实 systemd、真实 sender 回收、RPM、目标设备或宿主断电验收。未部署或修改真实设备，包覆盖保护未放宽。
+
+
+## 123. 57714ae DEB 的隔离 systemd sender 回执恢复
+
+一次性无网络 Linux amd64/Rosetta 容器以独立 systemd PID1 运行，准确校验并安装第122节 DEB。复用 `accept-native-systemd.sh` 验证普通 UID12345 新装、helper/systemd 启动、同 ID 不重放、非 owner 拒绝；容器无中心连接或真实凭证。新脚本 `packages/device-runtime/scripts/accept-native-receipt-systemd.py` 在容器内停止其测试 client，然后让真实 `systemctl start` 和 sender guard 完成，再注入丢响应使 intent 维持 unknown。实际 sender 回执包含整数 returncode；仅在本次容器篡改该回执移除 returncode，验证 resolve-running 拒绝、无 recovery、新 ID 阻塞且原 intent 不变。恢复该测试回执原始字节后，显式 resolve-running 确认运行，PID不变、原 intent 不变且真实 sender 仅调用一次。
+
+`SYSTEMD_RECEIPT_UNKNOWN_RECOVERY_OK`，日志 `20261027-220022-6ca4bd.log`，基线日志 `20261027-220001-162cfe.log`，脚本 ruff通过。测试后仅对该一次性容器 systemd 执行 poweroff，确认 --rm 容器退出；未停止真实服务。此实验不覆盖真实宿主重启/断电、package apply、目标设备、逐消息处理者认证或生产监督器；恢复测试只用已有 P1 隔离授权，不开放新 job 派发。
