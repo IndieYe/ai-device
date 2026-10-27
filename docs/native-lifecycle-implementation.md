@@ -1542,3 +1542,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 隔离 fixture 构造已有 runtime snapshot，将 `schema_version:1` 改为 `true`，或将一字节文件 inventory 的 `size:1` 改为 `true`；原 `validate_snapshot` 均接受（`20261028-033543-9a8607.log`）。改为要求 schema 为真实整数1，并对完整 inventory 使用类型敏感 JSON 比较；两个异常均拒绝且不覆盖 snapshot，正常快照回归保留。bootstrap/update/job 定向 `178 passed`（`20261028-033613-fb8b4c.log`），ruff 和 diff 检查通过。
 
 首次完整回归 `1194 passed, 1 failed, 16 skipped`，失败为 `test_client_stop_restart_is_unknown_and_never_reexecutes` 的状态仍 `running`（`20261028-033622-9a7d29.log`）；该测试单独复跑通过（`20261028-033720-c1ff9d.log`），完整重跑 `1195 passed, 16 skipped`（`20261028-033728-7c831e.log`）。该测试等待 peer 移除后立即断言 unknown，可能存在时序敏感性，但根因未证实，本次未修改 WebSocket。新源码的校验不自动更新旧 snapshot，不证明受控运行身份、系统掉电安全或外部 job 终态；未构建新包，现有生产门禁不变。bootstrap 发布回执等其他比较尚未审完。
+
+
+## 197. helper 候选发布回执的类型敏感重用与读取
+
+隔离 fixture 通过实际 `publish_helper_candidate` 创建快照和候选回执（候选自检用测试替身），随后分别将 `schema_version:1` 改为 `true` 或 `activated:false` 改为 `0`。原发布重用与只读 `read_helper_candidate` 两条入口的四个组合均未拒绝（`20261028-034035-3fa5f6.log`）。两条入口改用 `_same_json` 类型敏感比较；异常回执拒绝且原字节不变，合法发布重用测试仍通过，候选不自动激活。bootstrap/job 定向 `87 passed`（`20261028-034053-cc5fbc.log`），完整 `1199 passed, 16 skipped`（`20261028-034101-9a760d.log`），ruff 与 diff 检查通过。
+
+这是隔离 fixture，不证明正式 bootstrap 已更新或受控 handler/进程身份完成；旧 snapshot 仍需按管理员维护协议处理，不自动迁移。本轮未构建新包、未放开生产派发、恢复或包保护；第196节 WebSocket 单次失败根因仍未确认。

@@ -239,7 +239,7 @@ def publish_helper_candidate(source, candidates_dir, version):
     path = candidate / "candidate.json"
     if os.path.lexists(path):
         helper._trusted(path)
-        if json.loads(path.read_bytes()) != receipt:
+        if not helper._same_json(json.loads(path.read_bytes()), receipt):
             raise BootstrapError("candidate publication evidence differs")
     else:
         helper._save_new(path, receipt)
@@ -268,7 +268,7 @@ def read_helper_candidate(candidates_dir, version):
         "helper_sha256": _digest(expected),
         "activated": False,
     }
-    if value != evidence:
+    if not helper._same_json(value, evidence):
         raise BootstrapError("candidate publication evidence differs")
     return evidence
 

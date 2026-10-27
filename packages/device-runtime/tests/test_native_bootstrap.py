@@ -287,6 +287,40 @@ def test_read_helper_candidate_refuses_bytecode_in_verified_snapshot(runtime):
     assert (candidate / "runtime/lib/python3.13/site-packages/device_runtime/native_helper.pyc").exists()
 
 
+@pytest.mark.parametrize("field,value", [("schema_version", True), ("activated", 0)])
+@pytest.mark.parametrize("operation", ["publish", "read"])
+def test_candidate_receipt_rejects_boolean_number_type_drift(runtime, monkeypatch, field, value, operation):
+    import json
+
+    source, destination = runtime
+    module = source / "lib/python3.13/site-packages/device_runtime/native_helper.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("# fixture")
+
+    def inspect(candidate):
+        bootstrap.validate_snapshot(candidate)
+        return {
+            "snapshot_sha256": bootstrap._digest(candidate / "snapshot.json"),
+            "helper_sha256": bootstrap._digest(
+                candidate / "runtime/lib/python3.13/site-packages/device_runtime/native_helper.py"
+            ),
+        }
+
+    monkeypatch.setattr(bootstrap, "inspect_helper_candidate", inspect)
+    bootstrap.publish_helper_candidate(source, destination.parent, "v1")
+    receipt = destination.parent / "v1/candidate.json"
+    evidence = json.loads(receipt.read_bytes())
+    evidence[field] = value
+    receipt.write_text(json.dumps(evidence))
+    before = receipt.read_bytes()
+    with pytest.raises(bootstrap.BootstrapError, match="publication evidence differs"):
+        if operation == "publish":
+            bootstrap.publish_helper_candidate(source, destination.parent, "v1")
+        else:
+            bootstrap.read_helper_candidate(destination.parent, "v1")
+    assert receipt.read_bytes() == before
+
+
 def test_publish_versioned_candidate_never_activates(runtime, monkeypatch):
     source, destination = runtime
     module = source / "lib/python3.13/site-packages/device_runtime/native_helper.py"
