@@ -1507,3 +1507,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 ## 191. start sender 树完成不覆盖 systemd unit 生命周期
 
 使用第190节未接入候选，在无网络一次性隔离 systemd 容器启动独立惰性 fixture unit：guard 返回并发布 sender-tree 回执时，unit 的 MainPID 大于1、InvocationID 非空、进程存在且 PPid 为1；fixture 释放后自然完成，容器停止（`20261028-031711-6d34bf.log`，`scripts/probe-native-start-tree-external-systemd.py`）。这验证 sender 的收养树不等于 systemd 管理的 unit 或其外部工作，不能依据 sender 回执单独断言 unit 终态或授权恢复。start 成功后服务继续运行本身是预期行为；实验未启动真实 Device，也不证明业务故障或其安全恢复方式。真实 invocation 绑定、并发重启/排队 job 与崩溃持久化仍须解决，生产默认拒绝不变。
+
+
+## 192. 受控 worker 占用与外部工作隔离模型
+
+新增纯测试模型 `tests/test_native_worker_coordination_fixture.py`，使用 spawn 独立进程、非阻塞独占 flock、排他创建 intent、文件和目录 fsync，测试同一 lease 的两个合作 worker：首个写入 intent 并持锁时，竞争者返回 busy；正常完成、intent 后进程退出及副作用后进程退出三种情况下，释放锁后竞争者仍因原 intent 返回 occupied，不重放动作。第三方独立 fixture 不参与该锁与意图，证明 worker 在 intent 后退出、锁释放及后续 worker 被阻止时，外部工作仍能继续并产生自身副作用。4 项测试重复三次通过（`20261028-032009-32f729.log`），完整回归 `1181 passed, 16 skipped`（`20261028-032013-f63087.log`），ruff 通过。
+
+这些是当前宿主 macOS 的合作进程模型，不是生产 worker、真实 systemd、断电或原子恢复证明，也不验证受控 handler、实际 invocation 身份、真实外部动作、任意系统参与者、记录与作用的原子提交或目录 fsync 失败；记录存在不等于持久性已证明。实验不修改生产代码、门禁或旧环境，不允许删除 intent 以消除阻塞。需要单独设计与外部工作事实源和受控 invocation 关联的可验证终态与崩溃恢复，且所有相关入口必须共同参与。
