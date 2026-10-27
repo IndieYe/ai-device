@@ -1201,3 +1201,5 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 新包固定 Hash 验收脚本在干净容器验证新装、包内六模块和 bootstrap 四模块与源码一致，包内 helper 严格拒绝畸形屏障与嵌套 sender 类型漂移、合法旧/新版本通过，批准/退休 fixture、默认派发拒绝及重装保护通过（`20261028-000546-80a530.log`）。独立真实隔离 systemd 使用新包完成普通用户基线后，启动实际 guard 并模拟响应丢失；对该容器自己的 intent 注入 `true` 屏障、对 sender 嵌套 intent 注入 `2.0`，两者拒绝恢复且不生成 recovery；复原原测试字节后缺 returncode 拒绝、匹配回执显式恢复、同 ID 不重放且 MainPID 稳定。输出 `SYSTEMD_INVALID_BARRIER_AND_RECEIPT_REFUSED`、`SYSTEMD_RECEIPT_UNKNOWN_RECOVERY_OK`，日志 `20261028-000646-b9741d.log`；容器已退出。
 
 本验收仅覆盖隔离装包和 systemd 指定故障，不证明真实设备、宿主断电、受控监督/实际处理者、invocation 身份或成功升级。生产派发仍默认关闭，旧证据不迁移；RPM 缺离线 rpmbuild。
+
+准确 `e298fdb` DEB 另在独立无网络 systemd 容器执行 `start-guard-pause`：验证生产 job 门禁拒绝后，核实测试 daemon 与 guard 身份，暂停 guard 并仅注入该 daemon 异常退出；新 daemon 启动后缺回执仍拒绝恢复和新 start，systemd job 已终结时包 EX 仍冲突；guard 恢复并持久产生匹配回执后显式确认运行，同 ID 不重放。日志 `20261028-000914-d66f1b.log`，测试容器已退出。此为 start sender guard 的锁生命周期，不证明受控候选监督器或生产处理者身份。
