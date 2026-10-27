@@ -572,3 +572,7 @@ v23未提交代码wheel在一次性systemd容器使用低版本空源fixture：�
 ## 43. 新DEB/RPM真实包钩子隔离验收
 
 RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretrans以stat或readlink拒绝已有路径。用v17旧payload、锁定运行时和当前钩子构建未签名v24开发DEB/RPM（不代表最新应用源码发行）：DEB SHA256 f271cad46220ba1d9b85f6ecae5f072cb79caf9268cebe47baee3bdfe2851222，RPM da2731ad27205ab25918740f41c2fd8725fab9550229cf62207694267fb0361b。隔离Ubuntu系dpkg与Rocky9 rpm实际执行：已有其他版本目录与悬空bootstrap链接均拒绝，原哨兵或链接不变、目标未写；全新安装通过，创建manager后卸载保护拒绝且bootstrap仍存在。RPM使用--nodeps，不作为依赖验收。新增accept-native-layout-guard.sh，必须明确一次性容器标记；脚本悬空链接模式两包实跑通过。完整968 passed/3 Linux skipped（44.20s），构建容器临时安装rpm-build，不修改宿主。P1稳定bootstrap、旧helper兼容、签名发行与实际设备升级仍未完成。
+
+## 44. 独立bootstrap候选helper自检原型
+
+新增inspect_helper_candidate，只接受Linux root可信独立事务快照；先完整验证快照，以快照内Python -I -B导入helper，核对base_prefix、模块绝对路径及Python 3.13，超时/导入失败/身份不符拒绝，结束后再次核对清单，返回snapshot及helper摘要和未激活状态。只执行可信管理员候选，不验签、不修改unit、不启动或切换服务，不证明helper协议兼容。单测覆盖身份、超时、运行中漂移及无额外文件；v25 wheel在一次性隔离Linux复制独立CPython并真实运行候选自检成功。完整972 passed/3 Linux skipped（41.43s）。该能力尚未接入版本化候选发布、稳定入口、旧helper安全迁移和事务切换；旧包保护不变，P1未完成。

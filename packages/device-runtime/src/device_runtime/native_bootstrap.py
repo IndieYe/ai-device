@@ -138,3 +138,49 @@ def snapshot_runtime(source, directory):
     }
     helper._save_new(directory / "snapshot.json", receipt)
     return validate_snapshot(directory)
+
+
+def inspect_helper_candidate(directory):
+    """Validate an independent snapshot and probe its helper without activating it.
+
+    Only administrator-trusted candidate code is executed. This is not a
+    signature check, a service switch, or authorization to replace a bootstrap.
+    """
+    import subprocess
+
+    if sys.platform != "linux" or os.geteuid() != 0:
+        raise BootstrapError("Linux administrator required")
+    directory = helper._path(directory)
+    validate_snapshot(directory)
+    runtime = directory / "runtime"
+    python = runtime / "bin/python3.13"
+    expected = runtime / "lib/python3.13/site-packages/device_runtime/native_helper.py"
+    helper._trusted(expected)
+    code = (
+        "import json,sys; import device_runtime.native_helper as h; "
+        "print(json.dumps({'base':sys.base_prefix,'module':h.__file__,"
+        "'version':list(sys.version_info[:2])}))"
+    )
+    try:
+        result = subprocess.run(
+            [str(python), "-I", "-B", "-c", code],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C"},
+        )
+        observed = json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        raise BootstrapError("helper candidate self-check failed") from exc
+    if observed != {"base": str(runtime), "module": str(expected), "version": [3, 13]}:
+        raise BootstrapError("helper candidate identity differs")
+    # Detect modifications during the subprocess before reporting usable evidence.
+    validate_snapshot(directory)
+    return {
+        "state": "helper_candidate_checked_not_activated",
+        "snapshot_sha256": _digest(directory / "snapshot.json"),
+        "helper_sha256": _digest(expected),
+        "python": str(python),
+        "activated": False,
+    }

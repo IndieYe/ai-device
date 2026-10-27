@@ -158,3 +158,76 @@ def test_worker_already_inside_snapshot_does_not_recopy(runtime, monkeypatch):
     snapshot = stem.with_suffix(".bootstrap")
     monkeypatch.setattr(update.sys, "base_prefix", str(snapshot / "runtime"))
     assert adapter.prepare_execution(stem) == first
+
+
+def test_helper_candidate_probe_is_bound_and_nonactivating(runtime, monkeypatch):
+    import json
+    import subprocess
+    from types import SimpleNamespace
+
+    source, destination = runtime
+    module = source / "lib/python3.13/site-packages/device_runtime/native_helper.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("# fixture")
+    bootstrap.snapshot_runtime(source, destination)
+    candidate = destination / "runtime"
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(
+            stdout=json.dumps(
+                {
+                    "base": str(candidate),
+                    "module": str(
+                        candidate / "lib/python3.13/site-packages/device_runtime/native_helper.py"
+                    ),
+                    "version": [3, 13],
+                }
+            )
+        )
+
+    monkeypatch.setattr(subprocess, "run", run)
+    before = sorted(str(p.relative_to(destination)) for p in destination.rglob("*"))
+    result = bootstrap.inspect_helper_candidate(destination)
+    assert (
+        result["activated"] is False and result["state"] == "helper_candidate_checked_not_activated"
+    )
+    assert result["snapshot_sha256"] == bootstrap._digest(destination / "snapshot.json")
+    assert calls[0][0][1:3] == ["-I", "-B"] and calls[0][1]["timeout"] == 30
+    assert sorted(str(p.relative_to(destination)) for p in destination.rglob("*")) == before
+
+
+@pytest.mark.parametrize("failure", ["identity", "timeout", "drift"])
+def test_helper_candidate_probe_refuses_failure(runtime, monkeypatch, failure):
+    import json
+    import subprocess
+    from types import SimpleNamespace
+
+    source, destination = runtime
+    module = source / "lib/python3.13/site-packages/device_runtime/native_helper.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("# fixture")
+    bootstrap.snapshot_runtime(source, destination)
+    candidate = destination / "runtime"
+
+    def run(argv, **kwargs):
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(argv, 30)
+        if failure == "drift":
+            (candidate / "bin/python3.13").write_bytes(b"changed")
+        return SimpleNamespace(
+            stdout=json.dumps(
+                {
+                    "base": "/wrong" if failure == "identity" else str(candidate),
+                    "module": str(
+                        candidate / "lib/python3.13/site-packages/device_runtime/native_helper.py"
+                    ),
+                    "version": [3, 13],
+                }
+            )
+        )
+
+    monkeypatch.setattr(subprocess, "run", run)
+    with pytest.raises(bootstrap.BootstrapError):
+        bootstrap.inspect_helper_candidate(destination)
