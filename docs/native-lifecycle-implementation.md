@@ -1070,3 +1070,10 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 扩展 `test_explicit_job_recovery_retains_fence_and_never_replays`：有效已执行 job 显式对账完成后，模拟同一 intent 的迟到 worker 调用真实 `Updates.apply`，确认只返回已有恢复观察、`reapplied=false`，包执行次数不增加，job/apply intent、sender 与两类恢复证据字节不变。针对性测试通过（`20261027-224733-4f2116.log`），ruff/diff 检查通过。
 
 该测试为顺序性替身包管理器回归，不代表真实 systemd 并发、unit 身份连续性、迟到 worker 与 close 的完整竞争或宿主重启验收；生产派发仍关闭。
+
+
+## 135. job 锁内恢复绑定完整事务意图
+
+原 `Updates.recover(..., job_intent_sha256=...)` 在实例事务及 package EX 锁内只核对 job 文件摘要、实例/操作和 prepared 摘要，未约束 schema、状态、close 协议、确定性 unit、快照摘要或额外字段；回归先复现不兼容 schema 仍生成恢复证据。现在锁内重新验证 snapshot，要求完整精确的当前 job intent（严格整数 schema、固定状态/close 协议、确定性 unit、实例/操作、prepared 与 snapshot SHA），以及调用方携带的 intent 文件摘要相符；不兼容或漂移拒绝，不自动迁移、删除或重放。
+
+回归覆盖布尔 schema、错误协议/状态/unit/snapshot、额外/缺失字段、非对象和实际 snapshot 漂移，拒绝时无 recovery 证据及额外包动作；有效意图的显式对账、重复对账、迟到 worker 不重放仍通过。完整 Device `1107 passed, 4 skipped`，日志 `20261027-225158-b48c21.log`；ruff 与 diff 检查通过。未构建包含此次修复的新包，未执行真实包更新。systemd 终态观察与恢复之间的 invocation 竞态仍未解决，生产派发保持关闭。

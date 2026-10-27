@@ -268,3 +268,5 @@ accept-native-old-helper-fence.sh在一次性容器复现v17旧helper忽略未�
 本阶段 daemon 与 socket 恢复在原 daemon 文件锁之前共同取得 registry 目录独占 flock，获取时核对目录路径与 FD 身份，并保留原文件锁以与现有锁持有者冲突。两锁均为协作锁；目录或其祖先及挂载后续替换不受此机制原子防护，也不抵御恶意 root。其他更新事务入口尚未接入同一个目录锚点，生产 job 派发仍 default-deny；此局部实现不证明跨进程身份、完整事务互斥或故障恢复。
 
 `observe_job` 对 systemd 返回采用完整六字段严格解析：重复、缺失、额外或畸形行及过长输出都不作为 unit 观察；显式 `recover_job` 因而拒绝不确定的终态，不重试、不解除围栏。独立包结果仍可只读展示，不代表 unit 已安全终止；详见实施记录第133节。
+
+job 显式恢复在实例事务和包锁内重验完整当前 job intent、准确 prepared 与运行时 snapshot；协议、字段或快照不兼容时保持围栏并拒绝，不自动迁移、删除或重放。该校验不解决 systemd invocation 观察窗口，详见实施记录第135节。

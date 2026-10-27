@@ -548,12 +548,23 @@ class Updates:
                     job_path = stem.with_suffix(".job-intent.json")
                     nh._trusted(job_path)
                     job = json.loads(job_path.read_bytes())
+                    snapshot = stem.with_suffix(".bootstrap")
+                    nb.validate_snapshot(snapshot)
+                    expected_job = {
+                        "schema_version": 1,
+                        "state": "job_dispatch_intent",
+                        "close_protocol": "package-lease-v1",
+                        "unit": "ai-device-package-" + hashlib.sha256(str(stem).encode()).hexdigest() + ".service",
+                        "instance_id": instance_id,
+                        "operation_id": operation_id,
+                        "prepared_sha256": nh._digest(stem.with_suffix(".prepared.json")),
+                        "runtime_snapshot_sha256": nh._digest(snapshot / "snapshot.json"),
+                    }
                     if (
                         nh._digest(job_path) != job_intent_sha256
-                        or job.get("instance_id") != instance_id
-                        or job.get("operation_id") != operation_id
-                        or job.get("prepared_sha256")
-                        != nh._digest(stem.with_suffix(".prepared.json"))
+                        or not isinstance(job, dict)
+                        or type(job.get("schema_version")) is not int
+                        or job != expected_job
                     ):
                         raise UpdateError("job recovery intent differs")
                 intent_path = stem.with_suffix(".apply-intent.json")

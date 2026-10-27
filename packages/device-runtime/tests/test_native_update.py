@@ -764,6 +764,9 @@ def test_explicit_job_recovery_retains_fence_and_never_replays(update, monkeypat
     outcome["intent"] = apply
     stem.with_suffix(".outcome.json").write_text(json.dumps(outcome))
     intent = {
+        "schema_version": 1,
+        "state": "job_dispatch_intent",
+        "close_protocol": "package-lease-v1",
         "unit": "ai-device-package-" + hashlib.sha256(str(stem).encode()).hexdigest() + ".service",
         "instance_id": "probe",
         "operation_id": "one",
@@ -771,6 +774,27 @@ def test_explicit_job_recovery_retains_fence_and_never_replays(update, monkeypat
         "runtime_snapshot_sha256": apply["runtime_snapshot_sha256"],
     }
     stem.with_suffix(".job-intent.json").write_text(json.dumps(intent))
+
+    for key, bad in (("schema_version", True), ("close_protocol", "unknown"),
+                     ("state", "unexpected"), ("unit", "wrong.service"),
+                     ("runtime_snapshot_sha256", "wrong"), ("extra", True)):
+        changed = dict(intent)
+        changed[key] = bad
+        stem.with_suffix(".job-intent.json").write_text(json.dumps(changed))
+        with pytest.raises(nu.UpdateError, match="job recovery intent differs"):
+            manager.recover("probe", "one", job_intent_sha256=nh._digest(stem.with_suffix(".job-intent.json")))
+        assert not stem.with_suffix(".recovery.json").exists() and packages.calls == 1
+    for changed in ({k: v for k, v in intent.items() if k != "close_protocol"}, [], None):
+        stem.with_suffix(".job-intent.json").write_text(json.dumps(changed))
+        with pytest.raises(nu.UpdateError, match="job recovery intent differs"):
+            manager.recover("probe", "one", job_intent_sha256=nh._digest(stem.with_suffix(".job-intent.json")))
+        assert not stem.with_suffix(".recovery.json").exists() and packages.calls == 1
+    stem.with_suffix(".job-intent.json").write_text(json.dumps(intent))
+    (snapshot / "snapshot.json").write_text("drift")
+    with pytest.raises(nu.UpdateError, match="job recovery intent differs"):
+        manager.recover("probe", "one", job_intent_sha256=nh._digest(stem.with_suffix(".job-intent.json")))
+    assert not stem.with_suffix(".recovery.json").exists() and packages.calls == 1
+    (snapshot / "snapshot.json").write_text("snapshot")
 
     def runner(*a, **kw):
         return SimpleNamespace(stdout="LoadState=loaded\nActiveState=inactive\nSubState=dead\nResult=success\nMainPID=0\nJob=\n")
