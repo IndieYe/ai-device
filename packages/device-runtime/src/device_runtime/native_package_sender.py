@@ -5,7 +5,32 @@ permission to recover, retry or activate. The caller must durably bind this
 protocol and snapshot in an intent and pass the held package lease descriptor.
 """
 
+from . import native_helper as helper
+
 PROTOCOL = "debian-package-tree-subreaper-v1"
+
+
+def valid_tree_receipt(receipt, expected_intent):
+    """Validate structure and intent binding only; never authorize recovery.
+
+    The expected intent must come from the independently checked transaction,
+    not from the receipt. A match does not establish origin or durable fsync.
+    """
+    if (
+        not isinstance(expected_intent, dict)
+        or expected_intent.get("sender_protocol") != PROTOCOL
+        or not isinstance(receipt, dict)
+        or type(receipt.get("returncode")) is not int
+    ):
+        return False
+    expected = {
+        "schema_version": 1,
+        "state": "package_process_tree_reaped",
+        "mechanism": "linux-subreaper-v1",
+        "intent": expected_intent,
+        "returncode": receipt["returncode"],
+    }
+    return helper._same_json(receipt, expected)
 
 # Runs from the separately verified transaction runtime, not the package runtime
 # being modified. Arguments: receipt, JSON intent, candidate package path.

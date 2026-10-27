@@ -54,10 +54,13 @@ def run_case(candidate, name, crash):
             assert guard.wait(timeout=20) == 7
             assert done.exists() and not Path(f'/proc/{pid}').exists()
             assert (directory / 'fixture.package.log').read_text().strip() == 'descendant-log'
-            assert json.loads(receipt.read_text()) == {
+            value = json.loads(receipt.read_text())
+            assert value == {
                 'schema_version': 1, 'state': 'package_process_tree_reaped',
                 'mechanism': 'linux-subreaper-v1', 'intent': intent, 'returncode': 7,
             }
+            assert candidate.valid_tree_receipt(value, intent)
+            assert not candidate.valid_tree_receipt(value, {**intent, 'operation': 'other'})
             print('CANDIDATE_TREE_GUARD_REAPS_FAKE_DPKG_DESCENDANT', flush=True)
             before = receipt.read_bytes()
             (directory / 'called').unlink()
@@ -87,7 +90,7 @@ def main():
             or os.environ.get('DEVICE_NATIVE_DISPOSABLE_PROBE') != 'package-tree-candidate-v1'):
         raise RuntimeError('isolated Linux container PID1 required')
     ROOT.mkdir(mode=0o700)
-    spec = importlib.util.spec_from_file_location('candidate', '/candidate.py')
+    spec = importlib.util.spec_from_file_location('device_runtime.native_package_sender', '/candidate.py')
     candidate = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(candidate)
     fake = Path('/usr/bin/dpkg')
