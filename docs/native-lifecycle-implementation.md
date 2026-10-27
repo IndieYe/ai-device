@@ -1224,3 +1224,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 ## 153. job 恢复回执的类型敏感重入
 
 `recover_job` 已有 `.job-recovery.json` 时原以 Python 对象相等判断，`retry_allowed: 0` 会与 `false` 混同并被接受；定向回归先失败复现（`20261028-002714-634ed8.log`）。现使用既有 `_same_json` 对完整回执做类型敏感比较，分别验证 `retry_allowed: 0`、`fence_retained: 1` 拒绝，原有证据字节和包动作次数不变，恢复合法回执仍可幂等重入。修复后定向通过（`20261028-002730-a0e658.log`）、ruff 和 diff 检查通过，完整源码回归 1143 通过、4 跳过（`20261028-002746-8918c5.log`）。第152节准确 DEB 不包含此修复，须另构建验证；该测试是在已有底层 recovery 记录的重入场景，不证明所有失败情况下比较发生在全部持久化副作用之前，也不解决观察/提交竞态或生产身份绑定。
+
+
+## 154. 准确 job 回执修复包与真实 systemd 隔离验收
+
+从干净 `40cb25b5498b9c2cc4d748c4c9787c48daa40525` 离线构建三包，Device wheel SHA256 `2ec8f073908912174b553b61986e715ca994711ee0cc927d11c39e40b5accaa9`；六核心模块与 Git 逐字节一致（`20261028-003018-fb4c70.log`）。无网络 amd64/Rosetta 一次性构建未签名 DEB：`build/native-packages-p1-40cb25b/ai-device-native-client_0.2.2-1_amd64.deb`，109817092 字节，SHA256 `06d99960ef6228b226c9dddb41a511e57dbeeea2fd0ca78c825a9e55112af42a`（`20261028-003028-8aa96c.log`）。干净安装比对主 runtime 六模块、bootstrap 四模块、批准及退休 fixture 与重装保护通过（`20261028-003116-d32b23.log`）。
+
+另一无网络 systemd 容器核验 DEB 与 wheel 摘要；脚本先证明生产派发默认拒绝、runner 0 次且无 intent，再仅在本次测试进程 monkeypatch gate 运行独立 job。真实旧版 inert 测试包作为源包，候选包实际 preinst 拒绝覆盖，active 未变、outcome unknown；缺 sender 拒绝，补回原 sender 后显式对账，类型漂移 `retry_allowed=0` 与 `fence_retained=1` 均拒绝且该测试台账文件字节不变、包动作未增加，恢复原回执后合法重入。日志 `20261028-003137-5fb3e6.log`；测试容器已停止（`20261028-003208-2e7e52.log`）。fixture 先解压 DEB 并重装准确 wheel，故该 job 验收须与独立干净安装的包内模块核验合并理解；不代表真实升级成功、生产 gate 打开或身份/观察竞态闭环。RPM、实机和宿主重启仍未验收。
