@@ -840,7 +840,9 @@ def _daemon_lease(registry):
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise HelperError("helper daemon or recovery is already active") from exc
-        yield
+        # The caller may retain this exact open-file description across fork.
+        # An fd alone does not prove a live lock or authorize an operation.
+        yield fd
     finally:
         os.close(fd)
 

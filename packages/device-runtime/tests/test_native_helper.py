@@ -675,6 +675,19 @@ def test_recover_socket_daemon_lock_blocks(recovery):
         nh.recover_socket(registry, path)
 
 
+def test_daemon_lease_exposes_owned_descriptor_and_closes_it(recovery):
+    registry, _ = recovery
+    with nh._daemon_lease(registry) as fd:
+        assert isinstance(fd, int)
+        assert os.fstat(fd).st_ino == (registry / "helper-daemon.lock").stat().st_ino
+        with pytest.raises(nh.HelperError, match="already active"), nh._daemon_lease(registry):
+            pass
+    with pytest.raises(OSError):
+        os.fstat(fd)
+    with nh._daemon_lease(registry):
+        pass
+
+
 def test_recover_socket_requires_administrator(recovery, monkeypatch):
     monkeypatch.setattr(nh.os, "geteuid", lambda: 12345)
     with pytest.raises(nh.HelperError, match="administrator"):

@@ -862,3 +862,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 以干净提交 `0dbcf8d21f6fa3561b083ceea596ba17fc989728` 离线构建 Device wheel SHA256 `8041dd7192bcddb59ed7433625af6796328ca40cbcb346edbf7e32d5adf72680`，四个 bootstrap 模块逐字节与源码一致；使用原锁定运行时及依赖组装并在隔离无网络 Linux 构建未签名 DEB `909d10088315e1e64bfb9fdaad264ee41c6b71797d1032e43752c53a494c1d2a`。首次使用系统 Python 误加载另一个项目环境的 `device_runtime`，payload 组装因依赖兼容检查失败，残留目录保留；使用当前 Worktree `uv run --no-sync` 与新目录重试成功。
 
 在另一个无网络、全新 Linux amd64/Rosetta 容器安装此 DEB，核对独立 bootstrap 源文件 SHA256 `d596e3ee06f1248df048a0cb5447d06e3cb87c20a3f1952e620a48f58aa7fbd1`；从包中独立 bootstrap 发布并读取实际候选 snapshot `61da94558bc53e4b6b70895a1798ad313b9ac8352aeb0999de23f753bbb22c6b`；错误固定摘要拒绝且未创建 socket，正确摘要直接启动后通过 SO_PEERCRED/SO_PEERPIDFD 观察到 socket peer 与启动 PID 一致，畸形请求被拒绝。`ACTUAL_BOOTSTRAP_OK`，脚本 `scripts/accept-bootstrap-byte-extraction.sh`，日志 `20261027-203008-5c0c06.log`；测试进程仅在一次性容器内结束。此结果不证明 systemd invocation、可信监督器、实际请求处理者、包事务互斥或故障恢复，生产派发保持 default-deny；正式签名、RPM及P1整体验收未完成。
+
+
+## 105. daemon 租约描述符与真实 fork 隔离验证
+
+`_daemon_lease` 在原有同一加锁上下文中返回实际 FD，现有调用者不变；明确 FD 自身不证明锁存续或授权。新增单测核对 FD、并发租约拒绝和退出关闭；`scripts/probe-native-daemon-lease.py` 在无网络 Linux 6.18.15 amd64/Rosetta 容器加载当前源码、以实际 `_daemon_lease` 获取锁后 fork，验证父上下文关闭后子仍阻止独立租约、子关闭后新租约可取得。`ACTUAL_DAEMON_LEASE_FORK_OK`，日志 `20261027-203530-988a12.log`；相关测试149通过，完整Device回归1038通过3跳过，ruff通过。此改动未新增监督器、候选fork或公开入口，不证明故障恢复/peer/intent；生产派发仍拒绝。实际包及systemd尚未对本改动构建验证。
