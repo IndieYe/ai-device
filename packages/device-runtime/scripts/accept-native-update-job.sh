@@ -5,6 +5,19 @@ set -eu
 [ "$(cat /proc/1/comm)" = systemd ] && [ "$(id -u)" = 0 ] || exit 2
 [ "$#" = 2 ] || { echo 'usage: SCRIPT FULL_MANAGER_DEB CURRENT_WHEELS' >&2; exit 2; }
 [ ! -e /opt/ai-device ] && [ ! -e /var/lib/ai-device ] || exit 2
+# Install an explicit inert, older source-package fixture into this disposable
+# dpkg database; the actual Device payload is extracted, not installed. This
+# preserves a distinct source version while testing the real candidate preinst.
+mkdir -p /tmp/device-source-fixture/DEBIAN
+cat > /tmp/device-source-fixture/DEBIAN/control <<'EOF'
+Package: ai-device-native-client
+Version: 0.2.1-1
+Architecture: amd64
+Maintainer: Disposable test fixture
+Description: inert source package for isolated job reconciliation test
+EOF
+dpkg-deb --build /tmp/device-source-fixture /tmp/device-source-fixture.deb >/dev/null
+dpkg --install /tmp/device-source-fixture.deb
 dpkg-deb -x "$1" /
 P=/opt/ai-device/packages/0.2.2-native1
 export PYTHONDONTWRITEBYTECODE=1
@@ -105,6 +118,40 @@ assert 'helper transaction required' in stem.with_suffix('.package.log').read_te
 assert (root/'active.json').read_bytes()==active
 report=diagnostic('package_outcome_recorded')
 assert report['outcome']==outcome
+# Only the disposable fixture's receipt is temporarily hidden and restored.
+# Test this before any recovery receipt is written.
+sender_path=stem.with_suffix('.sender.json')
+hidden=stem.with_suffix('.sender.fixture-hidden')
+sender_path.rename(hidden)
+try:
+ try:
+  job.recover_job(manager,'probe','job-one')
+ except (OSError, ValueError):
+  pass
+ else:
+  raise AssertionError('missing sender must refuse recovery')
+ assert not stem.with_suffix('.recovery.json').exists()
+ assert not stem.with_suffix('.job-recovery.json').exists()
+finally:
+ hidden.rename(sender_path)
+# The transient unit may still be exiting just after the outcome is durable.
+while True:
+ report=job.observe_job(manager,'probe','job-one')
+ unit=report['unit_observation'] or {}
+ if unit.get('LoadState')=='loaded' and (unit.get('ActiveState') in ('inactive','failed') or (unit.get('ActiveState')=='active' and unit.get('SubState')=='exited' and unit.get('Result')=='success')) and unit.get('MainPID')=='0' and unit.get('Job') in ('','0'): break
+ assert time.monotonic()<deadline,'unit did not reach observable terminal state'
+ time.sleep(.1)
+first_recovery=job.recover_job(manager,'probe','job-one')
+second_recovery=job.recover_job(manager,'probe','job-one')
+assert first_recovery==second_recovery
+assert first_recovery['state']=='job_reconciled_without_replay'
+assert first_recovery['retry_allowed'] is False and first_recovery['fence_retained'] is True
+assert len(calls)==1 and (root/'active.json').read_bytes()==active
+assert stem.with_suffix('.job-intent.json').exists() and stem.with_suffix('.apply-intent.json').exists()
+try: helper._assert_no_package_intent(registry)
+except helper.HelperError: pass
+else: raise AssertionError('recovery must retain the fence')
+print(json.dumps({'state':'explicit_job_reconciliation_verified','missing_sender_refused':True,'idempotent':True,'dispatch_once':True,'fence_retained':True,'active_unchanged':True}))
 show=subprocess.run(['/usr/bin/systemctl','show',first['unit'],'--property=Restart,User,ExecStart,ActiveState,Result'],check=True,capture_output=True,text=True)
 print(show.stdout)
 assert 'Restart=no' in show.stdout

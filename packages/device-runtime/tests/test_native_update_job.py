@@ -117,6 +117,7 @@ def test_dispatch_records_once_without_replay(transaction, monkeypatch, lost):
     assert len(calls) == 1
     assert calls[0][0] == "/usr/bin/systemd-run"
     assert "--property=Restart=no" in calls[0]
+    assert "--property=RemainAfterExit=yes" in calls[0]
 
 
 @pytest.mark.parametrize(

@@ -149,6 +149,7 @@ def dispatch_job(manager, instance_id, operation_id, *, runner=None):
                 "--unit=" + unit,
                 "--service-type=oneshot",
                 "--property=Restart=no",
+                "--property=RemainAfterExit=yes",
                 "--property=TimeoutStartSec=infinity",
                 "--property=TimeoutStopSec=infinity",
                 "--property=KillMode=process",
@@ -314,7 +315,14 @@ def recover_job(manager, instance_id, operation_id, *, runner=None):
     unit = observation["unit_observation"] or {}
     if (
         unit.get("LoadState") != "loaded"
-        or unit.get("ActiveState") not in ("inactive", "failed")
+        or not (
+            unit.get("ActiveState") in ("inactive", "failed")
+            or (
+                unit.get("ActiveState") == "active"
+                and unit.get("SubState") == "exited"
+                and unit.get("Result") == "success"
+            )
+        )
         or unit.get("MainPID") != "0"
         or unit.get("Job") not in ("", "0")
         or not observation["apply_intent_present"]

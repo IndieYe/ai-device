@@ -546,3 +546,9 @@ helper启动/登记和其他包apply被持久job意图阻断。worker从完整�
 新增Python recover_job，Linux root显式，先读取匹配job证据且systemd Loaded、inactive/failed、MainPID0、无Job、apply意图存在；复用原Updates.recover的准确批准/源包观察/匹配sender及全局EX锁。recover增加可选job-intent摘要参数，在原锁内重验身份、prepared与意图摘要；最后无覆盖写job-recovery，绑定job-intent及recovery文件SHA，重复同证据幂等。retry_allowed=false且fence_retained=true，未删意图、不执行包、不激活。
 
 新增完整fixture回归验证成功对账幂等、不重执行、活动unit拒绝、启动门禁保留。完整956 passed/3 Linux skipped（46.73s），ruff/format/diff通过。此入口尚未真实systemd动态验收或公开CLI，不能称通用恢复完成；缺apply、缺sender、unit未知、执行前失败仍拒绝，旧job不退休、新ID仍受原门禁约束。下一步新wheel动态验证此对账及缺回执拒绝，再设计执行前失败的一次性worker关闭证据/退休协议；不要把诊断failed当不再执行证明。P1未完成。
+
+## 39. 已执行job真实隔离对账与unit保留
+
+以3d2d075为基线的v20 wheel首次真实对账发现成功oneshot被systemd回收，LoadState=not-found，原恢复门禁正确拒绝但无法观察成功退出；不得把unit缺失当作退出证明。新派发固定RemainAfterExit=yes，恢复除原loaded inactive/failed外，仅接受loaded active/exited、Result=success、MainPID=0且无Job；仍需apply、精确批准和sender证据，门禁不释放。旧已回收unit不会自动恢复。
+
+使用包含此未提交修复的v21 wheel，在一次性amd64 systemd容器中安装低版本0.2.1-1空源fixture，提取未修改v17 Device候选，真实派发故障模拟响应丢失；原Device preinst拒绝覆盖、源包保持原版本。隔离fixture短暂隐藏sender后对账拒绝且未产生恢复回执，恢复sender后显式对账重复幂等、调用systemd仅一次、job/apply意图和启动门禁保留、active不变；测试exec退出0。source-drift路径再次退出0，未执行包且门禁保留。此非真实设备或成功升级验收。首次只解包源导致dpkg从absent变not-installed，recover保守拒绝；同版本真实包安装实验由旧prerm拒绝，不作为目标差异证据。未修改包钩子。完整回归956 passed/3 Linux skipped（43.24s）。执行前失败job关闭证据、退休与新ID仍未实现；P1未完成。

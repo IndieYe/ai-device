@@ -523,7 +523,12 @@ def test_explicit_job_recovery_retains_fence_and_never_replays(update, monkeypat
     def runner(*a, **kw):
         return SimpleNamespace(stdout="LoadState=loaded\nActiveState=inactive\nMainPID=0\nJob=0\n")
 
-    first = job.recover_job(manager, "probe", "one", runner=runner)
+    def retained(*a, **kw):
+        return SimpleNamespace(
+            stdout="LoadState=loaded\nActiveState=active\nSubState=exited\nResult=success\nMainPID=0\nJob=0\n"
+        )
+
+    first = job.recover_job(manager, "probe", "one", runner=retained)
     assert first["state"] == "job_reconciled_without_replay"
     assert first["fence_retained"] and not first["retry_allowed"]
     assert job.recover_job(manager, "probe", "one", runner=runner) == first
@@ -536,3 +541,19 @@ def test_explicit_job_recovery_retains_fence_and_never_replays(update, monkeypat
 
     with pytest.raises(job.JobError, match="completed job"):
         job.recover_job(manager, "probe", "one", runner=busy)
+
+    def missing(*a, **kw):
+        return SimpleNamespace(
+            stdout="LoadState=not-found\nActiveState=inactive\nMainPID=0\nJob=\n"
+        )
+
+    with pytest.raises(job.JobError, match="completed job"):
+        job.recover_job(manager, "probe", "one", runner=missing)
+
+    def active_running(*a, **kw):
+        return SimpleNamespace(
+            stdout="LoadState=loaded\nActiveState=active\nSubState=running\nResult=success\nMainPID=0\nJob=0\n"
+        )
+
+    with pytest.raises(job.JobError, match="completed job"):
+        job.recover_job(manager, "probe", "one", runner=active_running)
