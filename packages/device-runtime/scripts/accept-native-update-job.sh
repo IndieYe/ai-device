@@ -34,7 +34,7 @@ from pathlib import Path
 from device_runtime import native_helper as helper
 from device_runtime import native_update as update
 from device_runtime import native_update_job as job
-if os.environ.get('DEVICE_JOB_FAULT')=='start-lock':
+if os.environ.get('DEVICE_JOB_FAULT') in ('start-lock','start-guard-crash'):
  original_render=helper.render_client_unit
  def delayed_unit(**kwargs):
   return original_render(**kwargs).replace('[Service]\n','[Service]\nExecStartPre=/usr/bin/sleep 8\n')
@@ -63,7 +63,7 @@ def diagnostic(expected):
  assert snapshot()==before,'diagnostic changed persistent files/directories'
  return report
 mode=os.environ.get('DEVICE_JOB_FAULT','none')
-assert mode in ('none','lost-response','source-drift','close-before-apply','retire-retry','start-lock')
+assert mode in ('none','lost-response','source-drift','close-before-apply','retire-retry','start-lock','start-guard-crash')
 calls=[]
 real_run=subprocess.run
 def runner(argv,**kwargs):
@@ -84,7 +84,7 @@ else:
  raise AssertionError('production dispatch fence unexpectedly allowed a new job')
 assert not stem.with_suffix('.job-intent.json').exists() and not calls
 print(json.dumps({'state':'production_dispatch_fence_refused','runner_calls':0,'intent_created':False}))
-if mode=='start-lock':
+if mode in ('start-lock','start-guard-crash'):
  import threading
  runtime=Path('/run/device-helper-acceptance'); runtime.mkdir(mode=0o755)
  socket_path=runtime/'helper.sock'
@@ -98,7 +98,7 @@ if mode=='start-lock':
   time.sleep(.05)
  replies=[]; errors=[]
  def start():
-  try: replies.append(helper.call_helper(socket_path,{'action':'start','instance_id':'probe','operation_id':'start-lock'}))
+  try: replies.append(helper.call_helper(socket_path,{'action':'start','instance_id':'probe','operation_id':mode}))
   except Exception as exc: errors.append(str(exc))
  thread=threading.Thread(target=start); thread.start()
  try:
@@ -108,7 +108,33 @@ if mode=='start-lock':
    if sub=='start-pre': break
    assert time.monotonic()<deadline,'client did not enter start-pre'
    time.sleep(.05)
-  assert (registry/'op-probe-start-lock.json').exists()
+  assert (registry/f'op-probe-{mode}.json').exists()
+  if mode=='start-guard-crash':
+   import signal
+   pid=int(real_run(['/usr/bin/systemctl','show','ai-device-native-helper.service','--property=MainPID','--value'],check=True,capture_output=True,text=True).stdout)
+   processes=real_run(['/usr/bin/ps','-eo','pid=,ppid='],check=True,capture_output=True,text=True).stdout.splitlines()
+   children=[int(parts[0]) for line in processes if len(parts:=line.split())==2 and int(parts[1])==pid]
+   assert len(children)==1,children
+   guard=children[0]
+   argv=Path(f'/proc/{guard}/cmdline').read_bytes().split(b'\0')
+   assert b'-c' in argv and any(b'sender_reaped' in arg for arg in argv),argv
+   os.kill(guard,signal.SIGKILL) # Only the identified child of this disposable daemon.
+   thread.join(timeout=15)
+   assert not thread.is_alive() and not errors and replies and replies[0]['result']['result']['state']=='unknown',(errors,replies)
+   assert not (registry/f'sender-probe-{mode}.json').exists()
+   deadline=time.monotonic()+20
+   while True:
+    observation=helper.Systemd().query('ai-device-client-probe.service')
+    if observation['Job'] in ('','0'): break
+    assert time.monotonic()<deadline,observation
+    time.sleep(.1)
+   for action,operation in [('resolve-running',mode),('start','after-crash')]:
+    response=helper.call_helper(socket_path,{'action':action,'instance_id':'probe','operation_id':operation})
+    assert response.get('ok') is False,response
+   assert not (registry/'op-probe-after-crash.json').exists()
+   assert not (registry/f'recovery-probe-{mode}.json').exists()
+   print(json.dumps({'state':'real_guard_crash_remains_unknown','missing_receipt':True,'recovery_refused':True,'new_start_refused':True,'systemd_job_terminal':True}))
+   raise SystemExit(0)
   try:
    with helper.package_lease(registry,exclusive=True): pass
   except helper.HelperError as error: assert 'still executing' in str(error),error

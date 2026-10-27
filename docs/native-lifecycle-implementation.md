@@ -738,3 +738,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 80. 未知启动恢复证据与包更新门禁一致性
 
 检查发现包更新对 start 结果只将缺失或 `unknown` 视为待恢复，损坏/未知状态会被错误放行；对恢复证据也未要求 `start_replayed` 严格为 `false`。先以五个负向用例复现，再使更新路径对结果采用 helper 相同的状态白名单，并复用 helper 的恢复证据校验；不完整、错误或无法读取的恢复证据继续阻止包更新。合法未重放恢复后仍需满足既有停止状态和其他包事务门禁。相关测试 171 项通过，完整 Device 回归 1020 passed、3 skipped，ruff 及 diff 检查通过。测试为本地夹具，不证明实际 sender 崩溃、运行代码身份或当前制品/真实 systemd 验收；生产 job 派发保持关闭，原包保护不变。
+
+
+## 81. 真实 helper 启动 guard 异常退出隔离实验
+
+在一次性无网络 amd64 systemd 容器中，真实 helper 经 Unix socket 启动已登记测试实例，测试专用 ExecStartPre 保持 systemd 启动等待。确认生产 job 门禁拒绝后，按 systemd MainPID、进程父子关系及 guard 命令行识别该隔离 daemon 的 guard，向其注入 SIGKILL；实际 start 结果为 unknown，sender 回执缺失。等待 systemd Job 终态后，真实 helper 拒绝 resolve-running 和不同 ID 的新 start，未生成恢复或新启动意图。使用历史 DEB `9b37b30...` 与 `cc01329` wheel，不是当前 HEAD 制品；实验不覆盖 daemon 重启、resolve-stopped、包应用或运行代码身份，不证明可恢复或允许派发。首次实验因容器不提供 `/proc/.../children` 在注入前失败；改用 `ps` 父子关系并核验 guard 命令后在干净容器成功。两次实例均经关机请求并核实不存在；相关 133 项、shell 语法与 diff 检查通过。真实设备服务及包保护未改变。
