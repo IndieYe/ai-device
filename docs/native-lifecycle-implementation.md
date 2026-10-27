@@ -698,3 +698,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 72. 无缓存完整 DEB 构建探测（非发布制品）
 
 在当前源码 `9db38cf` 离线构建 Device wheel（SHA256 `ed2f384155815d5454e18b954300e54d25de0225883c29b138a591f644e91f2a`），在一次性 amd64 Linux 容器中复制 `9debfb6` 历史 payload 并仅在临时副本替换 Device wheel，运行当前 `build-native-linux.sh` 构建 DEB。实验包 SHA256 `0127f17a3b3bcfe80626301dcd63dc1f6cc25deec0639cfc48b686768d7c1f9a`；解包后 bootstrap 无 `__pycache__`/`.pyc`/`.pyo`，其中 `native_helper.py` 与当前源码逐字节一致，SHA256 `60988d0c8f2f14d416f1b9183d48c5879c9434354f5e378ef814e7991d2a77ec`。临时替换未重建 payload 来源清单，该包不是准确来源闭环或正式发布制品；容器和包随实验结束，不用于安装。未验证 RPM、实际运行代码绑定、真实 systemd 互斥或故障恢复；生产派发关闭及包保护未改变。
+
+
+## 73. 来源一致的隔离 DEB 干净安装
+
+从干净提交 `cc01329b2ebef33c4c5ffa23f39f0769ecd96e17` 离线构建 Device/Bash/FS wheel，分别 SHA256 `ed2f384155815d5454e18b954300e54d25de0225883c29b138a591f644e91f2a`、`aee883b74bb2fc816abb77ba428ed4339c6901726a9ac3098a3ba8737fa16dd3`、`b872aa775eaacc9836c0ec94a2abf1e41c8395ef725eecb37d05b521053ab626`；使用既有依赖、锁定 uv 和组装器创建 `build/native-payload-p1-cc01329`，核对 `build-inputs.json` 与 wheel 字节一致。一次性 amd64 Linux 容器离线构建 DEB（SHA256 `05eebe5104e31a146f43706df8a72e457b3bfe5208c3be332e31475bbb54618a`），空环境 dpkg 安装成功；bootstrap 无字节码缓存，helper 源码与当前源码逐字节一致，安装清单与输入清单一致，`-I -B` 导入模块路径正确。实验包留在一次性容器中，未签名未发布；未启动 daemon、不证明运行进程代码身份、systemd 重启或 job/start 互斥和故障恢复；RPM 和真实目标未验收。原包保护和新 job 默认拒绝不变。
