@@ -975,3 +975,12 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 start barrier 2 与 package apply 显式恢复共用 sender completion 校验：须为对象，state 为 `sender_reaped`、intent 精确一致，且 `returncode` 是整数（不接受 bool）。缺失、空值、字符串、浮点或非对象拒绝；不写恢复证据、不改原 intent，受影响的新事务继续阻塞。负数、非零与超时码均允许作为进程退出证据，但恢复仍依真实服务或包状态判断，不能把退出码视为成功或隐式重放。相关 guard 已写入整数 returncode；旧或损坏回执不自动补造、迁移或删除，需人工核查。原有 barrier 1 与新 job default-deny 未改变。
 
 测试覆盖 start 的运行/停止恢复、apply 恢复、错误返回码及非对象回执、原 intent 保留、新 ID 封锁、有效非零退出码和无重放；完整 1102通过3跳过、ruff通过（日志 `20261027-215138-6a9750.log`）。未重新构建包或在真实 systemd/dpkg 验收；不证明 sender 回执之外的崩溃或 peer 闭环。
+
+
+## 122. 57714ae 离线开发制品及隔离 DEB 验证
+
+在干净提交 `57714ae9d0d18c55a275ea9ebeafb39e12f99bce` 离线构建三组件 wheel；Device wheel SHA256 `e220912487effa908801eaf63116c6ff35df425b5579948981555bfa8b7277fa`，bash `aee883b74bb2fc816abb77ba428ed4339c6901726a9ac3098a3ba8737fa`，fs `b872aa775eaacc9836c0ec94a2abf1e41c8395ef725eecb37d05b521053ab626`。wheel 内六个 bootstrap/helper/update 模块与该提交源码逐字节一致。使用锁定依赖、uv和 CPython 离线组装 `build/native-payload-p1-57714ae/`，一次性无网络 Linux amd64/Rosetta 容器构建未签名 DEB：`build/native-packages-p1-57714ae/ai-device-native-client_0.2.2-1_amd64.deb`，109817790 bytes，SHA256 `b172b35a6882eb61b89b48dba4b27808f3bf6da1d06da8510cb31ca4f2e45d03`。
+
+在另一个一次性无网络容器中验证包摘要、preinst/prerm 保护文案、全新安装、安装的六个主 runtime 模块与四个独立 bootstrap 模块与源码一致；调用包内 bootstrap helper 验证非整数/缺失 returncode 拒绝、负整数接受，并验证重复安装被原覆盖保护拒绝。`CURRENT_DEB_RECEIPT_GUARD_OK`、`CURRENT_DEB_FRESH_INSTALL_AND_PROTECTION_OK`，日志 `20261027-215650-b18253.log`。脚本 `scripts/accept-native-current-receipt-deb.sh` 固定该包摘要，仅为隔离验收。
+
+该制品是未签名本地开发包，非正式发布，不包含后续文档和验收脚本变更；不证明真实 systemd、真实 sender 回收、RPM、目标设备或宿主断电验收。未部署或修改真实设备，包覆盖保护未放宽。
