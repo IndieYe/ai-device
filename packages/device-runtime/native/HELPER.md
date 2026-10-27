@@ -171,3 +171,11 @@ native_update新增`prepare-signed`，参数package-path/envelope-path/trusted-k
 旧prepare API继续是开发用摘要台账，不声称验签；本原型未成为正式包钩子授权路径。用户venv仍可变，证据检查不是OS隔离或整个site-packages不可变承诺，签名payload也不等于venv运行行为全被认证。正式发布/信任根/包钩子/激活时再次核验与完整健康验收仍缺，不解除包覆盖保护。失败准备的管理员收口尚未实现。
 
 开发验收`accept-native-signed-approval.py`只prepare-signed及approve，断言无apply意图。真实隔离Linux从普通UID运行候选到管理员重新验签批准通过，未apply、未激活或start。临时测试密钥、验签依赖临时联网安装，非正式发布/离线新制品验收。更新测试31项，完整Device909项通过。
+
+## 准备命令发送屏障与管理员只读观察
+
+原生prepare使用限域ContextVar发送者，将共用核心创建venv、安装、依赖检查及健康检查命令交给独立标准库guard。每条命令先持久意图（准确准备request、序号、argv、cwd），guard继承操作execution.lock，等待直接子进程后no-replace发布匹配direct_child_reaped回执。旧非原生安装默认调用不变。超时回执code=124只证明直接子进程被回收，明确descendants_confirmed=false。
+
+`python -m device_runtime.native_prepare_sender --root ROOT --operation-id ID`限管理员，只读检查schema2标记与发送账本。返回sender_busy、unknown或direct_children_reaped_descendants_unconfirmed；**所有结果retry_allowed=false**，不是管理员恢复许可，不写恢复记录、不删除失败现场、不解除新ID门禁。缺回执、意图/请求不匹配、序号缺口拒绝或保持unknown；不能因锁已可独占就声称旧后代全部结束。命令可能派生后代，完整管理员收口仍缺可靠生命周期归属机制，暂不实现解除占用。
+
+真实有限寿命进程测试覆盖guard正常/失败/超时、调用方关闭fd后继承锁、guard异常退出缺回执但旧子进程仍运行、直接子进程退出而后代仍活动；后两种均不允许重试。发送者11项、Device920项通过；本轮无Linux完整准备链或真实cgroup归属回收验证，不沿用旧准备实验冒充新guard实机验收。

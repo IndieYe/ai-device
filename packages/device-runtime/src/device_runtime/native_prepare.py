@@ -15,6 +15,7 @@ from . import installation as core
 from . import native_candidate as candidate
 from . import native_helper as helper
 from .management_lock import MARKER, native_preparation_lease
+from .native_prepare_sender import PreparationSender
 from .protocol import canonical
 
 
@@ -184,7 +185,11 @@ def prepare_runtime_candidate(
                 raise PreparationError("release changed during preparation")
             bundle = extracted / "root" / authentication["payload_root"] / "bundle"
             manifest = core.inspect_bundle(bundle)
-            prepared = core._prepare(root, bundle, manifest, ["client"], uv_executable=uv)
+            with (
+                PreparationSender(stem.with_suffix(".senders"), request) as sender,
+                core.preparation_sender(sender),
+            ):
+                prepared = core._prepare(root, bundle, manifest, ["client"], uv_executable=uv)
             home = root / "releases" / prepared["release"]
             _durable_tree(home)
             with helper._directory_fd(home.parent) as fd:

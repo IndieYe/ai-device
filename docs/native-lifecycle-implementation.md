@@ -418,3 +418,17 @@ native_update新增prepare-signed及CLI，外部公钥重新认证准确发布�
 14项新增更新测试，更新31项，完整Device **909 passed in 42.58s**，ruff/diff通过。覆盖认证失败不落prepared、同ID证据稳定、错误源/发布/state/activated拒绝、六类证据批准前变化、实际wheel验证失败、批准后变化阻止apply且不写意图。真实隔离Linux先普通UID12345准备最终venv，再root复制测试envelope/公钥/包到可信目录，prepare-signed与approve成功，assert无apply意图；未包安装/激活/服务启动。临时测试公钥非正式信任根；新依赖临时联网非离线新包交付。容器--rm已回收。新增accept-native-signed-approval.py复现管理员半段；实际运行使用等价内联调用，脚本静态通过。
 
 旧prepare开发API保留摘要路径，不宣称验签，不作为正式包钩子许可。普通用户venv可变，当前证据不是整个site-packages的运行行为认证或不可变保证；激活/健康再次核验仍缺，不能因批准成功解除包保护。实现/测试/HELPER文档及验收脚本更新；无数据库/前端/IPC变更，构建器未接。下一项准备失败/中断管理员收口，后续包钩子、任务收口/准确停止、稳定bootstrap版本化布局和激活恢复终态仍未完成；P1未通过，不进入P2。
+
+## 24. 重启前保存：准备发送者屏障原型（未提交，未完成）
+
+接续ebfd8f4，新增native_prepare_sender.py及test_native_prepare_sender.py，installation以ContextVar作用域发送者接入，原生prepare在调用共用核心时启用独立guard。每条命令先写匹配request/sequence/argv/cwd意图，guard继承执行锁，等待直接子进程并持久direct_child_reaped回执；明确descendants_confirmed=false，不把直接子进程回收等同任意后代全部退出。原生失败/中断仍阻塞，不提供管理员解除或重试。
+
+重启通知到达后停止扩展，定向发送者/准备/安装82项通过，ruff已修正并通过，diff检查通过。未跑新完整回归，未跑本轮真实Linux准备链、guard异常退出/后代故障或管理员恢复验收。未提交：installation.py、native_prepare.py修改，新增native_prepare_sender.py/test_native_prepare_sender.py及本节；HEAD仍ebfd8f4。无新容器或后台任务遗留。恢复后先复核现场与此屏障覆盖，优先补guard失败回执/后代生命周期证据及管理员观察收口；不可删除失败台账解锁，不把原型称已完成中断恢复。P1继续，P2未开始。
+
+## 25. 准备发送者证据与只读观察收敛（P1仍未完成）
+
+重启后确认服务running、会话同一execution和任务停止检查有效，未提交现场一致，先完整915项通过；继续第24节未提交屏障，补管理员只读observe_senders/CLI。限schema2登记root的管理员入口，按匹配准备request及连续序号校验意图和回执，忙返回sender_busy，空/缺回执unknown，匹配直接子进程回收返回direct_children_reaped_descendants_unconfirmed，所有结果retry_allowed=false。没有写管理员恢复终态或解锁新ID；不能将观察功能称完整准备收口。
+
+11项真实进程/上下文测试通过，完整Device **920 passed in 42.99s**，ruff/diff通过。覆盖正常/失败/超时直接子进程回执、限域发送者复原、生产_invoke使用guard、调用方fd关闭后guard持锁；异常guard自然os._exit后有限寿命子进程仍运行但锁可释放，无回执仍unknown；直接子进程退出且后代尚在活动，即使匹配回执也只报后代未确认。测试子进程按门闩或有限期限自行结束，无kill真实服务或遗留后台。未做本轮Linux完整venv/systemd/cgroup故障链，不把Mac本机隔离进程测试称Linux后代收口验收。
+
+本节与第24节原型一起保存检查点；发送者/安装限域接入、测试及HELPER文档更新，无数据库/前端/配置变化。下一缺口：可靠的准备后代生命周期归属（如独立受控job）及持久完成证据，再实现管理员显式收口/重试。缺此证据继续阻塞，不使用PID快照、锁释放或直接回执伪装全回收，不删除台账绕过。随后仍需包钩子许可、任务收口/准确停止、稳定bootstrap版本化布局与激活恢复终态。P1未完成，不进入P2。

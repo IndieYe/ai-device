@@ -4,6 +4,7 @@ This module does not start services, replay operations, or write persistent stat
 Failed candidates are retained for inspection and never become active.
 """
 
+import contextvars
 import fcntl
 import hashlib
 import json
@@ -161,6 +162,18 @@ def _client_contract(bundle, manifest):
             raise InstallationError("core dependency must match the bundle and be client-only")
 
 
+_PREPARATION_SENDER = contextvars.ContextVar("native_preparation_sender", default=None)
+
+
+@contextmanager
+def preparation_sender(sender):
+    token = _PREPARATION_SENDER.set(sender)
+    try:
+        yield
+    finally:
+        _PREPARATION_SENDER.reset(token)
+
+
 def _invoke(argv, *, cwd, log):
     env = {k: v for k, v in os.environ.items() if not k.startswith("UV_")}
     env.pop("PYTHONPATH", None)
@@ -168,15 +181,21 @@ def _invoke(argv, *, cwd, log):
     # Lifecycle diagnostics pass no log: read-only probes must not create files.
     with log.open("ab") if log is not None else nullcontext(subprocess.DEVNULL) as stream:
         try:
-            result = subprocess.run(
-                argv,
-                cwd=cwd,
-                env=env,
-                stdout=stream,
-                stderr=stream,
-                check=False,
-                timeout=60 if log is None else None,
-            )
+            sender = _PREPARATION_SENDER.get()
+            if sender is not None:
+                result = sender.run(
+                    argv, cwd=cwd, env=env, stdout=stream, timeout=60 if log is None else None
+                )
+            else:
+                result = subprocess.run(
+                    argv,
+                    cwd=cwd,
+                    env=env,
+                    stdout=stream,
+                    stderr=stream,
+                    check=False,
+                    timeout=60 if log is None else None,
+                )
         except subprocess.TimeoutExpired as exc:
             raise InstallationError("environment verification timed out") from exc
     if result.returncode:
