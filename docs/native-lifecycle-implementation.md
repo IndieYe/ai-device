@@ -1086,3 +1086,12 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 测试覆盖错误字段、额外/缺失字段、非对象、摘要不符，均在发布 apply intent 和包动作之前拒绝；完整意图仍重新检查源状态后可通过测试替身执行，恢复回归保持通过。相关 97 项通过，完整 Device `1107 passed, 4 skipped`（`20261027-225546-d241a2.log`），ruff/diff 检查通过。旧格式不自动迁移；未构建包含新修改的 DEB/RPM、未验证真实 systemd 包事务或宿主崩溃；受控身份与 invocation 竞态仍未解决，生产派发继续默认关闭。
 
 已有 worker snapshot 是冻结字节，当前源码修改不会自动升级其执行逻辑；新派发原型创建快照时核对关键 worker 模块摘要，但派发仍关闭。旧测试 helper 和旧非终态必须依已确认维护窗口由管理员手动处理，不以本次修复宣称旧 worker 已受新校验保护。
+
+
+## 137. b4158df 准确离线开发制品与隔离 DEB 验证
+
+干净提交 `b4158df96752ab2ff38cf3f1b7b179995118124e` 离线构建 `build/native-wheels-p1-b4158df/` 三 wheel；Device SHA256 `3fd99bf4ea3f2d1280a4dfa56894ab2928a81b1eae5e2c2c37d286cd77c104c6`、Bash `aee883b74bb2fc816abb77ba428ed4339c6901726a9ac3098a3ba8737fa16dd3`、FS `b872aa775eaacc9836c0ec94a2abf1e41c8395ef725eecb37d05b521053ab626`。Device wheel 的 init、bootstrap、helper、management_lock、update、update_job 六模块逐字节与固定 Git 提交一致（`20261027-230041-123595.log`）；分发 metadata 声明 Python ≥3.13 和 native cryptography/zstandard 依赖。以已锁定 CPython（SHA `f829adc9d888e76c8801b4799ed444188d35239fcae3a9808a99ec5cb0d8d92c`）、uv 与本地依赖组装 `build/native-payload-p1-b4158df/`，build-inputs 标记未签名开发构建。
+
+无网络一次性 Linux amd64/Rosetta 容器构建 `build/native-packages-p1-b4158df/ai-device-native-client_0.2.2-1_amd64.deb`，109830426 字节，SHA256 `0d3ccfd5647bf27b1d6965fec90c0ed20e18cb486939e7837e8231af4df10001`（`20261027-230057-5aad2e.log`）。另一个干净容器安装该准确包，主 runtime 六模块、独立 bootstrap 四模块与冻结源码对应；安装模块的完整 job 意图校验 fixture 接受正确/拒绝 bool schema，派发仍拒绝，原 preinst/prerm 存在且重装受保护拒绝。脚本 `scripts/accept-native-b4158df-deb.sh`，`B4158DF_DEB_FRESH_INSTALL_AND_PROTECTION_OK`（`20261027-230230-23075f.log`）；fixture 的 snapshot 验证使用替身，不代表真实 job 执行。
+
+独立无网络 systemd 容器安装同一准确包，普通用户 UID12345、稳定 PID、非 owner 拒绝和服务基线通过（`20261027-230309-2e66aa.log`）；真实隔离 systemd start 丢响应、损坏回执阻止恢复与新 ID、恢复回执后显式对账通过（`SYSTEMD_RECEIPT_UNKNOWN_RECOVERY_OK`，`20261027-230327-3b16e9.log`）。测试容器已关闭。这些结果不覆盖真实包 job 派发或 invocation 竞态、正式设备、中心、宿主重启与崩溃。当前构建镜像无 rpmbuild（`20261027-230400-16ea2c.log`），未联网安装、未构建新 RPM；旧 RPM 不能代表本提交。生产派发关闭，P1 未验收。
