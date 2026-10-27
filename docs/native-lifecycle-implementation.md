@@ -673,3 +673,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 67. job/start 包锁与意图组件回归
 
 在保持生产派发默认关闭的前提下，新增使用实际文件 `flock` 的组件测试：独占包锁持有期间拒绝 helper start，共享包锁持有期间拒绝新 job 发布；独占锁释放后，持久 job 意图继续阻止 start。派发接受和响应丢失均验证意图保留、同 ID 不重派。派发测试中明确 monkeypatch 固定拒绝门禁，manager 或 systemd 为测试替身；这些测试不证明真实 systemd 竞态、进程退出/重启或实际运行 helper 身份。完整回归 1007 passed、3 skipped。未修改产品代码、未开启派发、未操作真实服务。下一步仍需设计和实现绑定实际运行进程的身份机制，并进行真实隔离 systemd 互斥及故障验证。
+
+
+## 68. socket peer 进程身份原语（未授权派发）
+
+新增 Linux `_socket_peer_process` 只读观察原语：先校验 socket SO_PEERCRED 的 root UID 与 PID，再通过 SO_PEERPIDFD 直接取得同一 socket peer 的 pidfd，校验 fdinfo PID，并在观察前后检查 peer 未退出；不支持的内核、非 root、身份不一致和退出均拒绝。pidfd 在作用域退出时关闭，不影响进程。一次性 amd64 Linux 容器（内核 6.18.15）实际 Unix socket 验证 peer PID、FD 不继承及进程退出被拒绝；另覆盖非 root 和内核不支持。该原语尚无生产调用方，不识别加载代码、不验证 systemd 单元或不可变启动快照，也不锁定观察结束后的 daemon 生命周期；不能用于开放 job 派发。旧测试环境手动退休、干净安装和实际互斥/故障验收仍是独立缺口；生产默认拒绝和包保护不变。

@@ -356,6 +356,35 @@ def test_render_helper_uses_independent_bootstrap(tmp_path):
     assert "native_helper serve" in result
 
 
+def test_peer_process_rejects_non_root_and_unsupported_kernel(monkeypatch):
+    import errno
+    import struct
+    import sys
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(nh.socket, "SO_PEERCRED", 17, raising=False)
+
+    class Peer:
+        def __init__(self, uid):
+            self.uid = uid
+
+        def getsockopt(self, level, option, size):
+            if option == nh.socket.SO_PEERCRED:
+                return struct.pack("3i", 42, self.uid, 0)
+            raise OSError(errno.ENOPROTOOPT, "unsupported")
+
+    with (
+        pytest.raises(nh.HelperError, match="unexpected helper peer credentials"),
+        nh._socket_peer_process(Peer(1000)),
+    ):
+        pytest.fail("untrusted peer accepted")
+    with (
+        pytest.raises(nh.HelperError, match="cannot establish helper peer process identity"),
+        nh._socket_peer_process(Peer(0)),
+    ):
+        pytest.fail("unsupported kernel accepted")
+
+
 def test_call_helper_does_not_retry(tmp_path):
     import socket
     import threading
@@ -949,9 +978,11 @@ def test_systemd_guard_inherits_package_lease(tmp_path):
 
 def test_start_rejected_while_job_publishes_under_exclusive_package_lock(helper):
     service, adapter, record = helper
-    with nh.package_lease(service.registry, exclusive=True):
-        with pytest.raises(nh.HelperError, match="still executing"):
-            service.handle(req("start"), peer_uid=record["uid"])
+    with (
+        nh.package_lease(service.registry, exclusive=True),
+        pytest.raises(nh.HelperError, match="still executing"),
+    ):
+        service.handle(req("start"), peer_uid=record["uid"])
     assert not (service.registry / "op-probe-one.json").exists()
     assert not any(action == "start" for action, _ in adapter.calls)
 
