@@ -3,6 +3,7 @@ import os
 import pathlib
 import select
 import socket
+import struct
 import sys
 import threading
 import time
@@ -97,11 +98,20 @@ def run():
         assert endpoint.exists() and not poller.poll(0)
         with socket.socket(socket.AF_UNIX) as client:
             client.settimeout(5)
+            client.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
             client.connect(str(endpoint))
             with helper._socket_peer_process(client) as peer:
                 assert peer["pid"] == worker_pid
                 client.sendall(b"{}\n")
-                assert b"helper_request_refused" in client.recv(1024)
+                response, controls, flags, _ = client.recvmsg(1024, socket.CMSG_SPACE(struct.calcsize("3i")))
+                assert not flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC)
+                assert b"helper_request_refused" in response and response.endswith(b"\n")
+                credentials = [data for level, kind, data in controls
+                               if level == socket.SOL_SOCKET and kind == socket.SCM_CREDENTIALS]
+                assert len(credentials) == 1 and len(credentials[0]) == struct.calcsize("3i")
+                sender_pid, sender_uid, _sender_gid = struct.unpack("3i", credentials[0])
+                assert sender_pid == worker_pid and sender_uid == 0
+                print("VERIFIED_HELPER_REFUSAL_RESPONSE_SENDER_MATCHES_FIXTURE_CHILD", flush=True)
         try:
             with helper._daemon_lease(registry):
                 raise AssertionError("worker did not hold inherited lease")

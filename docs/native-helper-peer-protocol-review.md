@@ -160,3 +160,10 @@
 一次性无网络 Linux 6.18 容器中安装准确 `57714ae` DEB，以包内 `Systemd.start` 创建真实 guard 和受控替身 sender，模拟 helper 监听及已接受 socket，即使将二者设为可继承，`/proc` 中 guard 和 sender 都没有相应 socket inode；回执为 sender_reaped。`scripts/accept-native-guard-fd.sh` / `scripts/probe-native-guard-fd.py`，输出 `GUARD_SENDER_HELPER_SOCKET_NOT_INHERITED_FIXTURE_OK`，日志 `20261027-223607-466555.log`。另有 Linux 专用回归测试；macOS 上该测试显式跳过。
 
 这只证明该 guard exec 路径在所测环境未继承这两个 socket；sender 为替身，未覆盖其他入口、真实 systemd、fork 后未 exec 的窗口、父子受控启动或恶意 FD 传递，不能将其视为实际处理者证明或开放派发依据。
+
+
+## 已验证候选的拒绝响应发送者（隔离 fixture）
+
+一次性无网络 Linux amd64/Rosetta 容器安装准确 `19b7065` DEB（SHA256 `067e364ba671ebdd5986e9846696631e31ff22ba05fe549da2e67d026eb18359`），不覆盖包内源码。`probe-native-verified-parent-exit.py` 使用独立 bootstrap 发布并验证候选内存字节，父持双锁 fork 子进程，由子加载该字节并调用实际 `_serve`。连接端的 `SO_PEERCRED` / pidfd 标识子进程；对一次不合法请求启用 `SO_PASSCRED` 接收拒绝响应，核验单一、完整 `SCM_CREDENTIALS` 的发送 PID 是该 fixture 子进程且 UID 为 root。之后父退出，fixture watchdog 令子退出并释放双锁；陈旧 socket 保留并拒绝连接。输出 `VERIFIED_HELPER_REFUSAL_RESPONSE_SENDER_MATCHES_FIXTURE_CHILD` 与 `VERIFIED_PARENT_EXIT_PIDFD_FIXTURE_OK`，日志 `20261028-010539-fe692b.log`。
+
+该结果只覆盖一次拒绝响应，真实 `_serve` 调用来自测试脚本直接内部入口并绕开 `serve` 获取锁的包装；父子和 watchdog 是 fixture。逐消息凭据证明该消息发送时 PID/UID，不证明 handler 在先前实际执行业务动作、其他消息、生产 systemd InvocationID、处理期间存活、代码身份或状态提交的原子性。不能据此授予 dispatch 或恢复权限；当前两者默认关闭。

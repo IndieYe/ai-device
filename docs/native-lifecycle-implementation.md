@@ -1285,3 +1285,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 从干净 `19b7065a4d8a00693d5c5205e2a447394975af29` 离线构建 wheel，Device SHA256 `922241377dadebb26e7ab70128ef25dec252b981c299813b36bbb837e59b0a77`，六核心模块逐字节对应 Git（`20261028-010058-867dae.log`）。无网络 amd64/Rosetta Linux 构建未签名 DEB：`build/native-packages-p1-19b7065/ai-device-native-client_0.2.2-1_amd64.deb`，109820702 字节，SHA256 `067e364ba671ebdd5986e9846696631e31ff22ba05fe549da2e67d026eb18359`（`20261028-010115-f7a987.log`）。独立干净安装比对主 runtime 六模块、bootstrap 四模块及覆盖保护通过（`20261028-010202-c9c491.log`）。
 
 独立无网络 systemd 容器核对 DEB/wheel，先验证生产派发 gate 拒绝且无 intent，测试替身派发后候选仍被包保护拒绝并保持 unknown。对于实际 job 测试台账，未替换的 `recover_job` 和底层带 job 摘要 `Updates.recover` 均拒绝，未执行 systemd 观察、无文件改写或新增且 active 不变：`PRODUCTION_JOB_RECOVERY_GATE_REFUSED_WITHOUT_WRITES`。之后明确输出 `DISPOSABLE_RECOVERY_FENCE_SUBSTITUTE`，仅测试进程内替换门禁以回归旧路径；其结果不表示生产恢复许可（`20261028-010228-881319.log`）。fixture 解包 DEB 后重装同批 wheel，与独立包内安装核验分开；容器已停止（`20261028-010309-b70a9e.log`）。旧 snapshot、生产 worker 身份、invocation/恢复协调、RPM 和真实设备仍未验证。
+
+
+## 163. 验证候选 helper 拒绝响应的逐消息发送者
+
+使用准确 `19b7065` DEB 的独立 bootstrap，在无网络一次性 Linux amd64/Rosetta 容器运行扩展 `probe-native-verified-parent-exit.py`。父持双锁，子加载验证过的候选内存字节并调用实际 `_serve`；客户端在一次拒绝请求上检查内核 `SCM_CREDENTIALS`，响应发送 PID 与受控 fixture 子进程一致；随后父退出触发测试 watchdog，子退出、双锁释放，stale socket 保留。`VERIFIED_HELPER_REFUSAL_RESPONSE_SENDER_MATCHES_FIXTURE_CHILD` 与 `VERIFIED_PARENT_EXIT_PIDFD_FIXTURE_OK`（`20261028-010539-fe692b.log`），ruff 通过。
+
+仅覆盖单次拒绝响应与该 fixture，不能证明生产 systemd invocation、消息执行者对副作用的因果归属或检查后活性，未开放 dispatch/job 恢复。详细边界见 `docs/native-helper-peer-protocol-review.md`。
