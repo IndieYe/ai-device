@@ -116,3 +116,9 @@
 `native_start_sender.py` 提供 `systemd-start-tree-subreaper-v1` 候选，只在直接 systemctl 与被收养后代回收后发布绑定 intent 的结构化回执；独立实验见实施记录第190节。该候选未接入当前 start 或恢复，不能证明 systemd 管理的外部 job 或 unit 完成、回执来源及持久性，也不能在锁空闲或存在回执时解除生产门禁。须先设计绑定受控 handler、invocation、sender、外部 systemd 动作和持久终态的完整协议，并覆盖旧快照、并发与崩溃恢复，再考虑接入。
 
 第191节在一次性隔离 systemd 上运行候选 guard：sender 树回执发布后，fixture unit 仍有 systemd 管理的存活 MainPID 与 InvocationID。该观察不是 Device 故障；它明确区分 sender 已结束与服务仍运行这两类事实，也不提供 invocation 原子绑定或恢复许可。
+
+### root-only 消息的连接身份边界
+
+第199节一次性 Linux fixture 使用真实 Unix listener/connect：root 建立连接后将已连接 FD 继承给降权子进程，子进程发送请求；服务端连接级 `SO_PEERCRED` 仍报告 root 连接创建者，而启用 `SO_PASSCRED` 的 `recvmsg` 得到发送消息的非 root 子进程凭据。该反例需要显式 FD 转交，不证明当前生产客户端发生转交，也不证明当前普通动作存在漏洞。
+
+因此本草案上文“接收时内核 peer UID=0”只能视为连接创建者约束，不能单独视作每个消息的实际发送者或业务动作执行者证明。未来 root-only 交接若依赖连接能力不转交，须明确可信管理员和调用方持有该能力的约束并验证；若需要逐消息身份，必须单独定义分帧、SO_PASSCRED/SCM_CREDENTIALS、凭据缺失或多段数据、进程存活和跨进程交接语义，并与受控 handler、动作和 invocation 绑定一起验证。无论哪种方案，生产新派发与恢复继续默认拒绝，不能据本实验开放权限。

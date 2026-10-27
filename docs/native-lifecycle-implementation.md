@@ -1556,3 +1556,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 核查当前标准 Debian `apply_intent`：prepared/runtime snapshot 摘要和 dpkg-deb 的 Package/Version/Architecture 均由字符串构成；尚未发现正常路径中可触达的布尔/整数混同，未仅凭假设修改该比较。新增 `Debian` 子类隔离 fixture：在适配器执行时写入错误目标版本的 outcome，实际 `Updates.apply` 报 `package guard outcome intent differs`，已发布 apply intent 和 outcome 保留；同 ID 再调用只返回观察，不再次调用包适配器，相关文件字节不变。测试不运行 dpkg、真实 guard 或 systemd；重复调用的观察不证明 outcome 可信或事务安全完成。
 
 更新/job 定向 `144 passed`（`20261028-034450-b06a4b.log`）；完整 `1200 passed, 16 skipped`（`20261028-034500-99d4aa.log`）；ruff 和 diff 检查通过。本项只新增测试，不更改生产门禁，未构建新包；旧快照和在途动作不自动受保护。外部工作终态、真实 handler/invocation 绑定以及其他持久证据比较仍未完成审计。
+
+
+## 199. root 连接创建者与请求发送者的身份边界
+
+`probe-native-request-credential-transfer.py` 在无网络一次性 Linux 容器中创建 Unix listener，root 连接后 fork 并使子进程降权至 UID/GID 12345，子进程使用继承的连接 FD 发送请求。服务端 `SO_PEERCRED` 仍是 root 连接创建者；启用 `SO_PASSCRED` 的 `recvmsg` 得到子进程实际 PID/UID/GID（`20261028-034855-407d7e.log`）。先前 socketpair 形式亦通过，但正式证据以 listener/connect 为准。脚本限 root Linux PID1 和特定测试环境变量，运行后 `--rm`，不启动 helper、systemd 或 Device。
+
+反例依赖主动继承 FD，不证明真实客户端会跨身份转交，也不证明现有生产普通动作漏洞。它明确未来 root-only 交接不能单独把连接级 peer UID 当成每条消息发送者或实际执行者；逐消息凭据、分帧、可转交连接能力和 handler/invocation 绑定须另行设计。未修改生产认证、新派发或恢复门禁；无新包、无真实设备操作。
