@@ -74,7 +74,7 @@ def test_dispatch_records_once_without_replay(transaction, monkeypatch, lost):
     real_digest = job.helper._digest
 
     def digest(path):
-        if path.name in ("native_update.py", "native_update_job.py", "native_helper.py"):
+        if path.name in ("native_update.py", "native_update_job.py", "native_helper.py", "management_lock.py"):
             return "same-worker-bytes"
         return real_digest(path)
 
@@ -142,7 +142,7 @@ def test_dispatch_fsync_failure_never_calls_runner(transaction, monkeypatch, fai
     original_digest = job.helper._digest
 
     def digest(path):
-        if path.name in ("native_update.py", "native_update_job.py", "native_helper.py"):
+        if path.name in ("native_update.py", "native_update_job.py", "native_helper.py", "management_lock.py"):
             return "same-worker-bytes"
         return original_digest(path)
 
@@ -211,7 +211,7 @@ def test_dispatch_process_exit_after_durable_intent_does_not_replay(transaction,
     runner_marker = transaction.parent / "unexpected-runner"
 
     def digest(path):
-        if path.name in ("native_update.py", "native_update_job.py", "native_helper.py"):
+        if path.name in ("native_update.py", "native_update_job.py", "native_helper.py", "management_lock.py"):
             return "same-worker-bytes"
         return original_digest(path)
 
@@ -333,7 +333,7 @@ def test_dispatch_process_exit_after_runner_begins_stays_recorded(transaction, m
     original_digest = job.helper._digest
 
     def digest(path):
-        if path.name in ("native_update.py", "native_update_job.py", "native_helper.py"):
+        if path.name in ("native_update.py", "native_update_job.py", "native_helper.py", "management_lock.py"):
             return "same-worker-bytes"
         return original_digest(path)
 
@@ -654,3 +654,47 @@ def test_observe_rejects_json_type_drift_in_nested_intent(transaction, changed_f
     with pytest.raises(job.JobError, match=error):
         job.observe_job(manager, "probe", "one", runner=runner)
     assert {p.name: p.read_bytes() for p in transaction.parent.iterdir() if p.is_file()} == before
+
+
+def test_dispatch_refuses_drift_in_snapshot_management_lock_before_intent(transaction, monkeypatch):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from device_runtime import native_update as update
+
+    monkeypatch.setattr(job.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(__import__("sys"), "platform", "linux")
+    monkeypatch.setattr(job, "_require_proven_job_fence", lambda: None)
+    monkeypatch.setattr(job.bootstrap, "snapshot_runtime", lambda *args: {})
+    transaction.with_suffix(".apply-intent.json").unlink()
+    original_digest = job.helper._digest
+    snapshot = transaction.with_suffix(".bootstrap")
+
+    def digest(path):
+        path = __import__("pathlib").Path(path)
+        if path.name == "management_lock.py":
+            return "old" if snapshot in path.parents else "current"
+        if path.name in ("native_update.py", "native_update_job.py", "native_helper.py"):
+            return "same-worker-bytes"
+        return original_digest(path)
+
+    monkeypatch.setattr(job.helper, "_digest", digest)
+
+    @contextmanager
+    def txn(*args):
+        yield {}, transaction
+
+    @contextmanager
+    def lease(*args):
+        yield
+
+    manager = SimpleNamespace(
+        packages=update.Debian(), registry=transaction.parent.parent,
+        _transaction=txn, _prepared=lambda *args: {}, _apply_lease=lease,
+    )
+    calls = []
+    with pytest.raises(job.JobError, match="snapshot worker code differs"):
+        job.dispatch_job(manager, "probe", "one", runner=lambda *a, **k: calls.append(a))
+    assert not calls
+    assert not transaction.with_suffix(".job-intent.json").exists()
+    assert not transaction.with_suffix(".job-dispatch.json").exists()

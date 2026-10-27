@@ -148,7 +148,11 @@ def dispatch_job(manager, instance_id, operation_id, *, runner=None):
             bootstrap.snapshot_runtime(Path(sys.base_prefix), snapshot)
             # Never launch an old seed which lacks this exact worker implementation.
             package = snapshot / "runtime/lib/python3.13/site-packages/device_runtime"
-            for module in ("native_update.py", "native_update_job.py", "native_helper.py"):
+            # These checks are a necessary subset, not proof of the whole worker
+            # dependency closure or authorization to dispatch.
+            for module in (
+                "native_update.py", "native_update_job.py", "native_helper.py", "management_lock.py"
+            ):
                 if helper._digest(package / module) != helper._digest(
                     Path(__file__).with_name(module)
                 ):

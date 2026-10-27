@@ -1348,3 +1348,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 使用准确 `ef7fa12` DEB 干净安装，在运行实验前逐字节比对容器只读候选代码与包内模块；仅容器内替换 dpkg 为测试 fixture。对无回执但已有 package log 的普通文件与悬空符号链接，`open('xb')` 均在 fixture 包动作前拒绝，保留原文件或链接且不生成回执；同时重新验证协议漂移、后代收口、既有回执、guard 崩溃及目录 fsync 未知边界（`20261028-014259-45c960.log`）。
 
 这是 guard 本地行为，不证明旧 worker 遵守本协议、持久 intent 的单次派发或所有失败状态均可安全重试；生产候选仍未接入，原默认拒绝和保留 unknown 不变。
+
+
+## 171. dormant job 快照补充锁模块身份校验
+
+现有 dormant dispatcher 只对 `native_update.py`、`native_update_job.py` 和 `native_helper.py` 比较快照与当前模块字节，未覆盖 helper 实际导入、控制实例互斥的 `management_lock.py`。仅在测试中替换生产派发默认拒绝门禁、虚构快照锁模块新旧摘要差异后，原实现仍可创建 job intent（`20261028-014603-9041b1.log`）；不代表真实生产派发已开放或真实旧快照已运行。
+
+新建 job intent 前增加锁模块精确摘要比较，漂移时在发布 intent 和调用 runner 前拒绝；保留既有 intent 原有只读/不重放行为，不自动修改旧快照。定向回归 118 通过（`20261028-014656-919acb.log`），完整 1149 通过、10 跳过（`20261028-014706-3cc067.log`）。此四模块校验只是必要子集，`native_bootstrap`、`native_candidate` 等其余依赖、包树候选和完整 worker 版本封闭仍需明确，不能据此证明身份或开放生产派发；原恢复门禁不变。准确新包尚未构建。
