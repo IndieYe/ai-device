@@ -636,3 +636,7 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 58. 旧锁路径替换候选的提前打开竞态
 
 一次性Linux容器提取v17原helper，在隔离fixture中预先打开其daemon锁文件，再将锁路径替换为符号链接：随后通过原helper `_daemon_lease` 打开路径因`O_NOFOLLOW`以ELOOP拒绝，但此前打开的旧inode描述符仍能成功获取EX flock。证明仅替换锁路径无法排除旧进程在替换前打开、替换后获取旧inode的竞态；更未证明正在运行的daemon、sender及宿主重启的安全收口。该实验不构成受支持的迁移实现，不得用于真实环境或删除/替换真实锁文件。新job派发保持关闭、原包保护不变，未操作真实服务。
+
+## 59. v24 RPM声明依赖测试事务
+
+一次性Rocky Linux 9 x86_64容器对既有v24开发RPM（SHA256 `da2731ad27205ab25918740f41c2fd8725fab9550229cf62207694267fb0361b`）执行`rpm -qp --requires`和不带`--nodeps`的`rpm -i --test`，均成功；声明依赖仅为五项rpmlib能力。该测试事务未安装包，不等于真实脚本执行、动态库完整性、离线运行时依赖闭包或最新源码制品验收；v24仍使用旧v17 payload。旧helper安全迁移未实现，新job派发关闭，原包保护不变，未操作真实设备。
