@@ -1502,3 +1502,8 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 新增 `native_start_sender.py`：候选协议 `systemd-start-tree-subreaper-v1` 在固定 `/usr/bin/systemctl start` 前启用 Linux subreaper，直接 sender 完成或超时后继续等待收养后代直至 ECHILD，再以文件 fsync、无覆盖 link 和目录 fsync 写版本化回执；回执结构使用类型敏感完整 intent 比较。候选不被当前生产调用；调用者仍须独立保障固定 runtime、intent 与执行/包锁的持有，不能将结构匹配当作来源、持久性或恢复授权。守卫持锁时间不保证有界；guard 异常退出不会终止后代。
 
 `probe-native-start-tree-candidate.py` 在无网络一次性 Linux PID1 容器中替换容器内 systemctl 为惰性 fixture，验证旧协议与已有文件/悬挂符号链接在动作前拒绝、后代活动时无回执且继承的 lease 持续被守卫持有、正常退出后才发布回执；杀死该测试守卫后，锁空闲但后代仍活且无回执；测试专用缩短超时显示直接 sender 超时后仍等待后代；在 link 后注入目录 fsync 故障时回执可见但终态未知（`20261028-031552-3b5947.log`）。不涉及真实 systemctl、Device 或掉电，不证明外部 systemd 工作结束。完整 Device 回归 `1177 passed, 16 skipped`（macOS，6 个新增 Linux 单测跳过，Linux fixture 独立覆盖对应拒绝）；ruff 通过。旧 helper/snapshot 和现有 unknown/started/包更新门禁均不改变，P1 未完成。
+
+
+## 191. start sender 树完成不覆盖 systemd unit 生命周期
+
+使用第190节未接入候选，在无网络一次性隔离 systemd 容器启动独立惰性 fixture unit：guard 返回并发布 sender-tree 回执时，unit 的 MainPID 大于1、InvocationID 非空、进程存在且 PPid 为1；fixture 释放后自然完成，容器停止（`20261028-031711-6d34bf.log`，`scripts/probe-native-start-tree-external-systemd.py`）。这验证 sender 的收养树不等于 systemd 管理的 unit 或其外部工作，不能依据 sender 回执单独断言 unit 终态或授权恢复。start 成功后服务继续运行本身是预期行为；实验未启动真实 Device，也不证明业务故障或其安全恢复方式。真实 invocation 绑定、并发重启/排队 job 与崩溃持久化仍须解决，生产默认拒绝不变。

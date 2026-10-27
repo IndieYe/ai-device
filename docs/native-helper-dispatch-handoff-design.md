@@ -114,3 +114,5 @@
 ### start sender 的未接入候选
 
 `native_start_sender.py` 提供 `systemd-start-tree-subreaper-v1` 候选，只在直接 systemctl 与被收养后代回收后发布绑定 intent 的结构化回执；独立实验见实施记录第190节。该候选未接入当前 start 或恢复，不能证明 systemd 管理的外部 job 或 unit 完成、回执来源及持久性，也不能在锁空闲或存在回执时解除生产门禁。须先设计绑定受控 handler、invocation、sender、外部 systemd 动作和持久终态的完整协议，并覆盖旧快照、并发与崩溃恢复，再考虑接入。
+
+第191节在一次性隔离 systemd 上运行候选 guard：sender 树回执发布后，fixture unit 仍有 systemd 管理的存活 MainPID 与 InvocationID。该观察不是 Device 故障；它明确区分 sender 已结束与服务仍运行这两类事实，也不提供 invocation 原子绑定或恢复许可。
