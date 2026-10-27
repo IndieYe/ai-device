@@ -151,3 +151,13 @@ release envelope严格为payload/key_id/signature；签名是对既有canonical 
 结果只为`authenticated_extracted`，明确`venv_prepared:false`、`activated:false`。尚未接入native_update批准/应用；旧prepare摘要台账不能当已验签证明。最终目录venv准备、运行候选证据消费、正式信任根、包内native依赖交付/RPM仍缺；现有包覆盖保护不变。Linux包含大小写不同的文件，大小写不敏感文件系统可能被安全拒绝；请在隔离Linux验证，不关闭碰撞检查。
 
 `accept-native-candidate.py PACKAGE OUTPUT --development-ephemeral-key`仅供开发DEB验收，内存临时密钥不落盘，不构成正式发布认证。已在隔离Linux普通UID12345对v15包成功认证提取10443成员/285493398字节；包SHA da0fadb10d904e48a1d80669cae9eb6d61c8751668e62b9585d093cf9a73e7b0。依赖在临时容器联网安装，不能据此声称native验签依赖离线交付已完成。无安装、启动或激活。
+
+## 普通用户原生运行候选入口（P1开发子阶段）
+
+`python -m device_runtime.native_prepare --root ... --package ... --envelope ... --trusted-keys ... --release-id ... --operation-id ... --bootstrap-version ... --uv-executable ...` 重验签名并从包重新提取，不能只信用户可编辑candidate.json。限Linux登记所有者非root、schema2完整binding及单client角色；核对unit/run/identity/roles摘要。使用专用native_preparation_lease（管理EX）与安装SH锁，允许运行中的客户端继续工作但排除其他维护，旧工具仍拒绝受管实例。当前Python真实路径及显式uv均要求管理员可信非可写持久路径，不执行提取目录工具。
+
+先在`native-candidates/<id>.intent.json`记录源active/marker、签名发布摘要、持久工具摘要，再重新认证提取到保留目录，复用installation._prepare于最终release目录直接创建venv和健康检查。文件落盘后核对active和marker未变，再发布runtime_prepared结果，不切换active。相同ID只在源及release/bundle/解释器证据仍有效时返回原结果；无完成或失败结果禁止相同/新ID自动重放。失败保留release及证据供后续管理员恢复，不提供删除台账解锁流程。完整准备恢复/批准消费尚缺。
+
+新登记schema2 marker以root 0644原子发布，内容仅绑定路径/摘要，不含凭证；其他操作账本仍默认0600，凭证环境仍0600。已有0600 marker不会自动chmod，普通用户读取失败需管理员明确处理，非自动迁移。之前v15包和已运行helper不自动加载新代码。
+
+新增accept-native-prepare.py需在隔离Linux已登记实例运行；开发临时密钥不作为正式发布。真实实验UID12345、持久CPython3.13.17和包内uv：runtime_prepared，同IDrelease稳定，active字节不变；未运行systemd/client或包安装脚本。native验签依赖在临时容器联网安装，运行venv从v15离线bundle构建；不能称新模块原生制包离线交付。完整Device895项通过。更新批准尚未消费本结果，不解除原包门禁。

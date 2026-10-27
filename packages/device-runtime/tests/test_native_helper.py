@@ -949,3 +949,12 @@ def test_registration_blocked_by_package_execution_or_persistent_intent(
             recover=True,
         )
     assert called == []
+
+
+def test_marker_readable_and_operation_receipt_private(tmp_path):
+    marker = tmp_path / "marker.json"
+    receipt = tmp_path / "operation.json"
+    nh._save_new(marker, {"binding": "non-secret"}, mode=0o644)
+    nh._save_new(receipt, {"operation": "private"})
+    assert marker.stat().st_mode & 0o777 == 0o644
+    assert receipt.stat().st_mode & 0o777 == 0o600

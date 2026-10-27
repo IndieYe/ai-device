@@ -400,3 +400,13 @@ v15 DEB/RPM准确同源：helper SHA256 `ab716baaa822496a25f737c2291d1d993b2511b
 用户要求后创建整体任务状态blk-42959，实际Enter成功，关联auto_enters任务模板blk-13687；当前会话状态blk-42545经set-execution-task设置references.role=execution，set-automation开启stop_reason_check，已核验metadata=true。完整任务P0—P5记录于任务Resource bres-3249；授权仍仅隔离P1，不扩大真实服务等边界。
 
 复用Worktree de51eeb基线开始下一准备子阶段。installation._prepare新增显式uv_executable可选参数，必须绝对可执行文件，避免原生入口靠可变PATH选工具；原调用默认不变。解释器仍用当前持久CPython3.13真实路径，不新增任意解释器入口。3项回归验证指定uv、无PATH查询、最终release目录venv、不改active及无效工具提前拒绝。安装64项、完整Device881 passed in 41.28s，ruff通过。未接原生准备入口、未执行真实venv/包/服务实验，不能称完整候选准备交付；下一项是验签候选证据消费与最终目录准备台账。无数据库/前端/公开API或配置变化。
+
+## 22. 普通用户最终目录运行候选准备（P1开发子阶段）
+
+新增native_prepare.py入口与专用原生管理租约；非root Linux登记所有者核对schema2 marker完整绑定及源active，持管理EX/安装SH，重新验签提取而不信可编辑完成JSON；当前持久解释器与显式uv需root可信路径，不执行候选内工具。先意图，再共用core._prepare最终目录venv/健康检查，fsync并核对源active/marker后完成。相同ID验证证据后仅观察；中断无完成及失败均禁止换新ID自动重放，保留现场。未实现准备失败管理员收口及候选批准消费，不能称更新已交付。
+
+真实隔离Linux首次发现marker默认0600导致普通用户无法读绑定；修复新登记marker在原子发布前设0644（不含凭证），其他账本默认0600。既有marker不自动改权限，不把权限拒绝当旧登记迁移完成。重新用UID12345在一次性无systemd容器验证：v15包仅dpkg-deb -x无脚本解包，普通用户新建离线实例、root登记未start/enable，内存临时测试签名认证，普通用户最终目录准备成功runtime_prepared，同ID不重建，active字节未变。实际release 0.2.2-a1a9fef8fc39406a88b8d0ee78112c71。容器--rm已回收。验签依赖临时联网安装，不是新模块离线制包验证；运行venv来自v15离线bundle。accept-native-prepare.py保存复现步骤。
+
+测试：原生准备12项、管理锁24项、helper83项（新增marker权限）及完整Device **895 passed in 42.08s**；ruff/diff通过。覆盖同ID不重放、失败/中断阻止同/新ID、源变化、release证据/解释器丢失、共享运行锁允许准备/独占维护拒绝、完整binding漂移、root拒绝、专用管理租约保持旧门禁。尚无真实guard崩溃/后代回收及管理员恢复链验收，完成回执不代表持久OS事务。
+
+实现/测试/开发验收脚本/HELPER文档已更新；无数据库、前端或公开IPC变化。新模块未接构建器、包钩子和更新批准，v15不含新模块，不操作真实服务设备。下一项消费runtime候选证据绑定更新prepare/approve，先明确root重新认证及普通用户结果可信性边界，不因JSON自洽就认可可激活；同时补准备中断恢复。P1未完成，不进入P2。

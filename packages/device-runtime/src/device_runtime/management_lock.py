@@ -30,6 +30,27 @@ def management_lease(root, *, registration=False, recovery=False):
         os.close(fd)
 
 
+@contextmanager
+def native_preparation_lease(root):
+    """Exclusive native maintenance lease; caller validates schema2 binding.
+
+    Does not grant registration recovery or permit legacy writes. The named
+    native entry must authenticate the owner and marker before using this.
+    """
+    root = Path(root).resolve()
+    fd = os.open(root / ".management.lock", os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ValueError("native preparation or instance maintenance active") from exc
+        if not (root / MARKER).is_file() or (root / MARKER).is_symlink():
+            raise ValueError("native preparation requires a registered instance")
+        yield
+    finally:
+        os.close(fd)
+
+
 def legacy_operation(function):
     @wraps(function)
     def wrapped(root, *args, **kwargs):

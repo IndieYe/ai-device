@@ -108,13 +108,13 @@ def test_registration_fence_published_before_unit_and_record(tmp_path, monkeypat
     monkeypatch.setattr(native_helper, "_trusted_marker", lambda path: None)
     real_save = native_helper._save_new
 
-    def save(path, value):
+    def save(path, value, **kwargs):
         if path.parent == registry:
             assert (root / MARKER).exists()
             with pytest.raises(ValueError, match="active"), management_lease(root):
                 pass
             raise OSError("injected record failure")
-        real_save(path, value)
+        real_save(path, value, **kwargs)
 
     monkeypatch.setattr(native_helper, "_save_new", save)
     with pytest.raises(OSError, match="record failure"):
@@ -206,3 +206,18 @@ def test_marker_trust_checks_file_not_user_owned_ancestors(uid, mode, accepted):
     else:
         with pytest.raises(native_helper.HelperError, match="management marker"):
             native_helper._trusted_marker(Marker())
+
+
+def test_native_preparation_lease_keeps_legacy_fence(tmp_path):
+    from device_runtime.management_lock import native_preparation_lease
+
+    with pytest.raises(ValueError, match="registered instance"), native_preparation_lease(tmp_path):
+        pass
+    (tmp_path / MARKER).write_text("caller validates binding separately")
+    with native_preparation_lease(tmp_path):
+        with pytest.raises(ValueError, match="active"), native_preparation_lease(tmp_path):
+            pass
+        with pytest.raises(ValueError, match="active"), management_lease(tmp_path):
+            pass
+    with pytest.raises(ValueError, match="native-managed"), management_lease(tmp_path):
+        pass

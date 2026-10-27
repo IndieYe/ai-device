@@ -99,13 +99,14 @@ def _assert_no_package_intent(registry):
         raise HelperError("package transaction blocks start; administrator recovery required")
 
 
-def _save_new(path, value):
+def _save_new(path, value, *, mode=0o600):
     data = json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
     # Hard-link publication provides no-replace semantics, even with other writers.
     fd, temporary = tempfile.mkstemp(prefix=".helper-", dir=path.parent)
     temporary = Path(temporary)
     try:
         with os.fdopen(fd, "wb") as stream:
+            os.fchmod(stream.fileno(), mode)
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
@@ -342,7 +343,7 @@ def _register(registry, unit_dir, *, instance_id, root, username, environment_fi
                 "registration recovery baseline differs or is legacy; explicit adoption required"
             )
     else:
-        _save_new(marker_path, marker)
+        _save_new(marker_path, marker, mode=0o644)
     record = {**baseline, "management_sha256": _digest(marker_path)}
     # Verify every existing artifact before adding any missing artifact.
     for path, expected in ((unit_path, content), (record_path, record)):
