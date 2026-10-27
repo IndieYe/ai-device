@@ -52,7 +52,7 @@ def describe_job(stem):
             "architecture": prepared["metadata"]["Architecture"],
         },
     }
-    if intent != expected:
+    if not helper._same_json(intent, expected):
         raise JobError("job intent differs from approved snapshot and target")
     # This identifier has no user-controlled unit syntax or systemd expansions.
     key = hashlib.sha256(str(stem).encode()).hexdigest()

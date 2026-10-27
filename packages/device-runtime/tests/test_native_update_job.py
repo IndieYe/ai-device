@@ -43,6 +43,26 @@ def test_staged_job_is_deterministic_non_dispatching(transaction):
     assert not transaction.with_suffix(".job").exists()
 
 
+def test_describe_job_rejects_nested_target_type_drift(transaction):
+    prepared_path = transaction.with_suffix(".prepared.json")
+    approval_path = transaction.with_suffix(".approved.json")
+    intent_path = transaction.with_suffix(".apply-intent.json")
+    prepared = json.loads(prepared_path.read_bytes())
+    prepared["metadata"]["Version"] = 1
+    prepared_path.write_text(json.dumps(prepared))
+    digest = job.helper._digest(prepared_path)
+    approval_path.write_text(json.dumps({"prepared_sha256": digest, "approved_by_uid": 0}))
+    intent = json.loads(intent_path.read_bytes())
+    intent["prepared_sha256"] = digest
+    intent["target_package"]["version"] = True
+    intent_path.write_text(json.dumps(intent))
+    before = {path: path.read_bytes() for path in (prepared_path, approval_path, intent_path)}
+    with pytest.raises(job.JobError, match="job intent differs"):
+        job.describe_job(transaction)
+    assert {path: path.read_bytes() for path in before} == before
+    assert not transaction.with_suffix(".job").exists()
+
+
 @pytest.mark.parametrize("change", ["approval", "target", "snapshot"])
 def test_changed_transaction_evidence_refused(transaction, change):
     if change == "approval":

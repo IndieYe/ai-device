@@ -663,7 +663,7 @@ class Updates:
                 }
                 path = stem.with_suffix(".recovery.json")
                 if path.exists():
-                    if json.loads(path.read_text()) != receipt:
+                    if not nh._same_json(json.loads(path.read_text()), receipt):
                         raise UpdateError("recovery evidence changed; explicit review required")
                 else:
                     _atomic(path, receipt)

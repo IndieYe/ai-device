@@ -1528,3 +1528,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 `register(..., recover=True)` 对管理标记和现有登记记录原先使用 Python 普通字典比较，测试中将嵌套 baseline 的 schema 或 GID `1` 改为 `true`、并对标记变化重新计算登记中的 management SHA；以及将登记记录的 schema 或 GID 改为 `true`，四种情况下真实恢复入口均未拒绝（`20261028-032829-004aeb.log`）。这些是本机隔离 fixture，账户、信任检查和管理锁采用替身，不证明正常系统自动产生异常记录。
 
 改为对标记和登记 JSON 使用现有 `_same_json` 类型敏感比较；systemd unit 文本仍按原文比较，锁顺序、信任检查及已有无覆盖发布未变。四项漂移均拒绝且原有文件字节不变；合法记录保持无写重用；登记冲突且 unit 缺失时不补建 unit。helper 定向 `184 passed, 1 skipped`（`20261028-032859-c92117.log`）；新增的第六项测试后登记定向 `6 passed`（`20261028-033017-a29085.log`）；第六项加入前完整回归 `1189 passed, 16 skipped`（`20261028-032914-de2fcf.log`）；ruff 和 diff 检查通过。未构建新包或执行真实登记；旧 helper/bootstrap/snapshot 不自动获得该修复，生产派发、恢复和包保护门禁不变。
+
+
+## 195. 更新恢复证据与只读 job 描述的类型敏感比较
+
+隔离测试先复现两处普通字典比较的类型混同：非 Debian 测试适配器已生成恢复记录后，将 `reapplied:false` 改为数字 `0`，原 `Updates.recover` 将旧证据当作相同；构造异常 prepared 包元数据版本数字 `1`、相应 approval 和 apply intent 摘要均重新绑定后，将 apply 目标版本设为 `true`，原只读 `describe_job` 接受该类型不一致（`20261028-033310-63db70.log`、`20261028-033230-e58022.log`）。后者是构造异常证据，不证明正常包元数据会出现数字版本或发生包动作。
+
+两处均改用 `_same_json`；漂移证据拒绝且文件不变，合法恢复记录仍可重用且不重放包操作，job 描述仍只读且不派发。更新/job 定向 `143 passed`（`20261028-033346-8e83cc.log`），完整 `1193 passed, 16 skipped`（`20261028-033357-bc9c83.log`），ruff 与 diff 检查通过。生产 Debian、job 恢复门禁未放开；未构建新包，旧 snapshot 不自动更新。bootstrap 回执、已有 outcome 等其他比较仅发现线索，尚未判断其字段和可达性，不声称全量审计。

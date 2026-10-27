@@ -741,6 +741,37 @@ def test_independent_runtime_failure_precedes_apply_intent(update):
     assert not list((registry / "updates").glob("*.apply-intent.json"))
 
 
+def test_recover_reuses_identical_evidence_without_reapplying(update):
+    manager, packages, _, _ = update
+    manager.apply("probe", "one")
+    manager.recover("probe", "one")
+    stem = manager.registry / "updates/5-probe--one"
+    before = {p.name: p.read_bytes() for p in stem.parent.iterdir() if p.is_file()}
+    calls = packages.calls
+    result = manager.recover("probe", "one")
+    assert result["recovery"]["reapplied"] is False
+    assert {p.name: p.read_bytes() for p in stem.parent.iterdir() if p.is_file()} == before
+    assert packages.calls == calls
+
+
+def test_recover_rejects_boolean_number_drift_in_existing_evidence(update):
+    manager, packages, _, _ = update
+    manager.apply("probe", "one")
+    manager.recover("probe", "one")
+    stem = manager.registry / "updates/5-probe--one"
+    recovery = stem.with_suffix(".recovery.json")
+    value = json.loads(recovery.read_bytes())
+    assert value["reapplied"] is False
+    value["reapplied"] = 0
+    recovery.write_text(json.dumps(value))
+    before = {p.name: p.read_bytes() for p in stem.parent.iterdir() if p.is_file()}
+    calls = packages.calls
+    with pytest.raises(nu.UpdateError, match="recovery evidence changed"):
+        manager.recover("probe", "one")
+    assert {p.name: p.read_bytes() for p in stem.parent.iterdir() if p.is_file()} == before
+    assert packages.calls == calls
+
+
 def test_snapshot_intent_recovery_checks_target_and_receipt(update, monkeypatch):
     manager, packages, _helper, _package = update
     manager.apply("probe", "one")
