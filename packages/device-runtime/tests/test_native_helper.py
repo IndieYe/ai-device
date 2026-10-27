@@ -385,6 +385,47 @@ def test_peer_process_rejects_non_root_and_unsupported_kernel(monkeypatch):
         pytest.fail("unsupported kernel accepted")
 
 
+def test_helper_unit_peer_observation_refuses_drift_and_pid_mismatch(monkeypatch):
+    import sys
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(nh.os, "geteuid", lambda: 0)
+
+    @contextmanager
+    def peer(_connection):
+        yield {"pid": 123, "uid": 0, "gid": 0, "pidfd": 7}
+
+    monkeypatch.setattr(nh, "_socket_peer_process", peer)
+    fields = {
+        "LoadState": "loaded", "ActiveState": "active", "SubState": "running",
+        "MainPID": "123", "InvocationID": "a" * 32,
+        "FragmentPath": "/etc/systemd/system/ai-device-native-helper.service",
+    }
+
+    def output(values):
+        return SimpleNamespace(stdout="".join(f"{key}={value}\n" for key, value in values.items()))
+
+    def run_with(*observations):
+        remaining = iter(observations)
+        return lambda *args, **kwargs: output(next(remaining))
+
+    result = nh.observe_helper_unit_peer(None, runner=run_with(fields, fields))
+    assert result["pid"] == 123 and result["dispatch_allowed"] is False
+    assert result["loaded_code_verified"] is False
+    changed = {**fields, "InvocationID": "b" * 32}
+    with pytest.raises(nh.HelperError, match="differ or changed"):
+        nh.observe_helper_unit_peer(None, runner=run_with(fields, changed))
+    mismatch = {**fields, "MainPID": "124"}
+    with pytest.raises(nh.HelperError, match="differ or changed"):
+        nh.observe_helper_unit_peer(None, runner=run_with(mismatch, mismatch))
+    with pytest.raises(nh.HelperError, match="not stably running"):
+        nh.observe_helper_unit_peer(None, runner=run_with({**fields, "ActiveState": "inactive"}))
+    with pytest.raises(nh.HelperError, match="incomplete"):
+        nh.observe_helper_unit_peer(None, runner=run_with({"MainPID": "123"}))
+
+
 def test_call_helper_does_not_retry(tmp_path):
     import socket
     import threading

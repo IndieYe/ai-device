@@ -950,6 +950,67 @@ def _socket_peer_process(connection):
         os.close(fd)
 
 
+def _helper_unit_observation(*, runner=subprocess.run):
+    """Read the fixed helper unit; duplicate, missing or uncertain fields fail closed."""
+    try:
+        result = runner(
+            [
+                "/usr/bin/systemctl", "show", "ai-device-native-helper.service", "--no-pager",
+                "--property=LoadState,ActiveState,SubState,MainPID,InvocationID,FragmentPath",
+            ],
+            check=True, text=True, capture_output=True, timeout=10,
+            env={"PATH": "/usr/bin:/bin", "LANG": "C"},
+        )
+        if len(result.stdout) > 16384:
+            raise HelperError("helper unit observation too large")
+        fields = {}
+        for line in result.stdout.splitlines():
+            key, separator, value = line.partition("=")
+            if not separator or key in fields:
+                raise HelperError("invalid helper unit observation")
+            fields[key] = value
+        expected = {"LoadState", "ActiveState", "SubState", "MainPID", "InvocationID", "FragmentPath"}
+        if set(fields) != expected:
+            raise HelperError("incomplete helper unit observation")
+        if (
+            fields["LoadState"] != "loaded"
+            or fields["ActiveState"] != "active"
+            or fields["SubState"] != "running"
+            or not fields["MainPID"].isdigit()
+            or int(fields["MainPID"]) <= 1
+            or not re.fullmatch(r"[0-9a-f]{32}", fields["InvocationID"])
+            or not fields["FragmentPath"].startswith("/")
+        ):
+            raise HelperError("helper unit is not stably running")
+        return fields
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise HelperError("cannot observe helper unit") from exc
+
+
+def observe_helper_unit_peer(connection, *, runner=subprocess.run):
+    """Bind this socket peer to a stable systemd observation, not loaded code.
+
+    This read-only result does not authorize dispatch or guarantee that the
+    same daemon will be running after this function returns.
+    """
+    if sys.platform != "linux" or os.geteuid() != 0:
+        raise HelperError("Linux administrator required")
+    with _socket_peer_process(connection) as peer:
+        before = _helper_unit_observation(runner=runner)
+        after = _helper_unit_observation(runner=runner)
+        if before != after or int(before["MainPID"]) != peer["pid"]:
+            raise HelperError("helper unit and socket peer differ or changed")
+        result = {
+            "state": "helper_unit_peer_observed_not_authorized",
+            "pid": peer["pid"],
+            "invocation_id": before["InvocationID"],
+            "fragment_path": before["FragmentPath"],
+            "loaded_code_verified": False,
+            "dispatch_allowed": False,
+        }
+    return result
+
+
 def call_helper(socket_path, request):
     """No automatic retries: a lost start response must be queried by the same ID."""
     data = json.dumps(request).encode() + b"\n"

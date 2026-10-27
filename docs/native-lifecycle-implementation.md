@@ -678,3 +678,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 68. socket peer 进程身份原语（未授权派发）
 
 新增 Linux `_socket_peer_process` 只读观察原语：先校验 socket SO_PEERCRED 的 root UID 与 PID，再通过 SO_PEERPIDFD 直接取得同一 socket peer 的 pidfd，校验 fdinfo PID，并在观察前后检查 peer 未退出；不支持的内核、非 root、身份不一致和退出均拒绝。pidfd 在作用域退出时关闭，不影响进程。一次性 amd64 Linux 容器（内核 6.18.15）实际 Unix socket 验证 peer PID、FD 不继承及进程退出被拒绝；另覆盖非 root 和内核不支持。该原语尚无生产调用方，不识别加载代码、不验证 systemd 单元或不可变启动快照，也不锁定观察结束后的 daemon 生命周期；不能用于开放 job 派发。旧测试环境手动退休、干净安装和实际互斥/故障验收仍是独立缺口；生产默认拒绝和包保护不变。
+
+
+## 69. systemd 单元与 socket peer 只读关联
+
+新增只读 `observe_helper_unit_peer`：在 peer pidfd 生命周期内两次查询固定 `ai-device-native-helper.service` 的 loaded/active/running、MainPID、InvocationID 和 FragmentPath；缺失、格式无效、两次状态漂移、peer PID 不同或观察时 peer 退出均拒绝。结果明确 `loaded_code_verified=false`、`dispatch_allowed=false`，不做服务操作。一次性 amd64 Linux 6.18 systemd 容器中使用测试 socket 单元验证匹配成功、另一 root 进程拒绝；不是实际 Device helper 安装、加载代码或启动快照验证。测试容器关机命令超时，随后列表确认该 `--rm` 实例已不存在。该观察不承诺返回后的 daemon 状态，未接入生产派发；仍须完成真实代码身份绑定、干净安装及真实互斥故障验收，默认派发拒绝保持不变。
