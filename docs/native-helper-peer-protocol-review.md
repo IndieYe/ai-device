@@ -125,3 +125,10 @@
 `scripts/probe-native-inherited-record.py` 在无网络一次性 Linux amd64/Rosetta 容器复用严格 `SO_PASSCRED`/SEQPACKET 接收原型：观察者以 fork 返回的受控 worker PID/UID 为预期，接受 worker 记录；worker 再 fork 后代，后代继承同一 sender 端点并发送，接收器按内核逐记录凭据拒绝后代。输出 `INHERITED_ENDPOINT_DESCENDANT_RECORD_REJECTED`，日志 `20261027-220920-1b90c3.log`；ruff通过。
 
 此为记录发送者区分实验，不证明公开 stream socket 实际处理者、不提供持久身份、systemd invocation、pidfd 生命周期或可信启动绑定，也不证明恶意 root 防护；预期 PID 仅来自实验 fork。不得将原型直接用于生产或开放派发。
+
+
+## pidfd 与逐记录凭据组合的队列边界
+
+一次性无网络 Linux amd64/Rosetta 容器运行 `scripts/probe-native-pidfd-record.py`：观察者从尚在握手等待的直接子进程建立 pidfd，以 SO_PASSCRED 严格接收其记录，并拒绝继承同一端点的后代记录；子进程发送最后一条记录后退出，观察者先见 pidfd 就绪，仍能接收凭据正确的排队记录。输出 `PIDFD_CREDENTIALS_DESCENDANT_REJECTED_QUEUED_AFTER_EXIT`，日志 `20261027-221331-1e89b9.log`。
+
+消息凭据说明发送时主体，不证明读取时存活；必须分别处理进程活性、记录时序与退出后的队列，且一次 pidfd 检查与后续动作仍不原子。该探针未绑定真实候选、systemd invocation、公开 stream、生产监督器或事务，不能授权派发。

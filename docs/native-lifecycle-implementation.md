@@ -1012,3 +1012,10 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 `probe-native-inherited-record.py` 在一次性无网络 Linux 6.18 amd64/Rosetta 容器复用严格 SEQPACKET+SO_PASSCRED 接收原型：worker 正常记录与观察者 fork 返回的 PID/UID 一致并接受；worker 后代继承同一个 sender 端点发送时，内核逐记录凭据的 PID 不同，拒绝该记录。`INHERITED_ENDPOINT_DESCENDANT_RECORD_REJECTED`，日志 `20261027-220920-1b90c3.log`，ruff通过。
 
 这只覆盖实验性消息发送者，并不证明公开 socket 的实际响应处理者或已验证代码；预期 PID 来源于测试 fork，未绑定生产 pidfd/systemd invocation、父死亡与事务闭环。生产派发保持关闭，未修改现有 IPC 权限。
+
+
+## 127. 子进程 pidfd 与逐记录凭据的退出队列边界
+
+重启后只读核实 AI Assistant 服务运行、当前会话唯一 execution 及停止检查开关、原 Worktree 干净并处于 `efa1479`；未重启或修改真实服务。新增 `probe-native-pidfd-record.py`，一次性无网络 Linux 6.18 amd64/Rosetta 容器中，观察者对等待握手的直接子进程取得 pidfd，接受预期 worker 记录，拒绝继承同一端点的后代记录；子发送最后记录后退出，pidfd 已就绪但该记录仍可读取且凭据正确。输出 `PIDFD_CREDENTIALS_DESCENDANT_REJECTED_QUEUED_AFTER_EXIT`，日志 `20261027-221331-1e89b9.log`，ruff通过。
+
+逐记录身份只说明发送时主体，不能代替读取时 pidfd 活性、动作时序与未知恢复；活性检查后仍有竞态。该机制实验不含真实候选、公开 stream、systemd invocation 或生产监督器；生产派发仍关闭。
