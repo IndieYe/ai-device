@@ -377,7 +377,7 @@ class Updates:
             receipt = {"prepared_sha256": prepared_sha256, "approved_by_uid": 0}
             approved = stem.with_suffix(".approved.json")
             if approved.exists():
-                if json.loads(approved.read_text()) != receipt:
+                if not nh._valid_admin_approval(json.loads(approved.read_text()), prepared_sha256):
                     raise UpdateError("approval conflicts")
             else:
                 _atomic(approved, receipt)
@@ -388,7 +388,7 @@ class Updates:
         approved = stem.with_suffix(".approved.json")
         nh._trusted(path)
         nh._trusted(approved)
-        if json.loads(approved.read_text()).get("prepared_sha256") != nh._digest(path):
+        if not nh._valid_admin_approval(json.loads(approved.read_text()), nh._digest(path)):
             raise UpdateError("accurate approval required")
         value = json.loads(path.read_text())
         if nh._digest(self.registry / f"{binding['instance_id']}.json") != value["binding_sha256"]:

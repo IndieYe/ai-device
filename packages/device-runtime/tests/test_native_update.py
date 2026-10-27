@@ -1111,3 +1111,47 @@ def test_retirement_fence_rejects_json_type_drift(update, drift):
         nh._assert_no_package_intent(manager.registry)
     assert [item.read_bytes() for item in (path, closed_path, retired_path)] == original
     assert packages.calls == 0
+
+
+@pytest.mark.parametrize("drift", ["missing_uid", "bool_uid", "extra", "not_object"])
+def test_apply_rejects_malformed_admin_approval_before_action(update, drift):
+    manager, packages, _, _ = update
+    stem = manager.registry / "updates/5-probe--one"
+    approved_path = stem.with_suffix(".approved.json")
+    receipt = json.loads(approved_path.read_bytes())
+    if drift == "missing_uid":
+        del receipt["approved_by_uid"]
+    elif drift == "bool_uid":
+        receipt["approved_by_uid"] = False
+    elif drift == "extra":
+        receipt["unexpected"] = True
+    else:
+        receipt = [receipt]
+    approved_path.write_text(json.dumps(receipt))
+    original = approved_path.read_bytes()
+    with pytest.raises(nu.UpdateError, match="accurate approval required"):
+        manager.apply("probe", "one")
+    assert packages.calls == 0
+    assert not stem.with_suffix(".apply-intent.json").exists()
+    assert approved_path.read_bytes() == original
+
+
+def test_malformed_approval_after_apply_blocks_replay_observe_and_recovery(update):
+    manager, packages, _, _ = update
+    stem = manager.registry / "updates/5-probe--one"
+    manager.apply("probe", "one")
+    assert packages.calls == 1
+    approved_path = stem.with_suffix(".approved.json")
+    approval = json.loads(approved_path.read_bytes())
+    approval["approved_by_uid"] = False
+    approved_path.write_text(json.dumps(approval))
+    evidence_paths = sorted(stem.parent.glob("5-probe--one.*"))
+    evidence_before = {path.name: path.read_bytes() for path in evidence_paths if path.is_file()}
+    for operation in (manager.apply, manager.reconcile, manager.recover):
+        with pytest.raises(nu.UpdateError, match="accurate approval required"):
+            operation("probe", "one")
+    with pytest.raises(nu.UpdateError, match="approval conflicts"):
+        manager.approve("probe", "one", prepared_sha256=nh._digest(stem.with_suffix(".prepared.json")))
+    assert packages.calls == 1
+    assert {path.name: path.read_bytes() for path in evidence_paths if path.is_file()} == evidence_before
+    assert sorted(stem.parent.glob("5-probe--one.*")) == evidence_paths

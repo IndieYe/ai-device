@@ -1151,3 +1151,10 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 复现 Python JSON 对象比较中 `true == 1`、`false == 0`：对 job intent、关闭及退休证据分别注入 schema 布尔值、retry/fence/replay 整数，并逐层重算准确摘要，原 `_job_retired` 四例均错误判定为已退休。修复后拒绝四例、保留原证据并阻止 start；关闭入口严格检查完整 intent、schema 和 root 批准类型，关闭/退休幂等读取使用类型敏感 JSON 比较，类型漂移不新增证据。合法关闭、退休、迟到 worker 拒绝和不同 ID 路径沿用既有测试。helper/update/job 回归 254 通过、1 跳过，完整回归 1113 通过、4 跳过，ruff 与 diff 检查通过。测试使用隔离 fixture 和重算摘要，不证明真实生产事务或身份闭环。
 
 旧 worker 冻结 snapshot 不会自动更新，旧测试环境按管理员维护窗口手动退休；不得删除旧意图或迁移围栏。新包未构建，生产新 job 派发仍 default-deny。`Updates._prepared` 等其他批准消费者尚须逐项审查，本节不宣称所有批准/恢复链完成。
+
+
+## 145. 更新批准回执一致性
+
+`Updates._prepared` 曾只校验批准回执中的 prepared 摘要，缺 UID、布尔 UID 或多余字段可进入包动作；非对象则产生未预期的 AttributeError。通过实际 `Updates.apply` 和替身包管理器先复现四例，再统一采用类型敏感的精确管理员批准回执校验，覆盖批准重入、prepare 消费、job 描述/观察及关闭。畸形首次记录在 apply intent 和包动作之前拒绝；已执行后批准漂移时 apply/reconcile/recover 和重复 approve 拒绝，包次数不增、原证据字节与文件集合不变。旧意图不自动迁移或改写。
+
+完整 Device 测试 1118 通过、4 跳过；ruff、diff 检查通过。使用本地 fixture，不代表生产包事务或外部认证测试；正式签名、批准策略、受控监督和生产派发门禁仍未完成。旧 b4158df DEB 与冻结 snapshot 不含第143—145节代码修复，新 DEB/RPM 尚未构建或验收。

@@ -98,6 +98,10 @@ def _same_json(left, right):
         return False
 
 
+def _valid_admin_approval(value, prepared_sha256):
+    return _same_json(value, {"prepared_sha256": prepared_sha256, "approved_by_uid": 0})
+
+
 def _job_retired(path):
     """Validate immutable close and retirement evidence; malformed evidence blocks."""
     stem = Path(str(path).removesuffix(".job-intent.json"))

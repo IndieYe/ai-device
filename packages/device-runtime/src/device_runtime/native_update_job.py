@@ -39,7 +39,7 @@ def describe_job(stem):
     approved = json.loads(approved_path.read_bytes())
     intent = json.loads(intent_path.read_bytes())
     digest = helper._digest(prepared_path)
-    if approved != {"prepared_sha256": digest, "approved_by_uid": 0}:
+    if not helper._valid_admin_approval(approved, digest):
         raise JobError("exact administrator approval required")
     snapshot = stem.with_suffix(".bootstrap")
     bootstrap.validate_snapshot(snapshot)
@@ -247,9 +247,7 @@ def close_before_apply(manager, instance_id, operation_id):
             or intent.get("operation_id") != operation_id
             or intent.get("unit") != unit
             or intent.get("prepared_sha256") != digest
-            or not helper._same_json(
-                json.loads(approved.read_bytes()), {"prepared_sha256": digest, "approved_by_uid": 0}
-            )
+            or not helper._valid_admin_approval(json.loads(approved.read_bytes()), digest)
         ):
             raise JobError("close intent or approval differs")
         snapshot = stem.with_suffix(".bootstrap")
@@ -358,9 +356,9 @@ def observe_job(manager, instance_id, operation_id, *, runner=None):
         helper._trusted(evidence)
     prepared = json.loads(prepared_path.read_bytes())
     prepared_digest = helper._digest(prepared_path)
-    if intent.get("prepared_sha256") != prepared_digest or json.loads(
-        approved_path.read_bytes()
-    ) != {"prepared_sha256": prepared_digest, "approved_by_uid": 0}:
+    if intent.get("prepared_sha256") != prepared_digest or not helper._valid_admin_approval(
+        json.loads(approved_path.read_bytes()), prepared_digest
+    ):
         raise JobError("job approval evidence differs")
     report = {
         "state": "dispatch_unknown",
