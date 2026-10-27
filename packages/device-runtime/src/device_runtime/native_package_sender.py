@@ -1,8 +1,10 @@
 """Candidate Debian package-tree sender; not wired to dispatch or recovery.
 
 A receipt is evidence of one guard's adopted descendants being reaped, not
-permission to recover, retry or activate. The caller must durably bind this
-protocol and snapshot in an intent and pass the held package lease descriptor.
+permission to recover, retry or activate. Work delegated to an external manager
+such as systemd is not necessarily a descendant and is not covered by this
+receipt. The caller must durably bind this protocol and snapshot in an intent
+and pass the held package lease descriptor.
 """
 
 from . import native_helper as helper

@@ -86,3 +86,15 @@
 `native_package_sender.py` 提供未接入任何 dispatch/apply/recovery 的候选 guard：新 intent 显式标注 `debian-package-tree-subreaper-v1`，守卫在启动固定 dpkg 前启用 Linux subreaper，回收收养后代直至 ECHILD，文件 fsync、无覆盖 link、目录 fsync 后发布绑定 intent 的版本化回执。包锁 FD 仅由 guard 保留，dpkg 不继承；协议不使用超时强杀包树。已有回执及协议不匹配在动作前拒绝，但该本地检查不替代锁内的持久 intent 和防重放协调。候选只为独立实验，不承诺它的调用方已经保证 package lease、固定 snapshot 或身份正确。
 
 实施记录第166节的隔离 fixture 验证普通完成、guard 崩溃、旧协议和已有回执拒绝，以及目录 fsync 故障。特别是 guard 崩溃可导致包锁释放但后代活着；缺回执只能保持 unknown。另一个关键边界是 link 后目录 fsync 失败：即使回执当前可读也不能仅凭存在判定已持久发布；可见回执、进程退出码或锁空闲均不单独授权恢复。尚须设计并验证受控观察、崩溃与持久化语义，审计所有旧入口和只读观察对版本的支持，再决定是否接入新动作路径；旧 snapshot 不自动升级，生产派发及恢复门禁不因此开放。
+
+
+### 外部服务管理器委派不属于 subreaper 完成证明
+
+实施记录第178节在无网络的一次性 systemd 容器中，使用未接入生产的候选 guard 和替身 dpkg，让替身通过 `systemd-run` 启动独立 fixture；guard 已完成并发布结构匹配的 tree receipt 时，该 unit 的 MainPID 仍存活且父进程为 PID 1。随后 fixture 显式释放并自然结束。此证据说明 subreaper 到 `ECHILD` 只覆盖其收养的子孙，不覆盖向 systemd 或其他外部管理者委派的工作；并未证明当前真实包钩子发生了这种委派，也未执行真实包动作。
+
+启用任何恢复前必须单独核实受支持包动作与钩子是否存在外部委派，并设计对相关外部工作的可靠绑定与终态证明；不能用一次 unit 观察或只凭回执可见、锁空闲来补足。未知或无法证明时继续保留围栏、默认拒绝。旧 snapshot 不自动获得新约束。
+
+
+### 响应 sender 与动作执行者不是同一事实
+
+实施记录第179节在隔离 systemd 中使用固定 fixture 验证：unit 主进程接收请求后委派子进程完成文件动作、回收子进程并自行发送响应。准确包中的只读 peer scope 在 unit/peer 前后观察一致时成功，`SCM_CREDENTIALS` 的响应发送者也等于 unit 主进程，但 fixture 动作由另一个 PID 完成。它不是生产 helper 的行为证明；它说明即使第177节的真实只读响应 sender 与 peer 一致，也不能倒推出不可逆业务动作的处理者或完整进程树受控。需要单独设计并证明每个动作入口、进程交接、锁与持久终态的联系，不能用响应凭据或事后 unit 快照开放派发与恢复。

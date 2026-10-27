@@ -1399,3 +1399,19 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 在准确 `0fde77a` DEB 的无网络隔离 systemd 容器干净安装、创建普通用户测试实例并通过实际 `register` 注册后，启动真实 helper；对同一 Unix socket 调用实际 `query`，在只读 `scoped_helper_unit_peer` 内以 `SO_PASSCRED`/`recvmsg` 核对单一完整 SCM_CREDENTIALS、unit peer PID 与 root UID，验证真实查询响应成功、实例和操作 ID 正确、无启动意图且 scope 明示不能派发。输出 `REAL_HELPER_QUERY_RESPONSE_CREDENTIALS_MATCH_UNIT_PEER` 与 `QUERY_ONLY_NO_START_INTENT_AND_NO_DISPATCH_AUTHORIZATION`（`20261028-021218-dc102b.log`）。
 
 此实验只证明一次只读查询及响应发送者与观察到的 unit peer 一致；不证明消息处理者与任意不可逆动作的因果绑定、实际加载代码身份、观察后仍存活或原子 invocation 绑定。无真实设备或升级动作，生产派发和恢复默认拒绝不变。测试容器仅属本次实验并已停止。
+
+
+## 178. 包树候选回执与外部 systemd 工作的边界
+
+在一次性无网络隔离 systemd 容器中，以本工作区未接入生产的 `TREE_GUARD` 和容器内替身 dpkg 做负例：替身通过 `systemd-run` 创建等待释放的独立 unit；guard 正常退出并发布绑定 intent 的 `package_process_tree_reaped` 回执后，unit MainPID 仍存活，且 `/proc` 显示其父进程为 PID 1。输出 `TREE_RECEIPT_EXISTS_WHILE_EXTERNAL_SYSTEMD_WORKER_ALIVE`、`EXTERNAL_WORKER_NOT_ADOPTED_BY_SUBREAPER_NO_RECOVERY_AUTHORIZATION`（`20261028-021913-27e95b.log`）；释放 fixture 后自然结束，专用容器已停止。
+
+此实验只验证外部委派超出 subreaper 收养范围；替身不是实际 dpkg/真实包钩子，不证明当前包有外部委派或发生真实升级。候选回执不能单独作为所有包相关工作已终结或恢复许可的证据；应审计受支持包及钩子的实际外部工作并设计可信绑定与终态证明。生产派发和恢复仍默认拒绝，旧 snapshot 不自动获得约束。
+
+准确 `0fde77a` DEB 经 SHA 校验后只读提取控制目录（`20261028-022022-7b3604.log`），仅包含 `control`、`preinst`、`prerm`；两个钩子均为路径拒绝检查，无直接 systemd 调用。该结论仅针对该开发包自身控制文件，不覆盖宿主 dpkg 配置、其他包触发器、旧已安装包的钩子或未来候选，不能据此启用恢复。
+
+
+## 179. 匹配 unit 的响应发送者不证明动作执行者
+
+准确 `0fde77a` DEB 在无网络隔离 systemd 容器中干净安装；fixture 以独立 unit 占用测试专用 helper unit 名，主进程接收固定请求、fork 子进程写入 fixture 文件并等待其退出，再由主进程发送响应。使用准确包内 `scoped_helper_unit_peer` 做前后 unit/pidfd 只读观察，以 `SO_PASSCRED` 检查响应 sender PID 与 unit peer 相等，同时读取 fixture 动作 PID，确认动作 PID 不同；输出 `MATCHING_UNIT_RESPONSE_WITH_DISTINCT_FIXTURE_ACTION_PROCESS` 和 `RESPONSE_CREDENTIALS_DO_NOT_PROVE_ACTION_PROVENANCE`（`20261028-022213-9e93a8.log`）。专用 fixture 自行结束，容器停止。
+
+该例不是实际 helper 或真实升级行为，只是严格限制第177节一次真实只读 query 的结论：响应来源匹配不能单独证明业务副作用实际处理者，更不能建立受控 invocation／worker／guard 的原子绑定。仍须设计受控进程树、请求和终态协调并覆盖故障与旧版本；生产派发与恢复门禁保持关闭。
