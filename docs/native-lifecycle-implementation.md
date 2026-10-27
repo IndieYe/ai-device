@@ -588,3 +588,9 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 47. 重启后回归与helper切换只读观察
 
 用户完成外部安全重启后只读核实宿主服务running、唯一execution和工作区b2b2a2b干净；先前受锁候选发布完整回归976 passed/3 skipped（43.09s）。新增inspect_helper_transition，在已有包EX锁下重验已发布候选、读取现有helper unit摘要并复核unit未变，返回候选/快照摘要；明确switch_allowed=false、未验证进程静止及协议兼容，不改unit、不重启/启动服务、不授权切换。fixture测试证据漂移拒绝和unit不变；新增后完整977 passed/3 skipped（42.36s）。尚无稳定入口、旧helper安全迁移、签名或实际服务切换验证，P1未完成。
+
+## 48. 更正：v17旧helper不识别job门禁，禁止混合部署
+
+隔离提取v17 DEB，直接用包内独立bootstrap的原helper读取测试registry：仅存在未退休job-intent时，旧`_assert_no_package_intent`返回允许，其源码只检查apply-intent；新helper对精确退休fixture可放行，但不改变旧helper行为。故前文第41节及其他“旧helper仍保守阻塞”的描述对v17错误：**旧helper在job派发到apply-intent落盘之间可能允许启动**。这不是退休证据损坏或旧helper已经升级的证明，也不是生产现场核查。
+
+硬门禁：不得把job派发/退休原型与不识别job-intent的旧helper混合用于真实设备，不得以新wheel或磁盘文件更新推断运行进程已加载新helper；必须先实现并验证版本/进程身份、旧helper受控迁移及未终态台账兼容，或用独立持久屏障在旧helper也认识的协议下覆盖派发间隙。不得删意图、放宽原包钩子或依靠短暂窗口。隔离实验分别验证新helper接受模拟退休记录、v17旧helper忽略未退休job；未验证真实服务运行版本，也未触发真实设备操作。P1阻塞于此兼容缺口，继续隔离整改。
