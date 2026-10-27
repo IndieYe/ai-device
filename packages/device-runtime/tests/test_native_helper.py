@@ -51,6 +51,12 @@ class FakeSystemd:
 
 
 @pytest.fixture
+def legacy_start_recovery_mechanics(monkeypatch):
+    """Test historical inner checks only; production sender-tree gate stays closed."""
+    monkeypatch.setattr(nh, "_require_proven_start_sender_tree", lambda: None)
+
+
+@pytest.fixture
 def helper(tmp_path, monkeypatch):
     registry = tmp_path / "registry"
     registry.mkdir()
@@ -170,6 +176,7 @@ def test_read_rejects_recovery_bound_to_different_intent(helper):
 
 @pytest.mark.parametrize("action", ["resolve-running", "resolve-stopped", "start", "reconcile"])
 @pytest.mark.parametrize("change", ["intent", "state", "replayed"])
+@pytest.mark.usefixtures("legacy_start_recovery_mechanics")
 def test_existing_recovery_must_remain_bound(helper, action, change):
     service, adapter, record = helper
     adapter.failure = True
@@ -979,6 +986,7 @@ def test_recover_socket_requires_administrator(recovery, monkeypatch):
         nh.recover_socket(*recovery)
 
 
+@pytest.mark.usefixtures("legacy_start_recovery_mechanics")
 def test_resolve_unknown_running_without_replay(helper):
     service, adapter, record = helper
     adapter.failure = True
@@ -1013,6 +1021,7 @@ def test_resolve_unknown_running_without_replay(helper):
         ("Job", None),
     ],
 )
+@pytest.mark.usefixtures("legacy_start_recovery_mechanics")
 def test_unknown_recovery_requires_running_evidence(helper, field, value):
     service, adapter, record = helper
     adapter.failure = True
@@ -1024,6 +1033,7 @@ def test_unknown_recovery_requires_running_evidence(helper, field, value):
     assert not (service.registry / "recovery-probe-one.json").exists()
 
 
+@pytest.mark.usefixtures("legacy_start_recovery_mechanics")
 def test_recovery_missing_result_and_missing_intent(helper):
     service, adapter, record = helper
     with pytest.raises(nh.HelperError, match="intent"):
@@ -1036,6 +1046,7 @@ def test_recovery_missing_result_and_missing_intent(helper):
     assert not (service.registry / "result-probe-one.json").exists()
 
 
+@pytest.mark.usefixtures("legacy_start_recovery_mechanics")
 def test_recovery_persistence_failure_still_blocks_new_start(helper, monkeypatch):
     service, adapter, record = helper
     adapter.failure = True
@@ -1056,6 +1067,7 @@ def test_recovery_persistence_failure_still_blocks_new_start(helper, monkeypatch
     assert sum(a == "start" for a, _ in adapter.calls) == 1
 
 
+@pytest.mark.usefixtures("legacy_start_recovery_mechanics")
 def test_recovery_maintenance_lock_blocks(helper):
     service, adapter, record = helper
     adapter.failure = True
@@ -1068,6 +1080,7 @@ def test_recovery_maintenance_lock_blocks(helper):
     assert not (service.registry / "recovery-probe-one.json").exists()
 
 
+@pytest.mark.usefixtures("legacy_start_recovery_mechanics")
 def test_completed_start_cannot_be_reclassified(helper):
     service, _adapter, record = helper
     service.handle(req("start"), peer_uid=record["uid"])
@@ -1096,6 +1109,7 @@ def stopped_unknown(helper):
     return service, adapter, record
 
 
+@pytest.mark.usefixtures("legacy_start_recovery_mechanics")
 def test_resolve_stopped_then_explicit_new_start(helper):
     service, adapter, record = stopped_unknown(helper)
     original = (service.registry / "result-probe-one.json").read_bytes()
@@ -1142,6 +1156,7 @@ def test_stopped_recovery_uncertain_refused(helper, field, value):
     assert not (service.registry / "recovery-probe-one.json").exists()
 
 
+@pytest.mark.usefixtures("legacy_start_recovery_mechanics")
 def test_stopped_recovery_cancel_known_job_and_recheck(helper):
     service, adapter, record = stopped_unknown(helper)
     adapter.override["Job"] = "42 start"
@@ -1157,6 +1172,7 @@ def test_stopped_recovery_cancel_known_job_and_recheck(helper):
     assert result["recovery"]["state"] == "confirmed_stopped"
 
 
+@pytest.mark.usefixtures("legacy_start_recovery_mechanics")
 def test_stopped_recovery_cancel_race_refuses(helper):
     service, adapter, record = stopped_unknown(helper)
     adapter.override["Job"] = "42 start"
@@ -1217,6 +1233,7 @@ def test_systemd_guard_inherits_sender_lock(tmp_path):
         nh.fcntl.flock(probe, nh.fcntl.LOCK_EX | nh.fcntl.LOCK_NB)
 
 
+@pytest.mark.usefixtures("legacy_start_recovery_mechanics")
 def test_hung_guard_keeps_both_leases_and_unknown(helper, tmp_path):
     import threading
     import time
@@ -1273,6 +1290,7 @@ def test_hung_guard_keeps_both_leases_and_unknown(helper, tmp_path):
     assert not (service.registry / "recovery-probe-one.json").exists()
 
 
+@pytest.mark.usefixtures("legacy_start_recovery_mechanics")
 def test_paused_guard_retains_leases_until_reaped_receipt(helper, tmp_path, monkeypatch):
     import signal
     import threading
@@ -1353,6 +1371,7 @@ def test_paused_guard_retains_leases_until_reaped_receipt(helper, tmp_path, monk
     assert service.handle(req("resolve-stopped"), peer_uid=record["uid"])["recovery"]["state"] == "confirmed_stopped"
 
 
+@pytest.mark.usefixtures("legacy_start_recovery_mechanics")
 def test_stopped_cancel_failure_keeps_unknown(helper):
     service, adapter, record = stopped_unknown(helper)
     adapter.override["Job"] = "42 start"
@@ -1368,6 +1387,7 @@ def test_stopped_cancel_failure_keeps_unknown(helper):
     assert not (service.registry / "recovery-probe-one.json").exists()
 
 
+@pytest.mark.usefixtures("legacy_start_recovery_mechanics")
 def test_stopped_recovery_storage_failure_keeps_unknown(helper, monkeypatch):
     service, _adapter, record = stopped_unknown(helper)
     original = nh._save_new
@@ -1392,6 +1412,7 @@ def test_running_recovery_also_requires_sender_exit(helper):
         service.handle(req("resolve-running"), peer_uid=record["uid"])
 
 
+@pytest.mark.usefixtures("legacy_start_recovery_mechanics")
 def test_stopped_recovery_missing_sender_lock_refused(helper):
     service, _adapter, record = stopped_unknown(helper)
     (service.registry / "execution-probe.lock").unlink()
@@ -1401,6 +1422,7 @@ def test_stopped_recovery_missing_sender_lock_refused(helper):
 
 
 @pytest.mark.parametrize("action", ["resolve-running", "resolve-stopped"])
+@pytest.mark.usefixtures("legacy_start_recovery_mechanics")
 def test_guard_missing_receipt_blocks_recovery(helper, action):
     service, adapter, record = stopped_unknown(helper)
     if action == "resolve-running":
@@ -1416,6 +1438,7 @@ def test_guard_missing_receipt_blocks_recovery(helper, action):
 
 @pytest.mark.parametrize("action", ["resolve-running", "resolve-stopped"])
 @pytest.mark.parametrize("bad_code", ["missing", None, True, "0", 1.5, [], {}])
+@pytest.mark.usefixtures("legacy_start_recovery_mechanics")
 def test_guard_malformed_returncode_blocks_recovery(helper, action, bad_code):
     service, adapter, record = stopped_unknown(helper)
     if action == "resolve-running":
@@ -1438,6 +1461,7 @@ def test_guard_malformed_returncode_blocks_recovery(helper, action, bad_code):
 
 
 @pytest.mark.parametrize("value", [None, [], "sender_reaped", 1])
+@pytest.mark.usefixtures("legacy_start_recovery_mechanics")
 def test_guard_non_object_receipt_blocks_recovery(helper, value):
     service, _adapter, record = stopped_unknown(helper)
     (service.registry / "sender-probe-one.json").write_text(json.dumps(value))
@@ -1449,6 +1473,7 @@ def test_guard_non_object_receipt_blocks_recovery(helper, value):
 
 
 @pytest.mark.parametrize("returncode", [-9, 1, 124])
+@pytest.mark.usefixtures("legacy_start_recovery_mechanics")
 def test_guard_nonzero_integer_receipt_allows_only_observed_recovery(helper, returncode):
     service, _adapter, record = stopped_unknown(helper)
     path = service.registry / "sender-probe-one.json"
@@ -1460,6 +1485,7 @@ def test_guard_nonzero_integer_receipt_allows_only_observed_recovery(helper, ret
     assert result["recovery"]["start_replayed"] is False
 
 
+@pytest.mark.usefixtures("legacy_start_recovery_mechanics")
 def test_guard_receipt_mismatch_refused(helper):
     service, _adapter, record = stopped_unknown(helper)
     path = service.registry / "sender-probe-one.json"
@@ -1511,6 +1537,33 @@ def test_existing_legacy_recovery_cannot_authorize_new_start(helper, barrier):
         service.handle(req("start", "next"), peer_uid=record["uid"])
     assert recovery.read_bytes() == before
     assert not (service.registry / "op-probe-next.json").exists()
+
+
+@pytest.mark.parametrize("action", ["resolve-running", "resolve-stopped"])
+def test_direct_sender_receipt_does_not_authorize_recovery(helper, action):
+    service, adapter, record = stopped_unknown(helper)
+    if action == "resolve-running":
+        adapter.override.clear()
+        adapter.active = "active"
+    with pytest.raises(nh.HelperError, match="sender process tree completion unproven"):
+        service.handle(req(action), peer_uid=record["uid"])
+    assert not (service.registry / "recovery-probe-one.json").exists()
+
+
+def test_existing_direct_sender_recovery_cannot_authorize_new_start(helper):
+    service, adapter, record = stopped_unknown(helper)
+    intent = json.loads((service.registry / "op-probe-one.json").read_text())
+    recovery = service.registry / "recovery-probe-one.json"
+    recovery.write_text(json.dumps({"state": "confirmed_stopped", "intent": intent, "start_replayed": False}))
+    before = recovery.read_bytes()
+    starts_before = sum(call[0] == "start" for call in adapter.calls)
+    observed = service.handle(req("query"), peer_uid=record["uid"])
+    assert observed["recovery"]["state"] == "confirmed_stopped"
+    with pytest.raises(nh.HelperError, match="sender process tree completion unproven"):
+        service.handle(req("start", "next"), peer_uid=record["uid"])
+    assert recovery.read_bytes() == before
+    assert not (service.registry / "op-probe-next.json").exists()
+    assert sum(call[0] == "start" for call in adapter.calls) == starts_before
 
 
 def test_old_barrier_without_receipt_not_safe_for_stopped(helper):
@@ -1816,6 +1869,7 @@ def test_invalid_start_barrier_blocks_replay_and_running_recovery(helper, barrie
     assert sum(name == "start" for name, _ in adapter.calls) == sum(name == "start" for name, _ in calls_before)
 
 
+@pytest.mark.usefixtures("legacy_start_recovery_mechanics")
 def test_sender_receipt_intent_type_drift_cannot_authorize_recovery(helper):
     service, _adapter, record = stopped_unknown(helper)
     receipt_path = service.registry / "sender-probe-one.json"
@@ -1829,6 +1883,7 @@ def test_sender_receipt_intent_type_drift_cannot_authorize_recovery(helper):
     assert not (service.registry / "recovery-probe-one.json").exists()
 
 
+@pytest.mark.usefixtures("legacy_start_recovery_mechanics")
 def test_recovery_intent_type_drift_blocks_new_start(helper):
     service, adapter, record = stopped_unknown(helper)
     service.handle(req("resolve-stopped"), peer_uid=record["uid"])

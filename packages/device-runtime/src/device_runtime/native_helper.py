@@ -193,6 +193,11 @@ def _require_current_start_barrier(intent):
         raise HelperError("legacy start sender completion unproven; manual reconciliation required")
 
 
+def _require_proven_start_sender_tree():
+    """A direct-child receipt does not establish sender descendant completion."""
+    raise HelperError("sender process tree completion unproven; recovery disabled")
+
+
 def _read_start_recovery(path, intent):
     recovery = json.loads(path.read_text())
     if (
@@ -723,6 +728,7 @@ class Helper:
                 if stored_intent != expected:
                     raise HelperError("matching start intent required for recovery")
                 _require_current_start_barrier(stored_intent)
+                _require_proven_start_sender_tree()
                 if recovery_path.exists():
                     return {**result, "recovery": _read_start_recovery(recovery_path, expected)}
                 if (
@@ -868,6 +874,7 @@ class Helper:
                             "unconfirmed operation blocks a new start; reconcile first"
                         )
                     _require_current_start_barrier(pending_intent)
+                    _require_proven_start_sender_tree()
                     _read_start_recovery(recovered, pending_intent)
             if snapshot["ActiveState"] not in {"inactive", "failed", "active"}:
                 raise HelperError("service transition requires read-only reconciliation")

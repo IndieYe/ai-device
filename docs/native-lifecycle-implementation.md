@@ -1472,3 +1472,12 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 从 `85657189cae7d78fc2157255477350735f76604f` 干净源码离线构建未签名 DEB：`build/native-packages-p1-8565718/ai-device-native-client_0.2.2-1_amd64.deb`，109823294字节，SHA256 `f37cf12b960824e46ae7de38ac71b8027d384016aa1469d07b165ce8fd7b0eec`；Device wheel SHA `6251721d38dbdb83bcbeb75fc3844d5927d6fcc8ab168ad891137d094349120a`。wheel 33 Python源文件与 commit 一致；干净安装、主 runtime 六模块及 bootstrap 四模块核对和原地覆盖保护通过（`20261028-025037-bc0231.log`）。包内7项旧屏障/包事务测试以普通用户通过（`20261028-025121-1042ac.log`）。首次 root 运行 helper 测试因夹具目录所有者不符导致4项失败、3项通过（`20261028-025052-0bfda8.log`），未当作产品通过。
 
 无网络隔离 systemd 中干净安装并注册普通用户测试实例，启动真实 helper，构造旧 barrier 1 intent 和 unknown result：直接 resolve-running/resolve-stopped 均因旧 sender 未证明而拒绝、不创建 recovery；构造历史 recovery 后，真实 socket query 可读，直接 start 指明旧 sender 拒绝，socket start 返回拒绝，原记录不变、无新启动 intent、测试 Device unit inactive/MainPID 0（`20261028-025204-cf692e.log`，脚本 `scripts/accept-native-legacy-start-fence-8565718.sh`）。容器已停止。实验没有启动测试 Device，不证明真实旧 sender 或宿主故障已处理；旧 helper 和旧 snapshot 不自动获得修复，RPM 未构建。
+
+
+## 187. start sender 回执不证明后代退出，未知恢复默认拒绝
+
+准确 `8565718` DEB 在无网络隔离 Linux 容器中运行包内真实 `Systemd.start` guard；固定 `systemctl` 替身启动一个有限寿命后代后退出。观察到真实 `sender_reaped` 回执已发布、execution/package 锁可重新取得时该后代仍活着，释放后能继续写 fixture（`20261028-025504-fa28ee.log`，`scripts/probe-native-start-sender-descendant.py`）。此替身不证明实际 systemctl 一定产生后代，也未调用真实 Device 或 systemd；它证明直接子进程回执与锁空闲不能单独证明 sender 全部后代完成。
+
+原版本2直接回执可驱动 resolve-running 和 resolve-stopped 写确认，两个针对该默认拒绝的回归修复前失败（`20261028-025536-0ab86a.log`）。当前源码在已验证 execution_barrier 2 后，默认拒绝新的 start 恢复确认，并禁止已存在版本2恢复记录授权新的 start 或包 apply；query/reconcile 保持只读，原 intent、sender 和 recovery 保留。旧 barrier 仍按第185节拒绝。现有恢复机制内部测试明确使用 `legacy_start_recovery_mechanics` 替身，不代表生产开放；无替身测试覆盖两类 resolve、已有 recovery 的 start 和包 apply 均被拒绝。定向314通过1跳过及ruff通过（`20261028-025756-29c729.log`），完整1174通过10跳过（`20261028-025810-d1fb21.log`）。首次调整后旧机制测试58项失败，随后仅对明确列出的用例启用测试替身；不把替身当产品门禁。
+
+该收紧不处理已记录 `started`/`already_active` 的其他准入，也不证明真实 systemctl 后代、外部 systemd 工作、旧 helper/snapshot 或崩溃安全终态；这些仍待审计。旧记录与旧进程不自动迁移、清理。准确新包验收待完成。

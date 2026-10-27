@@ -285,3 +285,6 @@ job worker 执行前与显式恢复共用完整意图检查，在实例事务和
 
 
 旧 start intent 缺少 `execution_barrier` 或使用版本1时，当前源码不再据此生成新的 running/stopped 恢复确认，也不允许已有旧恢复记录授权新的 start 或包 apply；旧记录仍可只读查询，须管理员在维护窗口人工核实，不能自行删除或迁移。版本2 sender 回执只覆盖直接 sender 的回收，并不证明任意后代或外部工作终结；旧 helper 和冻结快照不自动获得当前门禁。详见实施记录第185节。
+
+
+当前源码对 unknown start 的 `resolve-running`、`resolve-stopped` 默认拒绝：版本2 `sender_reaped` 只覆盖直接 sender，不能证明其后代或外部工作终结。已有 recovery 仍可只读查询，但不能据此授权新 start 或包 apply；记录不删除。旧 helper 和冻结快照不自动受此门禁约束；已有明确成功结果的其他准入仍需另行审计。见实施记录第187节。

@@ -491,6 +491,7 @@ class Updates:
                         try:
                             start_intent = json.loads(pending.read_text())
                             nh._require_current_start_barrier(start_intent)
+                            nh._require_proven_start_sender_tree()
                             nh._read_start_recovery(recovery, start_intent)
                         except (OSError, ValueError, TypeError, nh.HelperError) as exc:
                             raise UpdateError(
