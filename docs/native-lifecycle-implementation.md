@@ -1047,3 +1047,12 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 在无网络、一次性 Linux 6.18 amd64/Rosetta systemd 容器安装准确 `57714ae` DEB；仅在容器内创建测试 unit，主进程创建监听 socket、fork 子进程处理连接并保持主进程存活。包内真实 `scoped_helper_unit_peer` 前后观察通过，unit MainPID 等于内核 socket peer，返回未证明代码且不允许派发；客户端 `SO_PASSCRED`/`SCM_CREDENTIALS` 实际响应凭据显示发送者为另一 root 子进程。`SYSTEMD_PEER_MAINPID_DIFFERS_FROM_HANDLER_OBSERVED_NOT_AUTHORIZED`，日志 `20261027-223138-a4b7e2.log`；复现脚本 `scripts/accept-native-systemd-handler.sh` 另一次通过（`20261027-223246-dcaf57.log`）。测试 unit 不是生产 helper，两个容器均已关闭；不能将观察成功解释为处理者或加载代码证明。
 
 为只读观察函数增加五种 pidfd 生命周期回归：身份不匹配、进入前退出、退出时复核失败、调用者异常和成功路径均关闭描述符；精确说明内核报告的 peer 可能不是消息处理者。完整 Device 测试 `1107 passed, 3 skipped`（日志 `20261027-222924-4a543e.log`），ruff 和 diff 空白检查通过。修正第122节 Bash wheel SHA256 截短笔误，实测文件摘要为 `aee883b74bb2fc816abb77ba428ed4339c6901726a9ac3098a3ba8737fa16dd3`。本次不改变认证、派发或生产行为；生产受控启动和事务闭环仍未实现。
+
+
+## 132. guard 和 sender 的 helper socket 描述符隔离
+
+新增 Linux 专用 `test_systemd_guard_and_sender_do_not_inherit_helper_sockets`：为监听与已接受的 Unix socket 显式设置可继承，再执行真实 `Systemd.start` guard 和受控替身 sender；由 sender 对照 `/proc` 中 guard 与自身全部描述符的设备号、inode，检查两种 socket 均不存在，并核对 sender_reaped 回执。macOS 完整回归为 `1107 passed, 4 skipped`（新增 Linux 测试在 macOS 跳过），日志 `20261027-223621-57cd7e.log`。
+
+另在一次性无网络 Linux 6.18 amd64/Rosetta 容器通过 `scripts/accept-native-guard-fd.sh` 安装准确 `57714ae` DEB，执行 `probe-native-guard-fd.py`，以包内真实 `Systemd.start` 和同样的受控替身 sender 检查，输出 `GUARD_SENDER_HELPER_SOCKET_NOT_INHERITED_FIXTURE_OK`，日志 `20261027-223607-466555.log`。ruff、shell 语法和 diff 空白检查通过。
+
+仅覆盖该 guard 的 exec 路径；测试 socket 为独立 fixture，sender 不是 systemctl，不覆盖真实 systemd、其他 fork/exec/FD 传递路径、恶意 root、启动监督或事务收口，不证明消息实际处理者。生产派发仍默认拒绝。

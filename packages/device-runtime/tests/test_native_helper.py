@@ -1553,6 +1553,62 @@ def test_systemd_guard_inherits_package_lease(tmp_path):
     assert json.loads((tmp_path / "receipt.json").read_text())["state"] == "sender_reaped"
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="requires Linux procfs")
+def test_systemd_guard_and_sender_do_not_inherit_helper_sockets(tmp_path):
+    import socket
+    from unittest.mock import patch
+
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    endpoint = tmp_path / "helper.sock"
+    report = tmp_path / "descriptor-report.json"
+    executable = tmp_path / "inspect-sender"
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+        listener.bind(str(endpoint))
+        listener.listen(1)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.connect(str(endpoint))
+            connection, _ = listener.accept()
+            with connection:
+                # Exercise close_fds even if a future caller mistakenly marks sockets inheritable.
+                os.set_inheritable(listener.fileno(), True)
+                os.set_inheritable(connection.fileno(), True)
+                identities = [(os.fstat(s.fileno()).st_dev, os.fstat(s.fileno()).st_ino)
+                              for s in (listener, connection)]
+                executable.write_text(
+                    f"#!{sys.executable}\n"
+                    "import json, os\n"
+                    f"wanted = {identities!r}\n"
+                    "def present(pid):\n"
+                    "    found = []\n"
+                    "    for name in os.listdir(f'/proc/{pid}/fd'):\n"
+                    "        try:\n"
+                    "            s = os.stat(f'/proc/{pid}/fd/{name}')\n"
+                    "        except FileNotFoundError:\n"
+                    "            continue\n"
+                    "        if (s.st_dev, s.st_ino) in wanted:\n"
+                    "            found.append(name)\n"
+                    "    return found\n"
+                    f"with open({str(report)!r}, 'w') as out:\n"
+                    "    json.dump({'guard': present(os.getppid()), 'sender': present(os.getpid())}, out)\n"
+                )
+                executable.chmod(0o700)
+                with (
+                    patch.object(nh, "_trusted", lambda *args, **kwargs: None),
+                    nh.package_lease(registry) as package_fd,
+                    (tmp_path / "execution.lock").open("a+b") as lease,
+                ):
+                    nh.Systemd(str(executable)).start(
+                        "fixture",
+                        lease_fd=lease.fileno(),
+                        package_fd=package_fd,
+                        receipt_path=tmp_path / "receipt.json",
+                        intent={"fixture": True},
+                    )
+    assert json.loads(report.read_text()) == {"guard": [], "sender": []}
+    assert json.loads((tmp_path / "receipt.json").read_text())["state"] == "sender_reaped"
+
+
 def test_start_rejected_while_job_publishes_under_exclusive_package_lock(helper):
     service, adapter, record = helper
     with (

@@ -153,3 +153,10 @@
 `scripts/probe-native-systemd-handler.py` 在独立、无网络 Linux 6.18 amd64/Rosetta systemd 容器复现：安装 SHA256 `b172b35a6882eb61b89b48dba4b27808f3bf6da1d06da8510cb31ca4f2e45d03` 的准确 `57714ae` DEB，仅在容器 `/run/systemd/system/` 写入同名测试 unit；unit 主进程 bind/listen 后 fork 子进程处理一次连接并回复，主进程保持存活。包内真实 `scoped_helper_unit_peer` 作用域前后通过，确认 unit MainPID 与内核 socket peer 相同，并返回 `loaded_code_verified=false`、`dispatch_allowed=false`；启用 `SO_PASSCRED` 的接收端从实际响应的 `SCM_CREDENTIALS` 核得发送 PID 为不同的 root 子进程，不依赖消息自报。输出 `SYSTEMD_PEER_MAINPID_DIFFERS_FROM_HANDLER_OBSERVED_NOT_AUTHORIZED`，日志 `20261027-223138-a4b7e2.log`；可复现入口 `scripts/accept-native-systemd-handler.sh` 独立复验通过，日志 `20261027-223246-dcaf57.log`。两个临时容器均已正常关闭。
 
 该反例不是已安装生产 helper 的实际 fork 行为，也不是可用于授权的逐消息协议：客户端、unit 和服务逻辑均为隔离 fixture。它证明即使真实 systemd 的 MainPID、InvocationID 与 socket peer 观察同时成立，仍不能单凭这些事实推断每条响应的执行者，更不能证明加载代码或授权派发。真实 helper 的描述符继承、受控启动、事务和恢复须分别验证；派发继续关闭。
+
+
+## start guard 的 socket 描述符局部验证
+
+一次性无网络 Linux 6.18 容器中安装准确 `57714ae` DEB，以包内 `Systemd.start` 创建真实 guard 和受控替身 sender，模拟 helper 监听及已接受 socket，即使将二者设为可继承，`/proc` 中 guard 和 sender 都没有相应 socket inode；回执为 sender_reaped。`scripts/accept-native-guard-fd.sh` / `scripts/probe-native-guard-fd.py`，输出 `GUARD_SENDER_HELPER_SOCKET_NOT_INHERITED_FIXTURE_OK`，日志 `20261027-223607-466555.log`。另有 Linux 专用回归测试；macOS 上该测试显式跳过。
+
+这只证明该 guard exec 路径在所测环境未继承这两个 socket；sender 为替身，未覆盖其他入口、真实 systemd、fork 后未 exec 的窗口、父子受控启动或恶意 FD 传递，不能将其视为实际处理者证明或开放派发依据。
