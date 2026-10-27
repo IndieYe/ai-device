@@ -108,3 +108,6 @@
 
 
 `probe-native-daemon-pidfd-exit.py` 将父自身 pidfd 继承与真实 `_daemon_lease` 组合：子就绪并持锁后，父按控制消息退出；子等待 pidfd 可读并主动退出，之后独立完整租约可取得。一次性 Linux 容器输出 `PIDFD_PARENT_EXIT_DAEMON_LEASE_OK`，日志 `20261027-212613-22a6f9.log`。这是限定时序机制实验；父退出与子处理之间存在窗口，不保证进程挂起、阻塞、异常或已开始的不可逆动作被终止，不提供生产监督器、消息身份或 systemd 验收。
+
+
+`probe-native-pidfd-check-race.py` 在真实 daemon 租约和 pidfd 上安排受控次序：子先检查父存活，父退出并由观察者回收，再允许子写入模拟动作标记；此时子同时观察到父 pidfd 已就绪，标记仍可写出。输出 `PIDFD_CHECK_THEN_ACTION_RACE_CONFIRMED`，日志 `20261027-212744-292f64.log`。模拟只写管道，不执行真实操作；证明先前活性检查与稍后动作不是原子事件，不意味着真实实现一定发生该次序。生产协议仍须处理意图先持久化、动作进行中父死亡及 unknown 对账，不能仅用 pidfd 预检查当成动作授权。

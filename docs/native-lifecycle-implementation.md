@@ -933,3 +933,10 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 `probe-native-daemon-pidfd-exit.py` 在一次性无网络 Linux 6.18 amd64/Rosetta 容器中，让监督父持实际 `_daemon_lease` 并把自身 pidfd 随 fork 交给子。子就绪后父退出，子观察 pidfd 变为可读并主动退出；随后独立完整租约可取得。输出 `PIDFD_PARENT_EXIT_DAEMON_LEASE_OK`，日志 `20261027-212613-22a6f9.log`，脚本 ruff通过。
 
 仅证明该受控单次时序，不保证死亡即时可见、挂起/阻塞子进程退出、不可逆操作被取消或所有FD正确收口；不含真实 systemd、运行候选、socket处理者和事务。pidfd检查后仍存在死亡竞态，生产派发保持关闭。
+
+
+## 116. pidfd 存活检查与后续动作的竞态
+
+一次性无网络 Linux 容器运行 `probe-native-pidfd-check-race.py`：持 daemon 双锁的子先通过父 pidfd 活性检查；观察者随后令父退出并确认回收，再允许子写入模拟动作的管道标记。该时刻父 pidfd 已可读但标记仍成功，输出 `PIDFD_CHECK_THEN_ACTION_RACE_CONFIRMED`，日志 `20261027-212744-292f64.log`；脚本 ruff通过。
+
+该探针未触发任何真实外部动作；说明活性检查与后续动作非原子，不证明生产路径具体会这样执行。已开始动作的意图持久化、异常、unknown 与显式恢复仍需整体协议，不得仅靠一次 pidfd 检查授权。派发保持关闭。
