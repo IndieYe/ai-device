@@ -34,6 +34,7 @@ def test_rpm_preflight_guards_layout_roots():
     assert "'/opt/ai-device/packages'" in source
     assert "'/opt/ai-device/bootstrap'" in source
     assert "helper transaction required" in source
+    assert "posix.readlink(path)" in source
 
 
 @pytest.mark.parametrize("name", ["packages", "bootstrap"])

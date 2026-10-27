@@ -108,7 +108,7 @@ cp -a $root/. %{buildroot}/
 %pretrans -p <lua>
 local p = {'/opt/ai-device/instances','/var/lib/ai-device/manager','/opt/ai-device/packages','/opt/ai-device/bootstrap','/opt/ai-device/packages/0.2.2-native1','/opt/ai-device/bootstrap/0.2.2-native1'}
 for _,path in ipairs(p) do
- if posix.stat(path) then error('existing native installation: helper transaction required') end
+ if posix.stat(path) or posix.readlink(path) then error('existing native installation: helper transaction required') end
 end
 %preun -p <lua>
 if posix.stat('/opt/ai-device/instances') then error('explicit instance/service uninstall required') end

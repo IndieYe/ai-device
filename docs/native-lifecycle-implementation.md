@@ -568,3 +568,7 @@ v23未提交代码wheel在一次性systemd容器使用低版本空源fixture：�
 ## 42. 版本布局保护的开发包加固
 
 现有builder硬编码0.2.2-native1，检查单个版本路径会漏掉其他版本。未实现版本切换前，DEB preinst增加packages/bootstrap根路径及悬空符号链接检查；RPM pretrans增加两个根路径检查，任何已有布局一律拒绝普通覆盖。旧实例/manager/指定版本检查仍保留，不改变现有授权门禁。DEB提取自builder的实际preflight脚本，以临时重定向目录验证全新通过、旧版本与悬空链接拒绝且无写入；RPM仅静态检查Lua根路径，未重建包或实测RPM，Lua的悬空链接语义尚未验证。完整回归966 passed/3 skipped为悬空链接补充前，之后定向8通过。此加固不是稳定版本化布局、bootstrap升级切换或旧helper兼容完成；P1继续。
+
+## 43. 新DEB/RPM真实包钩子隔离验收
+
+RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretrans以stat或readlink拒绝已有路径。用v17旧payload、锁定运行时和当前钩子构建未签名v24开发DEB/RPM（不代表最新应用源码发行）：DEB SHA256 f271cad46220ba1d9b85f6ecae5f072cb79caf9268cebe47baee3bdfe2851222，RPM da2731ad27205ab25918740f41c2fd8725fab9550229cf62207694267fb0361b。隔离Ubuntu系dpkg与Rocky9 rpm实际执行：已有其他版本目录与悬空bootstrap链接均拒绝，原哨兵或链接不变、目标未写；全新安装通过，创建manager后卸载保护拒绝且bootstrap仍存在。RPM使用--nodeps，不作为依赖验收。新增accept-native-layout-guard.sh，必须明确一次性容器标记；脚本悬空链接模式两包实跑通过。完整968 passed/3 Linux skipped（44.20s），构建容器临时安装rpm-build，不修改宿主。P1稳定bootstrap、旧helper兼容、签名发行与实际设备升级仍未完成。

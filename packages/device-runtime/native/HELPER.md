@@ -231,3 +231,5 @@ Python recover_job新增管理员显式对账原型：仅已进入apply、匹配
 新代码含执行前关闭job的显式退休原型：精确绑定intent及关闭摘要，无apply/sender/outcome，保留全部记录；新门禁识别有效退休，新ID须重新准备批准，旧ID不能重放。已安装旧helper不识别退休，仍保守阻塞；不可把隔离验证当作现有生产bootstrap支持或成功升级。原包钩子不放行。
 
 开发包构建脚本已加固：DEB对任意已有packages/bootstrap根（含悬空链接）拒绝普通安装覆盖；RPM增加根路径拒绝但仅静态检查，未验证悬空链接。版本化布局、旧helper升级切换和真实RPM验收仍未完成。
+
+开发v24 DEB/RPM已在隔离包管理器验证其他版本目录及悬空bootstrap链接拒绝、全新安装和manager存在时卸载拒绝；RPM用--nodeps。此为钩子验证而非正式发行、稳定bootstrap升级或真实设备验收。
