@@ -1278,3 +1278,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 第159节真实 systemd 已复现过期终态观察仍写恢复证据，受控 worker 和持久终态协议尚未实现。现新增统一 job 恢复默认拒绝门禁：`recover_job` 在 unit 观察之前拒绝，带 job 摘要的 `Updates.recover` 也在进入事务前拒绝，普通无摘要恢复仍拒绝已有 job 台账；`observe_job` 仍只读，无 job 的普通恢复保持原行为。原 intent、sender、已有 recovery 和围栏不修改、不清除。默认门禁在源码测试确认两个入口拒绝、未读取观察、台账字节和包操作次数不变；旧对账内部回归仅以测试进程替身继续覆盖，不代表产品授权。隔离 systemd 脚本先检查真实默认门禁，再明确使用临时替身测试历史逻辑。完整源码 1143 通过、4 跳过（`20261028-005855-0977c4.log`），ruff 与 shell 语法通过。准确新包与隔离 systemd 实验尚待执行。
 
 这是暂时收紧能力，不能修复旧证据、证明旧 snapshot 接受新门禁、完成生产身份/终态协议或改变派发默认拒绝。旧测试 helper 仍由管理员手动退休，不自动迁移。详见 `native/HELPER.md` 与交接设计。
+
+
+## 162. job 恢复默认拒绝的准确包验收
+
+从干净 `19b7065a4d8a00693d5c5205e2a447394975af29` 离线构建 wheel，Device SHA256 `922241377dadebb26e7ab70128ef25dec252b981c299813b36bbb837e59b0a77`，六核心模块逐字节对应 Git（`20261028-010058-867dae.log`）。无网络 amd64/Rosetta Linux 构建未签名 DEB：`build/native-packages-p1-19b7065/ai-device-native-client_0.2.2-1_amd64.deb`，109820702 字节，SHA256 `067e364ba671ebdd5986e9846696631e31ff22ba05fe549da2e67d026eb18359`（`20261028-010115-f7a987.log`）。独立干净安装比对主 runtime 六模块、bootstrap 四模块及覆盖保护通过（`20261028-010202-c9c491.log`）。
+
+独立无网络 systemd 容器核对 DEB/wheel，先验证生产派发 gate 拒绝且无 intent，测试替身派发后候选仍被包保护拒绝并保持 unknown。对于实际 job 测试台账，未替换的 `recover_job` 和底层带 job 摘要 `Updates.recover` 均拒绝，未执行 systemd 观察、无文件改写或新增且 active 不变：`PRODUCTION_JOB_RECOVERY_GATE_REFUSED_WITHOUT_WRITES`。之后明确输出 `DISPOSABLE_RECOVERY_FENCE_SUBSTITUTE`，仅测试进程内替换门禁以回归旧路径；其结果不表示生产恢复许可（`20261028-010228-881319.log`）。fixture 解包 DEB 后重装同批 wheel，与独立包内安装核验分开；容器已停止（`20261028-010309-b70a9e.log`）。旧 snapshot、生产 worker 身份、invocation/恢复协调、RPM 和真实设备仍未验证。
