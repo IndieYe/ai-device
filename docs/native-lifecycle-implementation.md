@@ -1183,3 +1183,5 @@ helper/update/job 266 通过、1 跳过；Device 全量 1125 通过、4 跳过�
 固定 Hash 的 `scripts/accept-native-baa0797-deb.sh` 在干净容器核对包内六模块及独立 bootstrap 四模块与源码一致，用包内解释器测试合法及不完整退休身份、类型漂移、批准回执、派发默认拒绝和重装保护，日志 `20261027-235221-a95165.log`。两次独立真实隔离 systemd job 实验先验证生产门禁拒绝，再仅以测试进程替换门禁：`close-before-apply` 的迟到 worker 在包动作前拒绝并保留围栏（`20261027-235243-d48952.log`）；默认模式包 preinst 拒绝，missing sender 阻恢复、显式对账幂等、一次派发且 active 不变（`20261027-235333-d32e6b.log`）。两个容器已退出。
 
 这是隔离 fixture 和 systemd 证据，不证明生产监督、实际处理者、固定 invocation、成功升级、真实宿主或正式签名。RPM 无离线 rpmbuild，仍未构建；旧快照不迁移，生产派发关闭。
+
+`baa0797` 准确 DEB 另在独立一次性 systemd 容器运行 `retire-retry`：先验证生产派发门禁拒绝，再以测试进程替身执行关闭和幂等退休；旧迟到 worker 拒绝且不重放，新 ID 的隔离派发仍遭原包保护拒绝并保留新围栏。输出 `retired_old_delayed_worker_refused_new_id_dispatched`，日志 `20261027-235501-cd1e7a.log`，容器正常退出。不证明生产派发或升级成功。
