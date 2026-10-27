@@ -450,3 +450,13 @@ native_update新增prepare-signed及CLI，外部公钥重新认证准确发布�
 新增纳入源码的 `packages/device-runtime/scripts/accept-native-retirement.py`（owner fail→管理员CLI retire→owner retry），在隔离amd64 Linux、真实v15临时开发签名包上执行通过；验证旧ID不重放、新ID完成及同ID稳定、旧失败证据保留、active不变。重构后发送者14项通过（4.37s），宿主完整922 passed/3 Linux skipped（43.43s）；后续schema2显式断言另有定向复核。未构建新包，临时联网依赖仍不是离线交付；未安装/激活或调用真实服务。包保护保持不变。
 
 交付联动：实现/CLI、测试、HELPER和实施记录已更新；数据迁移、宿主前端、workdir示例及AI资产不适用（独立Device仓内部准备流程）；发布制品与实机验证未完成，不扩大支持声明。下一项仍为P1包事务前置契约：任务收口/准确停止、稳定bootstrap布局、包钩子准确许可和激活恢复；缺回执现场保持阻塞，不自动修复。
+
+## 27. 包发送者独立CPython事务副本
+
+退休子阶段已以8dc631d保存本地检查点后，继续复核P0 4.2，发现Debian guard仍使用sys.executable，包替换可能移除活动解释器。新增native_bootstrap：可信root源树复制至管理器事务目录、独立文件不硬链接、内部相对链接与50k成员/2GB预算、逐项SHA256/权限、前后源和副本一致性、fsync后无覆盖回执。缺回执不重建，漂移拒绝，无清理或包许可。
+
+Debian apply意图前准备副本，将snapshot.json摘要绑定意图；guard发起前复核副本，使用副本解释器-I -B，不再依赖原包解释器继续存在。仅发送者接入，整个管理器独立job/包钩子许可/稳定包版本布局仍未完成，不以此证明完整更新。
+
+9项新增回归覆盖独立inode与源变更不影响副本、缺回执、快照漂移、越界链接、复制期间源漂移、非管理员、实际适配器argv绑定与快照失败不写apply意图。编写测试时曾错误解包fixture和重复缺参prepare，修正为复用已批准fixture后完整931 passed/3 Linux skipped（46.67s）。隔离amd64 Linux真实v15 CPython6238成员复制、同目录幂等、独立inode、重定位sys.prefix及ssl/sqlite3/ctypes加载通过；未真实dpkg替换、未构建新包或RPM联合验证。验收脚本accept-native-bootstrap.py纳入源码。无真实设备/服务操作，包保护不变。
+
+联动：实现/适配器/测试/HELPER/实施记录已更新；宿主前端、数据库、workdir示例、AI资产不适用。下一项优先真实隔离包替换期间快照guard持续执行和回执、整个管理器独立job，再推进包钩子准确许可与激活恢复。P1未完成、P2未开始。

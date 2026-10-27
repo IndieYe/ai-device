@@ -379,3 +379,26 @@ def test_signed_prepare_rejects_wrong_release_digest(signed_update):
     receipt.write_text(json.dumps(data))
     with pytest.raises(nu.UpdateError, match="authenticated release"):
         signed_prepare(signed_update)
+
+
+def test_independent_runtime_failure_precedes_apply_intent(update):
+    manager, packages, _helper, _package = update
+    registry = manager.registry
+
+    class SnapshotFailure(nu.Debian):
+        def metadata(self, path):
+            return packages.metadata(path)
+
+        def installed(self, name):
+            return packages.installed(name)
+
+        def prepare_execution(self, stem):
+            raise nu.nb.BootstrapError("injected snapshot failure")
+
+        def apply(self, *a, **kw):
+            pytest.fail("must never execute package")
+
+    manager.packages = SnapshotFailure()
+    with pytest.raises(nu.nb.BootstrapError, match="snapshot failure"):
+        manager.apply("probe", "one")
+    assert not list((registry / "updates").glob("*.apply-intent.json"))

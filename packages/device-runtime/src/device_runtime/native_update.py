@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import installation as core
+from . import native_bootstrap as nb
 from . import native_candidate as nc
 from . import native_helper as nh
 
@@ -25,6 +26,11 @@ class UpdateError(ValueError):
 
 
 class Debian:
+    def prepare_execution(self, stem):
+        directory = stem.with_suffix(".bootstrap")
+        nb.snapshot_runtime(Path(sys.base_prefix), directory)
+        return {"runtime_snapshot_sha256": nh._digest(directory / "snapshot.json")}
+
     def metadata(self, path):
         result = subprocess.run(
             ["/usr/bin/dpkg-deb", "--field", str(path), "Package", "Version", "Architecture"],
@@ -68,8 +74,22 @@ os.link(tmp,receipt); os.unlink(tmp)
 fd=os.open(receipt.parent,os.O_RDONLY|os.O_DIRECTORY); os.fsync(fd); os.close(fd)
 sys.exit(r.returncode)
 """
+        directory = receipt_path.with_suffix("").with_suffix(".bootstrap")
+        nb.validate_snapshot(directory)
+        if nh._digest(directory / "snapshot.json") != intent.get("runtime_snapshot_sha256"):
+            raise UpdateError("package sender runtime snapshot changed")
+        python = directory / "runtime/bin/python3.13"
         subprocess.run(
-            [sys.executable, "-I", "-c", guard, str(receipt_path), json.dumps(intent), str(path)],
+            [
+                str(python),
+                "-I",
+                "-B",
+                "-c",
+                guard,
+                str(receipt_path),
+                json.dumps(intent),
+                str(path),
+            ],
             check=True,
             capture_output=True,
             pass_fds=(lease_fd,),
@@ -389,6 +409,10 @@ class Updates:
                 if self.packages.installed(value["metadata"]["Package"]) != value["source_package"]:
                     raise UpdateError("source package database changed")
                 apply_intent = {"prepared_sha256": nh._digest(stem.with_suffix(".prepared.json"))}
+                if isinstance(self.packages, Debian):
+                    # Complete and verify the independent runtime before the
+                    # irreversible intent; incomplete snapshots never recopy.
+                    apply_intent.update(self.packages.prepare_execution(stem))
                 _atomic(started, apply_intent)
                 try:
                     self.packages.apply(

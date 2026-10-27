@@ -205,3 +205,11 @@ python packages/device-runtime/scripts/accept-native-retirement.py fail \
 ```
 
 脚本注入真实 exit(7) 准备命令并核对完整回执；退休后核对旧 ID 拒绝、新 ID 成功且稳定、失败成果保留、active 不变。它不安装包、不调用服务、不代表正式离线签名依赖交付、实机或宿主重启验收。完整 P1 更新/激活闭环仍未完成，原包钩子拒绝覆盖保护保持不变。
+
+## 包事务独立运行时副本（P1开发原型）
+
+Debian发送者不再直接使用待替换包的 `sys.executable`。管理员持包事务独占锁，在apply意图前将当前 `sys.base_prefix` CPython树复制到该事务直属 `.bootstrap/runtime`，逐成员核对root可信路径、类型、相对内部链接、权限、大小与SHA256；复制使用独立文件，不硬链接包内文件。复制前后核对源与副本一致、逐文件及目录fsync，最后无覆盖发布 `snapshot.json`。总预算50000成员/2GB；特殊文件、绝对或越界链接拒绝。
+
+apply意图绑定snapshot回执SHA256，启动前重新核对副本内容及回执摘要，使用副本解释器 `-I -B` 执行标准库guard；`-B`避免运行时写pycache改变快照。快照失败不写apply意图；无回执目录保持阻塞，不自动覆盖、清理或迁移。完成副本可重复核对，不要求原包文件继续存在或不变。当前副本仅支撑发送者，尚未把整个管理器切换到独立job，也未放开包钩子。
+
+`packages/device-runtime/scripts/accept-native-bootstrap.py --source <可信CPython根> --destination <管理器事务目录下新目录>` 用于隔离root验证。实际副本6238成员，独立inode、同ID稳定、重定位prefix及ssl/sqlite3/ctypes加载通过；未运行真实dpkg替换，未构建包含此模块的新制品，不能视为完整升级验收。现有包保护和多实例拒绝不变。
