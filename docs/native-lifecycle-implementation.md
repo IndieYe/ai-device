@@ -1142,3 +1142,5 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 `_socket_peer_process` 获取 pidfd 后、进入只读观察作用域前，原实现只在限定异常类型时关闭 FD；其他异常或中断可能泄漏描述符。新增模拟 FD 的 `RuntimeError` 和 `KeyboardInterrupt` 回归，修复前两例均复现未关闭；改为同一个 `finally` 覆盖初始化和作用域生命周期，原有身份失败错误转换及 caller 异常语义不变。helper 定向测试 153 通过、1 跳过，完整 Device 回归 1109 通过、4 跳过，ruff 和 `git diff --check` 通过。新增用例使用模拟 getsockopt 和真实 pipe FD，并非实际 Linux pidfd 的故障注入。
 
 只读观察仍不证明实际消息处理者、已加载代码或 invocation 绑定，不允许在观察作用域内执行不可逆动作。生产派发仍关闭；本次修改后旧 b4158df DEB 不包含此修复，尚未构建新包或 RPM。
+
+真实 Linux 验证：`accept-native-peer-pidfd.py` 在无网络一次性 amd64/Rosetta 容器，以准确 b4158df DEB 提供解释器，显式核对导入当前 Worktree `native_helper.py`。真实 `SO_PEERPIDFD` 获取后注入初始化异常，确认 `/proc` 中 pidfd 对应子进程，异常后 FD 返回 EBADF；随后同一真实连接正常观察并检测 peer 退出。输出 `real_pidfd_initialization_interruption_closed`、`peer_pidfd_bound_and_exit_refused`，日志 `20261027-232952-49a114.log`。这不是新包验收，不证明生产监督、逐消息处理者或所有初始化窗口；生产派发依旧关闭。
