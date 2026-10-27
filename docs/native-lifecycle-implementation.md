@@ -564,3 +564,7 @@ helper启动/登记和其他包apply被持久job意图阻断。worker从完整�
 新增管理员Python retire_closed_job：先按关闭协议校验旧快照与精确批准，再持实例锁和包EX锁复核关闭摘要及无apply/sender/outcome，持久无覆盖写job-retired（绑定原intent及closed摘要）。不删除旧意图/关闭记录；旧ID直接apply和迟到worker均拒绝。新helper统一精确验证退休证据，启动/登记及apply/dispatch忽略合法退休job，但其他未退休或损坏job、任何apply仍阻塞。新ID必须重新prepare/approve并重查绑定、源和停止状态。关闭/退休仅适用于新协议及与当前代码一致快照；既有旧helper不识别退休，仍保守阻塞，未提供升级部署或CLI。原包钩子不变。
 
 v23未提交代码wheel在一次性systemd容器使用低版本空源fixture：旧worker处于start-pre时关闭并退休，迟到启动被拒绝、旧ID不重放；新ID独立准备批准后派发，原Device候选preinst拒绝覆盖，新job门禁保留、active不变。exec 0；不代表设备升级、激活或真实生产许可。单测覆盖退休幂等、旧ID、新ID、损坏与其他未知事务阻塞；完整回归960 passed、3 Linux skipped（46.22s，后附加拒绝断言定向52通过）。P1仍未完成，需bootstrap稳定版本化与旧helper升级方案、事务授权和完整生命周期验收。
+
+## 42. 版本布局保护的开发包加固
+
+现有builder硬编码0.2.2-native1，检查单个版本路径会漏掉其他版本。未实现版本切换前，DEB preinst增加packages/bootstrap根路径及悬空符号链接检查；RPM pretrans增加两个根路径检查，任何已有布局一律拒绝普通覆盖。旧实例/manager/指定版本检查仍保留，不改变现有授权门禁。DEB提取自builder的实际preflight脚本，以临时重定向目录验证全新通过、旧版本与悬空链接拒绝且无写入；RPM仅静态检查Lua根路径，未重建包或实测RPM，Lua的悬空链接语义尚未验证。完整回归966 passed/3 skipped为悬空链接补充前，之后定向8通过。此加固不是稳定版本化布局、bootstrap升级切换或旧helper兼容完成；P1继续。

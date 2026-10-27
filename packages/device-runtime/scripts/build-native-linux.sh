@@ -54,6 +54,10 @@ chmod -R go-w "$root$bootstrap"
 cat > "$work/preflight" <<'EOF'
 #!/bin/sh
 set -eu
+if [ -e /opt/ai-device/packages ] || [ -L /opt/ai-device/packages ] || [ -e /opt/ai-device/bootstrap ] || [ -L /opt/ai-device/bootstrap ]; then
+ echo 'existing native versioned layout; helper transaction required' >&2
+ exit 1
+fi
 if [ -e /opt/ai-device/instances ] || [ -e /var/lib/ai-device/manager ] || [ -e /opt/ai-device/bootstrap/0.2.2-native1 ]; then
  echo 'native lifecycle helper transaction required; no files have been replaced' >&2
  exit 1
@@ -102,7 +106,7 @@ Offline development payload. Service management and unattended update not enable
 mkdir -p %{buildroot}
 cp -a $root/. %{buildroot}/
 %pretrans -p <lua>
-local p = {'/opt/ai-device/instances','/var/lib/ai-device/manager','/opt/ai-device/packages/0.2.2-native1','/opt/ai-device/bootstrap/0.2.2-native1'}
+local p = {'/opt/ai-device/instances','/var/lib/ai-device/manager','/opt/ai-device/packages','/opt/ai-device/bootstrap','/opt/ai-device/packages/0.2.2-native1','/opt/ai-device/bootstrap/0.2.2-native1'}
 for _,path in ipairs(p) do
  if posix.stat(path) then error('existing native installation: helper transaction required') end
 end
