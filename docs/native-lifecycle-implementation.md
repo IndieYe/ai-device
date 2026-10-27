@@ -616,3 +616,7 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 53. 管理员运行时回执读取与证据绑定
 
 管理员验签准备对运行时回执打开后校验实际文件为登记用户拥有的普通文件，并在读取时限制256000字节；回执摘要直接来自解析和校验的字节，不再另读路径生成可能不一致的摘要。后续证据复核同样限长；回执在解析后变化时拒绝建立prepared记录。增加超限与解析后变化测试，相关98项通过，完整回归983通过、3跳过。这不承诺对用户可写文件全程原子隔离，也不解除新job派发或原包门禁；未进行真实设备操作。
+
+## 54. systemd mask 与旧代码直接调用的隔离边界
+
+一次性Linux容器提取v17原DEB，以`systemctl --root=/ mask ai-device-native-helper.service`创建指向`/dev/null`的持久unit mask，并核实链接；随后直接运行v17 bootstrap Python调用实际旧`_daemon_lease`，仍成功获取registry锁。该实验只证明unit mask不约束直接调用旧代码的锁函数，并非真实daemon直接启动或宿主重启实验；也未证明其他启动入口均已封闭。迁移不能仅用mask或锁空闲作为旧helper不会再运行的证据。当前没有安全迁移实现，新job派发保持关闭、原包保护不变；无真实服务操作。
