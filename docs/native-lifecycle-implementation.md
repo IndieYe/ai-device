@@ -1192,3 +1192,12 @@ helper/update/job 266 通过、1 跳过；Device 全量 1125 通过、4 跳过�
 实际 `Helper.handle` 恢复路径复现：意图 `execution_barrier=true` 或 `1.0` 被 Python 当作旧整数 1，缺 sender 回执也能生成 `confirmed_running`；其他畸形版本可在同 ID 路径被接受。新增严格支持缺字段的历史格式或精确整数 1/2；恢复、同 ID 和新 ID 扫描均拒绝其他类型/值。旧整数 1 及无字段行为按原兼容语义保留，不补造旧回执。
 
 sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 当作 `2`；已先复现可错误恢复及放行新 start，再改为类型敏感 JSON 比较。负向测试确认没有新恢复记录、没有重放/新 start 且旧证据字节保留；既有合法恢复、旧版本和互斥回归通过。helper/update/job 277 通过、1 跳过；Device 完整回归 1136 通过、4 跳过，ruff 和 diff 检查通过。使用隔离本地 adapter，不证明真实 systemd 竞态或宿主崩溃；第148节 `baa0797` DEB 不含本次修复，须重新构建准确制品。生产派发依旧关闭，旧记录不删除或自动迁移。
+
+
+## 150. e298fdb 准确 DEB 的恢复故障验收
+
+干净提交 `e298fdb8c3a084dafab5bb19cbc550cde0d8464a` 离线构建 `build/native-wheels-p1-e298fdb/`；Device wheel SHA256 `c19645d9cd2ebe20c5e0265aacb69cf6b0d61fbb852252cadbca8aa2e53b20cd`，Bash `aee883b74bb2fc816abb77ba428ed4339c6901726a9ac3098a3ba8737fa16dd3`、FS `b872aa775eaacc9836c0ec94a2abf1e41c8395ef725eecb37d05b521053ab626`；六个关键模块逐字节匹配 Git。锁定输入组装 `build/native-payload-p1-e298fdb/`，在一次性无网络 Linux 构建未签名开发包 `build/native-packages-p1-e298fdb/ai-device-native-client_0.2.2-1_amd64.deb`，109811944 字节，SHA256 `d28af6086edb846317624204e8774e56da707367ffdbc0611c7964bf641d781d`。
+
+新包固定 Hash 验收脚本在干净容器验证新装、包内六模块和 bootstrap 四模块与源码一致，包内 helper 严格拒绝畸形屏障与嵌套 sender 类型漂移、合法旧/新版本通过，批准/退休 fixture、默认派发拒绝及重装保护通过（`20261028-000546-80a530.log`）。独立真实隔离 systemd 使用新包完成普通用户基线后，启动实际 guard 并模拟响应丢失；对该容器自己的 intent 注入 `true` 屏障、对 sender 嵌套 intent 注入 `2.0`，两者拒绝恢复且不生成 recovery；复原原测试字节后缺 returncode 拒绝、匹配回执显式恢复、同 ID 不重放且 MainPID 稳定。输出 `SYSTEMD_INVALID_BARRIER_AND_RECEIPT_REFUSED`、`SYSTEMD_RECEIPT_UNKNOWN_RECOVERY_OK`，日志 `20261028-000646-b9741d.log`；容器已退出。
+
+本验收仅覆盖隔离装包和 systemd 指定故障，不证明真实设备、宿主断电、受控监督/实际处理者、invocation 身份或成功升级。生产派发仍默认关闭，旧证据不迁移；RPM 缺离线 rpmbuild。

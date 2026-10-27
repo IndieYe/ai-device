@@ -44,6 +44,34 @@ recovery = registry / "recovery-package-probe-receipt-check.json"
 pid = subprocess.check_output(["systemctl", "show", unit, "-p", "MainPID", "--value"], text=True).strip()
 assert int(pid) > 1
 try:
+    invalid_intent = json.loads(intent)
+    invalid_intent["execution_barrier"] = True
+    intent_path.write_text(json.dumps(invalid_intent))
+    try:
+        service.handle({**request, "action": "resolve-running"}, peer_uid=12345)
+    except nh.HelperError as exc:
+        assert "invalid start intent barrier" in str(exc)
+    else:
+        raise AssertionError("invalid barrier authorized recovery")
+    assert not recovery.exists()
+finally:
+    intent_path.write_bytes(intent)
+
+try:
+    receipt["intent"]["execution_barrier"] = 2.0
+    receipt_path.write_text(json.dumps(receipt))
+    try:
+        service.handle({**request, "action": "resolve-running"}, peer_uid=12345)
+    except nh.HelperError as exc:
+        assert "receipt mismatch" in str(exc)
+    else:
+        raise AssertionError("type-drifted receipt authorized recovery")
+    assert not recovery.exists() and intent_path.read_bytes() == intent
+finally:
+    receipt_path.write_bytes(original)
+receipt = json.loads(original)
+
+try:
     receipt.pop("returncode")
     receipt_path.write_text(json.dumps(receipt))
     try:
@@ -68,4 +96,5 @@ assert resolved["recovery"]["state"] == "confirmed_running"
 assert resolved["recovery"]["start_replayed"] is False
 assert intent_path.read_bytes() == intent and adapter.starts == 1
 assert subprocess.check_output(["systemctl", "show", unit, "-p", "MainPID", "--value"], text=True).strip() == pid
+print("SYSTEMD_INVALID_BARRIER_AND_RECEIPT_REFUSED", flush=True)
 print("SYSTEMD_RECEIPT_UNKNOWN_RECOVERY_OK", flush=True)
