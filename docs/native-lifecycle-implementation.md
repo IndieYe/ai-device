@@ -652,3 +652,7 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 62. 当前DEB已有布局拒绝原因验证
 
 对第61节的当前源码开发DEB（SHA256 `9b37b30b0f915bcbd15dd8d2475559d2e98648438e1ca5f98d4fb63bcab9d00c`），一次性Linux容器先建立已有其他版本目录及哨兵，再执行真实`dpkg -i`。退出码1，输出明确`existing native versioned layout; helper transaction required`；原哨兵内容未变，目标payload和bootstrap目录均未创建。该证据限于已有目录场景，不证明第61节重复安装失败的具体原因，也不证明包升级许可、悬空链接、所有失败路径或真实设备行为。新job派发仍关闭，旧helper跨重启迁移未完成，原包保护未放宽。
+
+## 63. 当前DEB隔离依赖检查
+
+对第61节SHA256为`9b37b30b0f915bcbd15dd8d2475559d2e98648438e1ca5f98d4fb63bcab9d00c`的当前源码开发DEB，在一次性amd64 Linux容器fresh安装后，包内client Python的`pip check`报告无损坏依赖；导入ssl、sqlite3、ctypes、zlib、cryptography、zstandard并执行Ed25519签名成功；独立bootstrap Python导入选定标准库和native_helper成功。两个运行时目录的普通`*.so`和`*.so.*`逐一ldd未报告`not found`，非动态对象的ldd错误被忽略。该证据不覆盖全部extras、可执行文件、延迟加载、目标实机或完整升级；不是正式签名/发布。旧helper跨重启迁移仍缺，新job派发关闭，原包保护不变，未操作真实设备。
