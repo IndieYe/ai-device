@@ -394,3 +394,9 @@ v15 DEB/RPM准确同源：helper SHA256 `ab716baaa822496a25f737c2291d1d993b2511b
 交付联动：源码、可选依赖/lock、测试、开发验收脚本、HELPER文档已更新；无数据库/API/IPC/前端/用户配置变化。正式信任根、中心release发布完整Schema、原生包native依赖与构建交付仍缺，不扩大支持矩阵。**只完成认证提取子阶段，不是完整候选准备**：结果authenticated_extracted，venv_prepared=false、activated=false。最终目录共用核心venv准备与恢复、候选证据绑定native_update批准仍缺；现有update.prepare仍只是管理员摘要台账，不视为签名候选。包钩子授权、任务收口、稳定bootstrap/版本化布局及激活终态仍缺，包拒绝覆盖保护未解除，不进入P2。
 
 第20节最终验证：候选40项通过，完整Device **878 passed in 44.92s**；uv lock --check、ruff、diff检查通过。最终复现脚本在隔离Linux普通UID12345对同一v15包成功，容器自动回收。共用installation._prepare已核实在最终release目录创建venv并绑定持久解释器，不允许将提取staging直接当已准备运行候选；后续应新增明确原生准备入口及证据消费，不通过旧upgrader绕过受管门禁。
+
+## 21. 任务执行登记及最终目录准备工具接入
+
+用户要求后创建整体任务状态blk-42959，实际Enter成功，关联auto_enters任务模板blk-13687；当前会话状态blk-42545经set-execution-task设置references.role=execution，set-automation开启stop_reason_check，已核验metadata=true。完整任务P0—P5记录于任务Resource bres-3249；授权仍仅隔离P1，不扩大真实服务等边界。
+
+复用Worktree de51eeb基线开始下一准备子阶段。installation._prepare新增显式uv_executable可选参数，必须绝对可执行文件，避免原生入口靠可变PATH选工具；原调用默认不变。解释器仍用当前持久CPython3.13真实路径，不新增任意解释器入口。3项回归验证指定uv、无PATH查询、最终release目录venv、不改active及无效工具提前拒绝。安装64项、完整Device881 passed in 41.28s，ruff通过。未接原生准备入口、未执行真实venv/包/服务实验，不能称完整候选准备交付；下一项是验签候选证据消费与最终目录准备台账。无数据库/前端/公开API或配置变化。

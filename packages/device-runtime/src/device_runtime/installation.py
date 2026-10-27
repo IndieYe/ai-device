@@ -284,13 +284,19 @@ def _check_target(manifest, roles):
         raise InstallationError("installed roles are not supported by this bundle target")
 
 
-def _prepare(root, bundle, manifest, roles, *, required_output_map_format=None):
+def _prepare(root, bundle, manifest, roles, *, required_output_map_format=None, uv_executable=None):
     _check_target(manifest, roles)
     if required_output_map_format is None:
         required_output_map_format = _required_output_map_format(root)
-    uv = shutil.which("uv")
-    if not uv:
-        raise InstallationError("uv must be installed and available on PATH")
+    if uv_executable is None:
+        uv = shutil.which("uv")
+        if not uv:
+            raise InstallationError("uv must be installed and available on PATH")
+    else:
+        tool = Path(uv_executable)
+        if not tool.is_absolute() or not tool.is_file() or not os.access(tool, os.X_OK):
+            raise InstallationError("explicit uv must be an absolute executable file")
+        uv = str(tool.resolve())
     # UV_* is intentionally filtered by _invoke. Do not ask uv to rediscover
     # "3.13": that may select a different, root-private managed interpreter.
     # Resolve the bootstrap venv symlink so releases do not depend on its lifetime.

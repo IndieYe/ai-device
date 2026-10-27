@@ -810,3 +810,37 @@ def test_invalid_native_runner_rejected_before_instance(tmp_path, delivery, fake
             runner_python="relative/python",
         )
     assert not root.exists()
+
+
+def test_prepare_explicit_native_uv_ignores_path(tmp_path, delivery, fake_uv, monkeypatch):
+    root = tmp_path / "instance"
+    create(root, delivery)
+    before = (root / "active.json").read_bytes()
+    executable = tmp_path / "packaged-tools" / "uv"
+    executable.parent.mkdir()
+    executable.write_text("#!/bin/sh\nexit 99\n")
+    executable.chmod(0o700)
+    monkeypatch.setattr(module.shutil, "which", lambda _: pytest.fail("PATH lookup not allowed"))
+    fake_uv.clear()
+    result = module._prepare(
+        root, delivery, module.inspect_bundle(delivery), ["client"], uv_executable=executable
+    )
+    assert (root / "active.json").read_bytes() == before
+    tool_calls = [args for args, _ in fake_uv if "--no-config" in args]
+    assert tool_calls and all(args[0] == str(executable.resolve()) for args in tool_calls)
+    assert (root / "releases" / result["release"] / "installation.json").is_file()
+    for args, _ in fake_uv:
+        if args[2] == "venv":
+            assert args[-1] == str(root / "releases" / result["release"] / "client/venv")
+
+
+@pytest.mark.parametrize("tool", ["relative/uv", "/missing-native-uv"])
+def test_invalid_explicit_uv_refused_before_release(tmp_path, delivery, fake_uv, tool):
+    root = tmp_path / "instance"
+    create(root, delivery)
+    before = set((root / "releases").iterdir())
+    with pytest.raises(InstallationError, match="absolute executable"):
+        module._prepare(
+            root, delivery, module.inspect_bundle(delivery), ["client"], uv_executable=tool
+        )
+    assert set((root / "releases").iterdir()) == before
