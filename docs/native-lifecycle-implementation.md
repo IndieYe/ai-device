@@ -840,3 +840,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 100. 隔离逐记录认证原型
 
 新增 `scripts/probe-native-strict-record.py`，无网络隔离 Linux 验证受限 SEQPACKET 记录接收：正确测试子进程通过，错误 PID、超长截断和 SCM_RIGHTS 被拒绝，测试收到的 FD 被关闭且数量不增加。`STRICT_RECORD_PROBE_OK`，日志 `20261027-201451-fa63ab.log`；ruff通过。原型仅凭测试父进程提供 PID，不绑定 pidfd、监督器或 systemd，未涵盖所有凭据/截断/并发故障，绝不接入生产；详细限制见 `native-helper-peer-protocol-review.md`。生产派发保持拒绝，P1未完成。
+
+
+## 101. 受控父子进程与监督器退出原型
+
+新增隔离脚本 `scripts/probe-native-supervised-start.py`：监督器 fork 子进程、持有子 pidfd、核对 ready 的 SCM_CREDENTIALS 与直接子进程，子进程检查继承的监督器 pidfd；监督器存活时报告 A、先退出后报告 R。Linux 6.18.15 amd64/Rosetta 无网络容器 `SUPERVISED_START_PROBE_OK`，日志 `20261027-201815-c7ac14.log`，ruff通过。仅验证固定时序，不执行真实候选、不使用 systemd 或事务锁；一次存活检查不能防检查后死亡，不能证明真实身份或失败关闭。详见 `native-helper-peer-protocol-review.md`。生产派发保持拒绝，完整回归本轮未跑。

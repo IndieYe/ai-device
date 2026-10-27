@@ -45,6 +45,12 @@
 
 该原型的 expected PID 来自测试父进程，不与 pidfd、可信启动或 systemd invocation 绑定；没有实现完整消息解析、恶意 root/capability、namespace、错误注入、附属数据截断时全部 FD 内核行为、进程死亡竞争或监督器故障关闭，不可进入生产调用链。特别注意 fork 后 FD 能继续使用、PID 可复用，不能把该脚本的整数比较用作授权。
 
+## 受控父子进程原型
+
+`scripts/probe-native-supervised-start.py` 仅在隔离容器 PID 1 环境运行：监督器为自身取得 pidfd，fork 子进程后取得子进程 pidfd，在未回收直接子进程期间接收 SEQPACKET ready 并核对 SCM_CREDENTIALS 与子 PID/UID，再确认两个 pidfd 未报告退出；受控门闩释放后，子进程使用继承的监督器 pidfd 检查监督器是否已退出。实测监督器存活时子进程报告 A，监督器先退出并被回收后遗留子进程报告 R；`SUPERVISED_START_PROBE_OK`，日志 `20261027-201815-c7ac14.log`，ruff 通过。
+
+该原型未执行或校验实际候选字节，未创建 systemd unit、绑定 invocation、服务端 socket、锁或持久 intent；其 A 仅代表一次瞬时存活观察，**无法排除检查后立即死亡**。父进程的 `pidfd_open(child_pid)` 在这个实验中依赖直接子进程未被其他线程回收，不能直接推断并发生产环境中 PID 不会复用。探针的门闩由外部测试者控制并非实际生产协议，pidfd/消息可信链、异常清理及遗留进程收口仍未完成。必须依靠持锁发布的持久 intent 及所有参与者的共同协议跨越不可原子化的死亡间隙；不能以该原型的 A 打开派发。
+
 ## 现有代码的局部锁序核查（非闭环证明）
 
 - `Helper.handle` 的 start 路径在实例管理锁下取得 execution lease 与共享 package lease，再检查 `_assert_no_package_intent` 并 `_save_new` start intent；需要启动时才在实例 service lease 下调用 sender，向 sender 传递 execution 与 package fd。该描述限于所读代码，不证明进程树全部故障均收敛。
