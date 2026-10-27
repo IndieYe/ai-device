@@ -71,6 +71,7 @@ def test_dispatch_records_once_without_replay(transaction, monkeypatch, lost):
     # Static fixture already has apply intent; dispatch must begin before apply.
     transaction.with_suffix(".apply-intent.json").unlink()
     monkeypatch.setattr(job.bootstrap, "snapshot_runtime", lambda *a: {})
+    monkeypatch.setattr(job, "_require_matching_worker_python_sources", lambda *a: None)
     real_digest = job.helper._digest
 
     def digest(path):
@@ -139,6 +140,7 @@ def test_dispatch_fsync_failure_never_calls_runner(transaction, monkeypatch, fai
     monkeypatch.setattr(job, "_require_proven_job_fence", lambda: None)
     transaction.with_suffix(".apply-intent.json").unlink()
     monkeypatch.setattr(job.bootstrap, "snapshot_runtime", lambda *args: {})
+    monkeypatch.setattr(job, "_require_matching_worker_python_sources", lambda *a: None)
     original_digest = job.helper._digest
 
     def digest(path):
@@ -205,6 +207,7 @@ def test_dispatch_process_exit_after_durable_intent_does_not_replay(transaction,
     monkeypatch.setattr(job, "_require_proven_job_fence", lambda: None)
     transaction.with_suffix(".apply-intent.json").unlink()
     monkeypatch.setattr(job.bootstrap, "snapshot_runtime", lambda *args: {})
+    monkeypatch.setattr(job, "_require_matching_worker_python_sources", lambda *a: None)
     original_digest = job.helper._digest
     original_save = job.helper._save_new
     parent_pid = os.getpid()
@@ -330,6 +333,7 @@ def test_dispatch_process_exit_after_runner_begins_stays_recorded(transaction, m
     monkeypatch.setattr(job, "_require_proven_job_fence", lambda: None)
     transaction.with_suffix(".apply-intent.json").unlink()
     monkeypatch.setattr(job.bootstrap, "snapshot_runtime", lambda *args: {})
+    monkeypatch.setattr(job, "_require_matching_worker_python_sources", lambda *a: None)
     original_digest = job.helper._digest
 
     def digest(path):
@@ -697,4 +701,79 @@ def test_dispatch_refuses_drift_in_snapshot_management_lock_before_intent(transa
         job.dispatch_job(manager, "probe", "one", runner=lambda *a, **k: calls.append(a))
     assert not calls
     assert not transaction.with_suffix(".job-intent.json").exists()
+    assert not transaction.with_suffix(".job-dispatch.json").exists()
+
+
+@pytest.mark.parametrize("change", ["contents", "missing", "extra", "symlink", "nested-symlink"])
+def test_worker_python_source_tree_rejects_drift(tmp_path, change):
+    import shutil
+
+    current = tmp_path / "current"
+    current.mkdir()
+    (current / "__init__.py").write_text("version = 1\n")
+    (current / "guard.py").write_text("value = 1\n")
+    snapshot = tmp_path / "snapshot"
+    shutil.copytree(current, snapshot)
+    job._require_matching_worker_python_sources(snapshot, current)
+    if change == "contents":
+        (snapshot / "guard.py").write_text("value = 2\n")
+    elif change == "missing":
+        (snapshot / "guard.py").unlink()
+    elif change == "extra":
+        (snapshot / "extra.py").write_text("value = 1\n")
+    elif change == "symlink":
+        (snapshot / "guard.py").unlink()
+        (snapshot / "guard.py").symlink_to("__init__.py")
+    else:
+        (snapshot / "nested").symlink_to(current, target_is_directory=True)
+    with pytest.raises(job.JobError, match="snapshot worker Python source tree"):
+        job._require_matching_worker_python_sources(snapshot, current)
+
+
+def test_worker_python_source_tree_ignores_bytecode_cache(tmp_path):
+    import shutil
+
+    current = tmp_path / "current"
+    current.mkdir()
+    (current / "__init__.py").write_text("")
+    snapshot = tmp_path / "snapshot"
+    shutil.copytree(current, snapshot)
+    (snapshot / "__pycache__").mkdir()
+    (snapshot / "__pycache__" / "__init__.pyc").write_bytes(b"fixture")
+    job._require_matching_worker_python_sources(snapshot, current)
+
+
+def test_dispatch_rejects_other_snapshot_source_drift_before_intent(transaction, monkeypatch):
+    import shutil
+    from contextlib import contextmanager
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from device_runtime import native_update as update
+
+    monkeypatch.setattr(job.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(__import__("sys"), "platform", "linux")
+    monkeypatch.setattr(job, "_require_proven_job_fence", lambda: None)
+    monkeypatch.setattr(job.bootstrap, "snapshot_runtime", lambda *args: {})
+    transaction.with_suffix(".apply-intent.json").unlink()
+    package = transaction.with_suffix(".bootstrap") / "runtime/lib/python3.13/site-packages/device_runtime"
+    shutil.copytree(Path(job.__file__).parent, package, ignore=shutil.ignore_patterns("__pycache__"))
+    (package / "native_candidate.py").write_text("# stale snapshot\n")
+
+    @contextmanager
+    def txn(*args):
+        yield {}, transaction
+
+    @contextmanager
+    def lease(*args):
+        yield
+
+    manager = SimpleNamespace(
+        packages=update.Debian(), registry=transaction.parent.parent,
+        _transaction=txn, _prepared=lambda *args: {}, _apply_lease=lease,
+    )
+    calls = []
+    with pytest.raises(job.JobError, match="snapshot worker Python source tree differs"):
+        job.dispatch_job(manager, "probe", "one", runner=lambda *a, **k: calls.append(a))
+    assert not calls and not transaction.with_suffix(".job-intent.json").exists()
     assert not transaction.with_suffix(".job-dispatch.json").exists()

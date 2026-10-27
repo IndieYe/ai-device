@@ -89,6 +89,40 @@ def describe_job(stem):
     return {"descriptor": descriptor, "unit_content": content}
 
 
+def _require_matching_worker_python_sources(snapshot_package, current_package):
+    """Compare local Python sources only; not runtime or third-party identity."""
+    def collect(root):
+        root = Path(root)
+        if root.is_symlink() or not root.is_dir():
+            raise JobError("snapshot worker Python source tree unavailable")
+        entries = {}
+
+        def fail(error):
+            raise error
+
+        for base, directories, files in os.walk(root, followlinks=False, onerror=fail):
+            directories[:] = sorted(d for d in directories if d != "__pycache__")
+            for directory in directories:
+                if (Path(base) / directory).is_symlink():
+                    raise JobError("snapshot worker Python source tree contains symlink")
+            for name in sorted(files):
+                if not name.endswith(".py"):
+                    continue
+                path = Path(base) / name
+                if path.is_symlink() or not path.is_file():
+                    raise JobError("snapshot worker Python source tree contains invalid file")
+                entries[path.relative_to(root).as_posix()] = helper._digest(path)
+        if "__init__.py" not in entries:
+            raise JobError("snapshot worker Python source tree unavailable")
+        return entries
+
+    try:
+        if collect(snapshot_package) != collect(current_package):
+            raise JobError("snapshot worker Python source tree differs")
+    except OSError as exc:
+        raise JobError("snapshot worker Python source tree unavailable") from exc
+
+
 def _require_proven_job_fence():
     # Legacy test helpers are retired manually, not migrated. This alone does
     # not prove the live helper identity or the new protocol's runtime fence.
@@ -157,6 +191,7 @@ def dispatch_job(manager, instance_id, operation_id, *, runner=None):
                     Path(__file__).with_name(module)
                 ):
                     raise JobError("snapshot worker code differs from dispatch implementation")
+            _require_matching_worker_python_sources(package, Path(__file__).parent)
             unit = (
                 "ai-device-package-" + hashlib.sha256(str(stem).encode()).hexdigest() + ".service"
             )
