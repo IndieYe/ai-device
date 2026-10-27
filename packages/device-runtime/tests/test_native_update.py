@@ -802,6 +802,13 @@ def test_explicit_job_recovery_retains_fence_and_never_replays(update, monkeypat
     assert first["fence_retained"] and not first["retry_allowed"]
     assert job.recover_job(manager, "probe", "one", runner=runner) == first
     assert packages.calls == 1
+    before = {suffix: stem.with_suffix(suffix).read_bytes() for suffix in (
+        ".job-intent.json", ".apply-intent.json", ".sender.json", ".recovery.json", ".job-recovery.json"
+    )}
+    # A late worker with the same durable intent observes, never reruns the package.
+    late = manager.apply("probe", "one", job_intent_sha256=nh._digest(stem.with_suffix(".job-intent.json")))
+    assert late["recovery"]["reapplied"] is False and packages.calls == 1
+    assert before == {suffix: stem.with_suffix(suffix).read_bytes() for suffix in before}
     with pytest.raises(nh.HelperError, match="blocks start"):
         nh._assert_no_package_intent(manager.registry)
 

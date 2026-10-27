@@ -1063,3 +1063,10 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 `observe_job` 原先以字典推导式解析 systemctl 输出，重复属性最后值会覆盖前值、畸形行被忽略；针对重复 `ActiveState` 的回归先复现 `recover_job` 错误接受并进入恢复路径。现请求 `--all --no-pager`，仅在输出不超过 16384 字符、六个指定字段齐全且各出现一次、没有畸形行或其他字段时提供 unit 观察；否则观察不可用，`recover_job` 保持阻塞，不重派、不删除 intent 或释放围栏。独立有效的包结果仍可在只读报告显示，但不能代替 unit 终态对账。
 
 回归覆盖重复、缺失、畸形、额外及过长输出，拒绝时无 recovery 文件或新增包动作，完整有效终态仍可显式恢复。完整 Device 回归 `1107 passed, 4 skipped`（`20261027-224304-9b7522.log`）；ruff/diff 检查通过。一次性无网络 systemd 容器中，准确 `57714ae` DEB 提供运行时，以只读挂载的当前 `native_update_job.py` 和隔离 fixture 台账观察真实 `/bin/true` 瞬态 unit，完整字段解析成功且禁止重试、围栏保留，`REAL_SYSTEMD_JOB_OBSERVATION_PARSER_OK`（`20261027-224508-1103f2.log`）。未制作包含此次代码的新包；该实验不覆盖真实包事务、systemd 重启或完整 unknown 恢复，生产派发继续关闭。
+
+
+## 134. 对账后迟到 worker 的同 ID 不重放回归
+
+扩展 `test_explicit_job_recovery_retains_fence_and_never_replays`：有效已执行 job 显式对账完成后，模拟同一 intent 的迟到 worker 调用真实 `Updates.apply`，确认只返回已有恢复观察、`reapplied=false`，包执行次数不增加，job/apply intent、sender 与两类恢复证据字节不变。针对性测试通过（`20261027-224733-4f2116.log`），ruff/diff 检查通过。
+
+该测试为顺序性替身包管理器回归，不代表真实 systemd 并发、unit 身份连续性、迟到 worker 与 close 的完整竞争或宿主重启验收；生产派发仍关闭。
