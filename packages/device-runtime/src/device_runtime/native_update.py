@@ -514,11 +514,23 @@ class Updates:
         with self._transaction(instance_id, operation_id) as (binding, stem):
             return self._observation(stem, self._prepared(binding, stem))
 
-    def recover(self, instance_id, operation_id):
+    def recover(self, instance_id, operation_id, *, job_intent_sha256=None):
         """Record observed outcome after sender completion; never reapply."""
         with self._transaction(instance_id, operation_id) as (binding, stem):
             value = self._prepared(binding, stem)
             with self._apply_lease(self.registry / "package-manager", existing=True):
+                if job_intent_sha256 is not None:
+                    job_path = stem.with_suffix(".job-intent.json")
+                    nh._trusted(job_path)
+                    job = json.loads(job_path.read_bytes())
+                    if (
+                        nh._digest(job_path) != job_intent_sha256
+                        or job.get("instance_id") != instance_id
+                        or job.get("operation_id") != operation_id
+                        or job.get("prepared_sha256")
+                        != nh._digest(stem.with_suffix(".prepared.json"))
+                    ):
+                        raise UpdateError("job recovery intent differs")
                 intent_path = stem.with_suffix(".apply-intent.json")
                 nh._trusted(intent_path)
                 intent = json.loads(intent_path.read_text())

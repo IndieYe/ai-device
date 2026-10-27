@@ -540,3 +540,9 @@ helper启动/登记和其他包apply被持久job意图阻断。worker从完整�
 诊断前后registry下全部目录/文件mode、mtime_ns、文件SHA256快照一致，没有补锁或写台账。两临时容器ACCEPTANCE_EXIT=0，随后关机外层130分开记录；均已退出，无后台遗留，客户端未启动，包保护保持。源码仅扩展验收脚本，无核心变更；核心完整955+3skip沿用ce9d3f5，未声称本轮重跑。sh-n/diff通过。
 
 显式恢复仍未实现：failed/缺unit不可单独证明排队job不会再执行，诊断也不解除持久门禁。下一步需准确unit/worker退出证据与锁空闲联合核验、持久恢复记录及旧ID永不重派；不得直接删除job-intent或因源恢复就复用旧job。P1仍未完成。
+
+## 38. 已执行job管理员显式对账
+
+新增Python recover_job，Linux root显式，先读取匹配job证据且systemd Loaded、inactive/failed、MainPID0、无Job、apply意图存在；复用原Updates.recover的准确批准/源包观察/匹配sender及全局EX锁。recover增加可选job-intent摘要参数，在原锁内重验身份、prepared与意图摘要；最后无覆盖写job-recovery，绑定job-intent及recovery文件SHA，重复同证据幂等。retry_allowed=false且fence_retained=true，未删意图、不执行包、不激活。
+
+新增完整fixture回归验证成功对账幂等、不重执行、活动unit拒绝、启动门禁保留。完整956 passed/3 Linux skipped（46.73s），ruff/format/diff通过。此入口尚未真实systemd动态验收或公开CLI，不能称通用恢复完成；缺apply、缺sender、unit未知、执行前失败仍拒绝，旧job不退休、新ID仍受原门禁约束。下一步新wheel动态验证此对账及缺回执拒绝，再设计执行前失败的一次性worker关闭证据/退休协议；不要把诊断failed当不再执行证明。P1未完成。

@@ -304,6 +304,47 @@ def observe_job(manager, instance_id, operation_id, *, runner=None):
     return report
 
 
+def recover_job(manager, instance_id, operation_id, *, runner=None):
+    """Explicit evidence reconciliation only, never retry or release a fence."""
+    import sys
+
+    if sys.platform != "linux" or os.geteuid() != 0:
+        raise JobError("Linux administrator required")
+    observation = observe_job(manager, instance_id, operation_id, runner=runner)
+    unit = observation["unit_observation"] or {}
+    if (
+        unit.get("LoadState") != "loaded"
+        or unit.get("ActiveState") not in ("inactive", "failed")
+        or unit.get("MainPID") != "0"
+        or unit.get("Job") not in ("", "0")
+        or not observation["apply_intent_present"]
+    ):
+        raise JobError("completed job and apply evidence required; remains blocked")
+    # recover rechecks approval/source/sender and acquires the global EX lease.
+    result = manager.recover(
+        instance_id, operation_id, job_intent_sha256=observation["intent_sha256"]
+    )
+    with manager._transaction(instance_id, operation_id) as (_binding, stem):
+        if helper._digest(stem.with_suffix(".job-intent.json")) != observation["intent_sha256"]:
+            raise JobError("job recovery intent changed")
+        receipt = {
+            "state": "job_reconciled_without_replay",
+            "job_intent_sha256": observation["intent_sha256"],
+            "recovery_sha256": helper._digest(stem.with_suffix(".recovery.json")),
+            "recovery_state": result["recovery"]["state"],
+            "retry_allowed": False,
+            "fence_retained": True,
+        }
+        path = stem.with_suffix(".job-recovery.json")
+        if path.exists():
+            helper._trusted(path)
+            if json.loads(path.read_bytes()) != receipt:
+                raise JobError("job recovery evidence changed")
+        else:
+            helper._save_new(path, receipt)
+        return receipt
+
+
 def main():
     import argparse
 

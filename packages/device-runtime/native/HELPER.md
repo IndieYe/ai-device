@@ -221,3 +221,5 @@ apply意图绑定snapshot回执SHA256，启动前重新核对副本内容及回�
 独立job新增Python显式原型dispatch_job，尚未公开CLI/IPC或真实systemd验收。准确批准后包锁内核对完整快照与当前worker源码，先job-intent持久化，解锁后一次systemd-run；dispatch_accepted/unknown仅表示派发。job意图持续阻止启动、登记和其他包apply，同ID不重发。worker在快照内重进原apply并验证意图、源/批准/停止与锁，不将派发时快照代替执行前重验。没有自动重试/激活/包钩子许可，未知派发暂保持阻塞；新原型尚未纳入v17制品，动态验收待完成。
 
 Python只读诊断observe_job读取现有job意图/批准/apply/sender/outcome并systemctl show，不创建目录/锁或修改台账。区分dispatch_unknown、job_in_progress、job_failed_requires_review与package_outcome_recorded；包终态要求完整匹配证据。缺unit/超时不推断未执行，failed不代表可重试；retry_allowed始终false、门禁保留。仅单测验证只读及证据拒绝，尚未从新runtime做动态诊断验收；显式恢复/解除排队未知入口仍缺。
+
+Python recover_job新增管理员显式对账原型：仅已进入apply、匹配sender、准确批准和已退出无Job的loaded unit，调用原recover锁内重验后写绑定摘要的job-recovery记录。重复不重执行，retry_allowed=false、fence_retained=true，不解除意图/启动门禁或激活。已单测及完整回归，尚未真实systemd验收/公开CLI。执行前失败、unit未知、缺sender仍阻塞；不是通用退休或新ID重试许可。

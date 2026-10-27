@@ -478,3 +478,61 @@ def test_worker_rechecks_job_intent_and_source(update, monkeypatch):
         == "package_applied_pending_activation"
     )
     assert packages.calls == 1
+
+
+def test_explicit_job_recovery_retains_fence_and_never_replays(update, monkeypatch):
+    import hashlib
+    from types import SimpleNamespace
+
+    from device_runtime import native_update_job as job
+
+    manager, packages, _helper, _package = update
+    manager.apply("probe", "one")
+    stem = manager.registry / "updates/5-probe--one"
+    snapshot = stem.with_suffix(".bootstrap")
+    snapshot.mkdir()
+    (snapshot / "snapshot.json").write_text("snapshot")
+    monkeypatch.setattr(nu.nb, "validate_snapshot", lambda *a: {})
+    apply = json.loads(stem.with_suffix(".apply-intent.json").read_bytes())
+    apply.update(
+        {
+            "runtime_snapshot_sha256": nh._digest(snapshot / "snapshot.json"),
+            "target_package": {
+                "name": "ai-device-native-client",
+                "version": "2",
+                "architecture": "amd64",
+            },
+        }
+    )
+    stem.with_suffix(".apply-intent.json").write_text(json.dumps(apply))
+    sender = json.loads(stem.with_suffix(".sender.json").read_bytes())
+    sender["intent"] = apply
+    stem.with_suffix(".sender.json").write_text(json.dumps(sender))
+    outcome = json.loads(stem.with_suffix(".outcome.json").read_bytes())
+    outcome["intent"] = apply
+    stem.with_suffix(".outcome.json").write_text(json.dumps(outcome))
+    intent = {
+        "unit": "ai-device-package-" + hashlib.sha256(str(stem).encode()).hexdigest() + ".service",
+        "instance_id": "probe",
+        "operation_id": "one",
+        "prepared_sha256": apply["prepared_sha256"],
+        "runtime_snapshot_sha256": apply["runtime_snapshot_sha256"],
+    }
+    stem.with_suffix(".job-intent.json").write_text(json.dumps(intent))
+
+    def runner(*a, **kw):
+        return SimpleNamespace(stdout="LoadState=loaded\nActiveState=inactive\nMainPID=0\nJob=0\n")
+
+    first = job.recover_job(manager, "probe", "one", runner=runner)
+    assert first["state"] == "job_reconciled_without_replay"
+    assert first["fence_retained"] and not first["retry_allowed"]
+    assert job.recover_job(manager, "probe", "one", runner=runner) == first
+    assert packages.calls == 1
+    with pytest.raises(nh.HelperError, match="blocks start"):
+        nh._assert_no_package_intent(manager.registry)
+
+    def busy(*a, **kw):
+        return SimpleNamespace(stdout="LoadState=loaded\nActiveState=active\nMainPID=123\nJob=0\n")
+
+    with pytest.raises(job.JobError, match="completed job"):
+        job.recover_job(manager, "probe", "one", runner=busy)
