@@ -1444,3 +1444,12 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 当前源码在新的崩溃安全退休协议证明前默认拒绝 `retire_closed_job`，不产生新退休证据；`_pending_package_jobs` 不再根据既有退休记录跳过 job intent，因此当前 helper 的 start 和直接 apply 继续被原围栏阻断，所有旧记录保留。保留 `_job_retired` 的原结构校验仅供诊断和旧路径测试，不代表持久性或授权。隔离故障测试显式替换退休门禁以重现旧发布行为，验证可见退休文件结构虽正确，start 与新 ID 包动作仍被挡住、原证据不变；真实门禁无替换测试验证不写入。旧退休内部测试仅用测试替身继续覆盖历史逻辑。定向 304 通过1跳过（`20261028-023654-ee451d.log`），新故障与门禁测试2项通过（`20261028-023726-cb0c8d.log`）；完整1164通过10跳过（`20261028-023734-b16e63.log`），ruff通过。
 
 关闭记录与退休记录仍可能处于持久化未知，不得自动删除、清理或按存在放行。该收紧仅覆盖更新后的 helper 和调用方，不自动约束旧 bootstrap、旧 snapshot 或运行中的进程；管理员维护窗口和旧实例手动退休前提不变。准确新包及真实隔离 systemd 验收尚未进行，派发／恢复默认拒绝继续保持。
+
+
+## 183. 退休未知围栏的准确 DEB 与真实 helper 验收
+
+以 `70d1ef20dd4c53282b313f86613ae5c8733e4d78` 干净源码离线构建未签名 DEB：`build/native-packages-p1-70d1ef2/ai-device-native-client_0.2.2-1_amd64.deb`，109822192 字节，SHA256 `40b0755e0a47f343a100e21edc29d9d0ab6ad59283e41aa9fc4e54cb61d6bed6`；Device wheel SHA `839cc9d8e33756adcdc9a8156f069758bf5ab1727edf0c0100054f28004e1d77`，33 Python 源文件与 commit 逐字节一致。无网络干净容器安装、主 runtime 六模块和 bootstrap 四模块 cmp、覆盖保护通过（`20261028-024027-9cf35a.log`）；包内 runtime 对退休门禁、关闭/退休两次目录 fsync 故障及 worker 门禁共3项通过（`20261028-024043-56b705.log`）。故障测试明确只在测试里替换退休门禁以复现旧发布，生产门禁未替换。
+
+无网络隔离 systemd 中干净安装新包、普通用户安装并注册实例、启动真实 helper，构造结构完整的旧 intent/close/retired 测试记录；结构校验为真但仍处于待处理集合。真实 helper 直接入口确认 `package transaction blocks start`，socket 返回拒绝，原三份证据不变、无启动 intent，Device unit inactive/MainPID 0（`20261028-024222-89eb45.log`，脚本 `scripts/accept-native-retired-job-fence-70d1ef2.sh`）。首次实验误解 query 返回封装，在请求 start 前失败（`20261028-024143-49064c.log`），修正后全新容器重验通过，两容器均停止。
+
+这是新包 helper 的测试，不能约束旧 helper、旧 snapshot 或在途进程；不证明崩溃后的文件系统持久性或旧 worker 已退休。RPM 尚未构建，生产派发、恢复与退休放行仍禁用。
