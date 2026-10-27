@@ -171,7 +171,9 @@ def _job_retired(path):
 
 
 def _pending_package_jobs(directory):
-    return [path for path in Path(directory).glob("*.job-intent.json") if not _job_retired(path)]
+    # A visible retirement does not prove the preceding close was durable.
+    # Keep every job fenced until a crash-safe retirement protocol is proven.
+    return list(Path(directory).glob("*.job-intent.json"))
 
 
 def _valid_sender_completion(receipt, intent):

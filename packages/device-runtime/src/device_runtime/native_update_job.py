@@ -327,8 +327,14 @@ def close_before_apply(manager, instance_id, operation_id):
         return receipt
 
 
+def _require_proven_retirement_fence():
+    """Do not publish retirement until close durability is independently proven."""
+    raise JobError("job retirement disabled: close durability unproven")
+
+
 def retire_closed_job(manager, instance_id, operation_id):
-    """Retire only a compatible pre-apply close; never delete its evidence."""
+    """Refuse retirement until a crash-safe close protocol is available."""
+    _require_proven_retirement_fence()
     closed = close_before_apply(manager, instance_id, operation_id)
     with (
         manager._transaction(instance_id, operation_id) as (_binding, stem),

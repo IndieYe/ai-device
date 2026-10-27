@@ -4,6 +4,7 @@ import stat
 import subprocess
 import sys
 from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 
@@ -1083,11 +1084,103 @@ def test_close_refuses_busy_package_lease_and_prior_apply(update, monkeypatch):
     assert packages.calls == 0 and not stem.with_suffix(".job-closed.json").exists()
 
 
+def test_retirement_default_denied_without_writes(update):
+    from device_runtime import native_update_job as job
+
+    manager, packages, _, _ = update
+    directory = manager.registry / "updates"
+    before = {p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()}
+    with pytest.raises(job.JobError, match="job retirement disabled: close durability unproven"):
+        job.retire_closed_job(manager, "probe", "one")
+    assert {p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()} == before
+    assert packages.calls == 0
+
+
+def test_uncertain_close_and_retirement_cannot_release_job_fence(update, monkeypatch):
+    import hashlib
+    import stat
+
+    from device_runtime import native_update_job as job
+
+    manager, packages, _, package = update
+    stem = manager.registry / "updates/5-probe--one"
+    snapshot = stem.with_suffix(".bootstrap")
+    snapshot.mkdir()
+    (snapshot / "snapshot.json").write_text("snapshot")
+    monkeypatch.setattr(job.bootstrap, "validate_snapshot", lambda *a: {})
+    real_digest = nh._digest
+    monkeypatch.setattr(nh, "_digest", lambda path: (
+        "same-worker" if path.name in ("native_update.py", "native_update_job.py", "native_helper.py")
+        else real_digest(path)
+    ))
+    intent = {
+        "schema_version": 1, "state": "job_dispatch_intent", "close_protocol": "package-lease-v1",
+        "instance_id": "probe", "operation_id": "one",
+        "unit": "ai-device-package-" + hashlib.sha256(str(stem).encode()).hexdigest() + ".service",
+        "prepared_sha256": nh._digest(stem.with_suffix(".prepared.json")),
+        "runtime_snapshot_sha256": nh._digest(snapshot / "snapshot.json"),
+    }
+    path = stem.with_suffix(".job-intent.json")
+    path.write_text(json.dumps(intent))
+    with manager._apply_lease(manager.registry / "package-manager"):
+        pass
+    real_fsync, real_link = os.fsync, os.link
+    linked = []
+
+    def marked_link(source, destination, *args, **kwargs):
+        result = real_link(source, destination, *args, **kwargs)
+        if str(destination).endswith((".job-closed.json", ".job-retired.json")):
+            linked.append(str(destination))
+        return result
+
+    def fail_directory(fd):
+        if linked and stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError("injected directory fsync failure")
+        return real_fsync(fd)
+
+    with monkeypatch.context() as injected:
+        injected.setattr(nh.os, "link", marked_link)
+        injected.setattr(nh.os, "fsync", fail_directory)
+        with pytest.raises(OSError, match="injected directory"):
+            job.close_before_apply(manager, "probe", "one")
+    assert stem.with_suffix(".job-closed.json").exists()
+    # Reach the old publication path only to reproduce the failure; production
+    # retirement remains closed and the reader must retain the fence regardless.
+    monkeypatch.setattr(job, "_require_proven_retirement_fence", lambda: None)
+    linked.clear()
+    with monkeypatch.context() as injected:
+        injected.setattr(nh.os, "link", marked_link)
+        injected.setattr(nh.os, "fsync", fail_directory)
+        with pytest.raises(OSError, match="injected directory"):
+            job.retire_closed_job(manager, "probe", "one")
+    assert stem.with_suffix(".job-retired.json").exists()
+    assert nh._job_retired(path)  # Structurally valid is not durable proof.
+    assert path in nh._pending_package_jobs(stem.parent)
+    with pytest.raises(nh.HelperError, match="blocks start"):
+        nh._assert_no_package_intent(manager.registry)
+    original_evidence = (path.read_bytes(), stem.with_suffix(".job-closed.json").read_bytes(),
+                         stem.with_suffix(".job-retired.json").read_bytes())
+    manager.prepare("probe", "two", package, sha256=nh._digest(package), version="2")
+    new = manager.registry / "updates/5-probe--two"
+    manager.approve("probe", "two", prepared_sha256=nh._digest(new.with_suffix(".prepared.json")))
+    with pytest.raises(nu.UpdateError, match="queued package job"):
+        manager.apply("probe", "two")
+    assert not new.with_suffix(".apply-intent.json").exists()
+    assert original_evidence == (path.read_bytes(), stem.with_suffix(".job-closed.json").read_bytes(),
+                                 stem.with_suffix(".job-retired.json").read_bytes())
+    assert packages.calls == 0
+
+
 def test_retired_job_allows_new_id_but_never_replays_old(update, monkeypatch):
     import hashlib
 
     from device_runtime import native_update_job as job
 
+    # Historical mechanics only; production retirement and fence release remain disabled.
+    monkeypatch.setattr(job, "_require_proven_retirement_fence", lambda: None)
+    monkeypatch.setattr(nh, "_pending_package_jobs", lambda directory: [
+        path for path in Path(directory).glob("*.job-intent.json") if not nh._job_retired(path)
+    ])
     manager, packages, _, package = update
     stem = manager.registry / "updates/5-probe--one"
     snapshot = stem.with_suffix(".bootstrap")
