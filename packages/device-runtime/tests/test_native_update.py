@@ -718,6 +718,44 @@ def test_signed_prepare_rejects_wrong_release_digest(signed_update):
         signed_prepare(signed_update)
 
 
+def test_debian_guard_outcome_mismatch_keeps_intent_and_never_reapplies(update):
+    manager, packages, _, _ = update
+
+    class DebianFixture(nu.Debian):
+        def __init__(self):
+            self.calls = 0
+
+        def metadata(self, path):
+            return packages.metadata(path)
+
+        def installed(self, name):
+            return packages.installed(name)
+
+        def prepare_execution(self, stem):
+            return {"runtime_snapshot_sha256": "a" * 64}
+
+        def apply(self, path, *, lease_fd, receipt_path, intent):
+            self.calls += 1
+            wrong = json.loads(json.dumps(intent))
+            wrong["target_package"]["version"] = "wrong-version"
+            outcome = receipt_path.with_suffix("").with_suffix(".outcome.json")
+            nh._save_new(outcome, {"state": "unknown", "intent": wrong})
+
+    fixture = DebianFixture()
+    manager.packages = fixture
+    stem = manager.registry / "updates/5-probe--one"
+    with pytest.raises(nu.UpdateError, match="package guard outcome intent differs"):
+        manager.apply("probe", "one")
+    assert fixture.calls == 1
+    assert stem.with_suffix(".apply-intent.json").exists()
+    assert stem.with_suffix(".outcome.json").exists()
+    before = {p.name: p.read_bytes() for p in stem.parent.iterdir() if p.is_file()}
+    observed = manager.apply("probe", "one")
+    assert observed["apply_intent"] is not None
+    assert fixture.calls == 1
+    assert {p.name: p.read_bytes() for p in stem.parent.iterdir() if p.is_file()} == before
+
+
 def test_independent_runtime_failure_precedes_apply_intent(update):
     manager, packages, _helper, _package = update
     registry = manager.registry

@@ -1549,3 +1549,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 隔离 fixture 通过实际 `publish_helper_candidate` 创建快照和候选回执（候选自检用测试替身），随后分别将 `schema_version:1` 改为 `true` 或 `activated:false` 改为 `0`。原发布重用与只读 `read_helper_candidate` 两条入口的四个组合均未拒绝（`20261028-034035-3fa5f6.log`）。两条入口改用 `_same_json` 类型敏感比较；异常回执拒绝且原字节不变，合法发布重用测试仍通过，候选不自动激活。bootstrap/job 定向 `87 passed`（`20261028-034053-cc5fbc.log`），完整 `1199 passed, 16 skipped`（`20261028-034101-9a760d.log`），ruff 与 diff 检查通过。
 
 这是隔离 fixture，不证明正式 bootstrap 已更新或受控 handler/进程身份完成；旧 snapshot 仍需按管理员维护协议处理，不自动迁移。本轮未构建新包、未放开生产派发、恢复或包保护；第196节 WebSocket 单次失败根因仍未确认。
+
+
+## 198. Debian guard outcome 不匹配后的占用保留
+
+核查当前标准 Debian `apply_intent`：prepared/runtime snapshot 摘要和 dpkg-deb 的 Package/Version/Architecture 均由字符串构成；尚未发现正常路径中可触达的布尔/整数混同，未仅凭假设修改该比较。新增 `Debian` 子类隔离 fixture：在适配器执行时写入错误目标版本的 outcome，实际 `Updates.apply` 报 `package guard outcome intent differs`，已发布 apply intent 和 outcome 保留；同 ID 再调用只返回观察，不再次调用包适配器，相关文件字节不变。测试不运行 dpkg、真实 guard 或 systemd；重复调用的观察不证明 outcome 可信或事务安全完成。
+
+更新/job 定向 `144 passed`（`20261028-034450-b06a4b.log`）；完整 `1200 passed, 16 skipped`（`20261028-034500-99d4aa.log`）；ruff 和 diff 检查通过。本项只新增测试，不更改生产门禁，未构建新包；旧快照和在途动作不自动受保护。外部工作终态、真实 handler/invocation 绑定以及其他持久证据比较仍未完成审计。
