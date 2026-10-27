@@ -1005,3 +1005,10 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 在新的无网络一次性 systemd 容器重新安装第122节准确 DEB并运行普通用户基线；扩展 `accept-native-systemd-peer.py`：在只读 scope 内仅对该容器的测试 helper 执行 systemctl stop，确认 peer 退出或 unit 不再稳定时 scope 后置检查拒绝返回成功。`SYSTEMD_PEER_OBSERVED_NOT_AUTHORIZED_OK` 与 `SYSTEMD_PEER_EXIT_DURING_OBSERVATION_REJECTED`，日志 `20261027-220738-fe5644.log`；ruff通过，该一次性容器已退出。
 
 这是隔离测试服务的受控停止，不触碰真实服务。scope 后置失败不能撤销作用域内已有副作用，故仍仅可观察，不证明实际处理者或加载代码，也不授权派发；systemd 调用与 peer 死亡的其他竞态尚未覆盖。
+
+
+## 126. 后代继承端点的逐记录 sender 凭据
+
+`probe-native-inherited-record.py` 在一次性无网络 Linux 6.18 amd64/Rosetta 容器复用严格 SEQPACKET+SO_PASSCRED 接收原型：worker 正常记录与观察者 fork 返回的 PID/UID 一致并接受；worker 后代继承同一个 sender 端点发送时，内核逐记录凭据的 PID 不同，拒绝该记录。`INHERITED_ENDPOINT_DESCENDANT_RECORD_REJECTED`，日志 `20261027-220920-1b90c3.log`，ruff通过。
+
+这只覆盖实验性消息发送者，并不证明公开 socket 的实际响应处理者或已验证代码；预期 PID 来源于测试 fork，未绑定生产 pidfd/systemd invocation、父死亡与事务闭环。生产派发保持关闭，未修改现有 IPC 权限。

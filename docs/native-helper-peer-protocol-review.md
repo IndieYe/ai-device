@@ -118,3 +118,10 @@
 `accept-native-verified-parent-exit.sh` 在无网络一次性 Linux amd64/Rosetta 容器安装经 SHA 校验的旧 0dbcf8d DEB，仅在容器内覆盖并逐字节核对当前 bootstrap/helper 四模块；不是当前 commit 准确制品。独立 bootstrap 发布并验证候选字节，随后篡改候选路径，监督父在实际 daemon 双锁内 fork；子从已验证内存字节加载候选并直接调用内部 `_serve`（绕过生产 `serve` 获取锁，仅限实验），由子 bind socket。观察者确认 socket peer PID 为子、畸形请求被拒绝、完整租约冲突。父退出后，子内实验 watchdog 观察父 pidfd 并 `os._exit`；观察者确认子 pidfd 就绪、双锁可再次取得，旧 socket 文件仍存在且连接拒绝。输出 `VERIFIED_PARENT_EXIT_PIDFD_FIXTURE_OK`，日志 `20261027-214658-bd5b5d.log`。
 
 这里的 watchdog、锁交接和直接 `_serve` 均非生产实现；无 systemd invocation、逐消息处理者认证、已开始动作的取消/unknown 对账、线程挂死或 supervisor 失联完整策略。父死亡到子退出之间仍有竞态；socket peer 证明 bind 关联而非所有响应处理者。实验不开放派发，不解除陈旧 socket 或意图保护。
+
+
+## 继承端点后代的逐记录凭据实验
+
+`scripts/probe-native-inherited-record.py` 在无网络一次性 Linux amd64/Rosetta 容器复用严格 `SO_PASSCRED`/SEQPACKET 接收原型：观察者以 fork 返回的受控 worker PID/UID 为预期，接受 worker 记录；worker 再 fork 后代，后代继承同一 sender 端点并发送，接收器按内核逐记录凭据拒绝后代。输出 `INHERITED_ENDPOINT_DESCENDANT_RECORD_REJECTED`，日志 `20261027-220920-1b90c3.log`；ruff通过。
+
+此为记录发送者区分实验，不证明公开 stream socket 实际处理者、不提供持久身份、systemd invocation、pidfd 生命周期或可信启动绑定，也不证明恶意 root 防护；预期 PID 仅来自实验 fork。不得将原型直接用于生产或开放派发。
