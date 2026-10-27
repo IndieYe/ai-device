@@ -830,3 +830,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 在网络隔离的一次性 amd64/Rosetta Linux 6.18.15 容器执行 `scripts/probe-native-peer-identity.py`：fork 前 socketpair 的 SO_PEERCRED 指向创建者，而数据报 SCM_CREDENTIALS 指向实际子发送者；父进程 bind、子进程 accept 时客户端 SO_PEERCRED/SO_PEERPIDFD 指向父进程；子进程 bind 时 pidfd 对应并能观察其退出；创建者 fork 后代由后代 accept/响应时，客户端 peer 仍指向创建者。最终 `PEER_PROBE_OK`，日志 `20261027-200712-01d01c.log`，实验容器退出；脚本 ruff 通过。详细反例、设计修正和门禁见 `native-helper-peer-protocol-review.md`。证据不证明候选代码执行身份、真实 systemd、宿主重启或事务围栏；仍须验证消息凭据和描述符继承以及监督器死亡后的恢复。未实现监督器，不改产品 default-deny 或包保护；完整回归沿用第96节，本轮未重跑。
 
 补充：同一探针在 fork 前创建的 `SOCK_STREAM` socketpair 上，开启 SO_PASSCRED 后用 recvmsg 收到子进程发送的单字节消息及该子进程 SCM_CREDENTIALS，而 SO_PEERCRED 仍为创建者；`PEER_PROBE_OK`，日志 `20261027-200909-30634d.log`。仅验证单次简单消息，不证明多发送者交错、完整帧认证或具备特权的负向情形。
+
+
+## 99. 消息边界、FD 继承与监督器退出隔离探针
+
+`scripts/probe-native-message-boundaries.py` 在无网络一次性 Linux 6.18.15 amd64/Rosetta 容器中验证：SEQPACKET 两个子发送者各记录的 SCM_CREDENTIALS、数据与附属信息截断标志、意外 SCM_RIGHTS 交付及关闭、FD 在 fork/exec/pass_fds 间的继承差异；模拟监督器退出后，其子进程持有的通道仍可发送。`MESSAGE_BOUNDARIES_OK`，日志 `20261027-201228-eeb8a8.log`，ruff通过。评审及局限见 `native-helper-peer-protocol-review.md`。尚未实现生产接收器、监督器或真实 systemd 故障恢复；不证明 namespace、特权伪造、全错误路径 FD 关闭、锁/intent 或 P1 完成，保持派发关闭。完整回归未重跑。
