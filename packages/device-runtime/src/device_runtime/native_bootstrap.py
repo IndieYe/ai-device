@@ -82,9 +82,9 @@ def validate_snapshot(directory):
     receipt = json.loads(receipt_path.read_bytes())
     runtime = directory / "runtime"
     helper._trusted(runtime, directory=True)
-    if receipt.get("schema_version") != 1 or receipt.get("state") != "runtime_snapshot":
+    if type(receipt.get("schema_version")) is not int or receipt.get("schema_version") != 1 or receipt.get("state") != "runtime_snapshot":
         raise BootstrapError("invalid runtime snapshot receipt")
-    if _inventory(runtime) != receipt["inventory"]:
+    if not helper._same_json(_inventory(runtime), receipt["inventory"]):
         raise BootstrapError("runtime snapshot drift")
     python = runtime / "bin/python3.13"
     if not python.is_file() or not os.access(python, os.X_OK):

@@ -1535,3 +1535,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 隔离测试先复现两处普通字典比较的类型混同：非 Debian 测试适配器已生成恢复记录后，将 `reapplied:false` 改为数字 `0`，原 `Updates.recover` 将旧证据当作相同；构造异常 prepared 包元数据版本数字 `1`、相应 approval 和 apply intent 摘要均重新绑定后，将 apply 目标版本设为 `true`，原只读 `describe_job` 接受该类型不一致（`20261028-033310-63db70.log`、`20261028-033230-e58022.log`）。后者是构造异常证据，不证明正常包元数据会出现数字版本或发生包动作。
 
 两处均改用 `_same_json`；漂移证据拒绝且文件不变，合法恢复记录仍可重用且不重放包操作，job 描述仍只读且不派发。更新/job 定向 `143 passed`（`20261028-033346-8e83cc.log`），完整 `1193 passed, 16 skipped`（`20261028-033357-bc9c83.log`），ruff 与 diff 检查通过。生产 Debian、job 恢复门禁未放开；未构建新包，旧 snapshot 不自动更新。bootstrap 回执、已有 outcome 等其他比较仅发现线索，尚未判断其字段和可达性，不声称全量审计。
+
+
+## 196. worker runtime 快照类型校验
+
+隔离 fixture 构造已有 runtime snapshot，将 `schema_version:1` 改为 `true`，或将一字节文件 inventory 的 `size:1` 改为 `true`；原 `validate_snapshot` 均接受（`20261028-033543-9a8607.log`）。改为要求 schema 为真实整数1，并对完整 inventory 使用类型敏感 JSON 比较；两个异常均拒绝且不覆盖 snapshot，正常快照回归保留。bootstrap/update/job 定向 `178 passed`（`20261028-033613-fb8b4c.log`），ruff 和 diff 检查通过。
+
+首次完整回归 `1194 passed, 1 failed, 16 skipped`，失败为 `test_client_stop_restart_is_unknown_and_never_reexecutes` 的状态仍 `running`（`20261028-033622-9a7d29.log`）；该测试单独复跑通过（`20261028-033720-c1ff9d.log`），完整重跑 `1195 passed, 16 skipped`（`20261028-033728-7c831e.log`）。该测试等待 peer 移除后立即断言 unknown，可能存在时序敏感性，但根因未证实，本次未修改 WebSocket。新源码的校验不自动更新旧 snapshot，不证明受控运行身份、系统掉电安全或外部 job 终态；未构建新包，现有生产门禁不变。bootstrap 发布回执等其他比较尚未审完。

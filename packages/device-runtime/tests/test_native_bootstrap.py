@@ -36,6 +36,27 @@ def test_independent_copy_survives_source_changes(runtime):
     assert os.readlink(destination / "runtime/bin/python") == "python3.13"
 
 
+@pytest.mark.parametrize("field", ["schema", "inventory"])
+def test_snapshot_rejects_boolean_number_type_drift(runtime, field):
+    import json
+
+    source, destination = runtime
+    (source / "single-byte").write_bytes(b"x")
+    bootstrap.snapshot_runtime(source, destination)
+    path = destination / "snapshot.json"
+    receipt = json.loads(path.read_bytes())
+    if field == "schema":
+        receipt["schema_version"] = True
+    else:
+        assert receipt["inventory"]["single-byte"]["size"] == 1
+        receipt["inventory"]["single-byte"]["size"] = True
+    path.write_text(json.dumps(receipt))
+    before = path.read_bytes()
+    with pytest.raises(bootstrap.BootstrapError, match="invalid runtime snapshot|snapshot drift"):
+        bootstrap.validate_snapshot(destination)
+    assert path.read_bytes() == before
+
+
 def test_incomplete_copy_never_replaced(runtime):
     source, destination = runtime
     destination.mkdir()
