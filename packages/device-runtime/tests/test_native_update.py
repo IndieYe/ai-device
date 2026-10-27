@@ -350,6 +350,31 @@ def test_runtime_receipt_wrong_source_refused(signed_update):
         signed_prepare(signed_update)
 
 
+def test_oversized_runtime_receipt_does_not_prepare(signed_update):
+    manager, _, _, receipt, _ = signed_update
+    receipt.write_bytes(b"{}" + b" " * 256000)
+    with pytest.raises(nu.UpdateError, match="receipt exceeds budget"):
+        signed_prepare(signed_update)
+    assert not (manager.registry / "updates/5-probe--signed.prepared.json").exists()
+
+
+def test_runtime_receipt_change_after_parse_does_not_prepare(signed_update, monkeypatch):
+    manager, _, _, receipt, _ = signed_update
+    original_json = nu.nc._json
+    original_bytes = receipt.read_bytes()
+
+    def change_after_parse(data):
+        result = original_json(data)
+        if data == original_bytes:
+            receipt.write_bytes(data + b" ")
+        return result
+
+    monkeypatch.setattr(nu.nc, "_json", change_after_parse)
+    with pytest.raises(nu.UpdateError, match="evidence changed"):
+        signed_prepare(signed_update)
+    assert not (manager.registry / "updates/5-probe--signed.prepared.json").exists()
+
+
 def test_signed_evidence_change_after_approval_blocks_apply(signed_update):
     manager, _, _, receipt, _ = signed_update
     signed_prepare(signed_update)

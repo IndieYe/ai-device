@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,20 @@ from . import native_helper as nh
 
 class UpdateError(ValueError):
     pass
+
+
+def _read_runtime_receipt(path, uid):
+    # Verify the opened file, not a separate stat of the path, and never read
+    # more than the receipt budget even if the owner writes concurrently.
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != uid:
+            raise UpdateError("runtime receipt must belong to registered instance owner")
+        data = stream.read(256001)
+    if len(data) > 256000:
+        raise UpdateError("runtime receipt exceeds budget")
+    return data
 
 
 class Debian:
@@ -204,12 +219,10 @@ class Updates:
             receipt_path.is_symlink()
             or receipt_path.parent != root / "native-candidates"
             or receipt_path.resolve() != receipt_path
-            or receipt_path.stat().st_uid != binding["uid"]
         ):
             raise UpdateError("runtime receipt must belong to registered instance owner")
-        if receipt_path.stat().st_size > 256000:
-            raise UpdateError("runtime receipt exceeds budget")
-        receipt = nc._json(receipt_path.read_bytes())
+        receipt_bytes = _read_runtime_receipt(receipt_path, binding["uid"])
+        receipt = nc._json(receipt_bytes)
         request = receipt.get("request", {})
         signed_digest = hashlib.sha256(nc.canonical(payload).encode()).hexdigest()
         if (
@@ -242,7 +255,7 @@ class Updates:
         # Read-only evidence, never execute the owner's environment as root.
         return {
             "receipt_path": str(receipt_path),
-            "receipt_sha256": nh._digest(receipt_path),
+            "receipt_sha256": hashlib.sha256(receipt_bytes).hexdigest(),
             "installation_path": str(home / "installation.json"),
             "installation_sha256": nh._digest(home / "installation.json"),
             "manifest_path": str(home / "bundle/manifest.json"),
@@ -265,7 +278,12 @@ class Updates:
         core.inspect_bundle(Path(evidence["manifest_path"]).parent)
         for key in ("receipt", "installation", "manifest", "python"):
             path = Path(evidence[key + "_path"])
-            if nh._digest(path) != evidence[key + "_sha256"]:
+            digest = (
+                hashlib.sha256(_read_runtime_receipt(path, binding["uid"])).hexdigest()
+                if key == "receipt"
+                else nh._digest(path)
+            )
+            if digest != evidence[key + "_sha256"]:
                 raise UpdateError("authenticated runtime evidence changed")
 
     def prepare_signed(
