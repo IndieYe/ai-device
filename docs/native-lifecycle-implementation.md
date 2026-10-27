@@ -855,3 +855,10 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 103. 提取 bootstrap 已验证内存字节
 
 将 `run_verified_helper_candidate` 中独立 bootstrap 环境、snapshot 和候选模块字节检查提取为内部 `_verified_helper_bytes`；原入口仍在同一进程调用它、从返回字节创建模块并执行原有 `serve`，未新增公开执行入口、fork 或派发授权。扩展既有漂移回归，在最终检查后替换候选路径，断言返回内存字节仍为已验证原值、路径为替换值且执行仍使用原值。bootstrap测试33通过；Device完整回归1037通过3跳过（日志 `20261027-202402-576004.log`），ruff通过。此改动仅建立内部校验边界，不证明运行进程身份或跨崩溃事务；`_require_proven_job_fence` 仍无条件拒绝，P1未完成。实际候选的独立bootstrap/systemd动态回归本轮未做。
+
+
+## 104. 重构后实际独立 bootstrap 与候选隔离验证
+
+以干净提交 `0dbcf8d21f6fa3561b083ceea596ba17fc989728` 离线构建 Device wheel SHA256 `8041dd7192bcddb59ed7433625af6796328ca40cbcb346edbf7e32d5adf72680`，四个 bootstrap 模块逐字节与源码一致；使用原锁定运行时及依赖组装并在隔离无网络 Linux 构建未签名 DEB `909d10088315e1e64bfb9fdaad264ee41c6b71797d1032e43752c53a494c1d2a`。首次使用系统 Python 误加载另一个项目环境的 `device_runtime`，payload 组装因依赖兼容检查失败，残留目录保留；使用当前 Worktree `uv run --no-sync` 与新目录重试成功。
+
+在另一个无网络、全新 Linux amd64/Rosetta 容器安装此 DEB，核对独立 bootstrap 源文件 SHA256 `d596e3ee06f1248df048a0cb5447d06e3cb87c20a3f1952e620a48f58aa7fbd1`；从包中独立 bootstrap 发布并读取实际候选 snapshot `61da94558bc53e4b6b70895a1798ad313b9ac8352aeb0999de23f753bbb22c6b`；错误固定摘要拒绝且未创建 socket，正确摘要直接启动后通过 SO_PEERCRED/SO_PEERPIDFD 观察到 socket peer 与启动 PID 一致，畸形请求被拒绝。`ACTUAL_BOOTSTRAP_OK`，脚本 `scripts/accept-bootstrap-byte-extraction.sh`，日志 `20261027-203008-5c0c06.log`；测试进程仅在一次性容器内结束。此结果不证明 systemd invocation、可信监督器、实际请求处理者、包事务互斥或故障恢复，生产派发保持 default-deny；正式签名、RPM及P1整体验收未完成。
