@@ -773,3 +773,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 87. 独立 bootstrap 执行候选源码
 
 候选启动原型不再允许候选 Python 在校验前导入候选验证器：入口要求固定独立 `/opt/ai-device/bootstrap/0.2.2-native1/runtime` 的 Python、base_prefix、bootstrap/helper 模块路径及管理员可信路径，使用 `-I -B`，且候选树与 bootstrap 互不包含；随后才校验候选并从校验过的内存字节执行。新增候选解释器自举拒绝回归。一次性无网络 amd64 systemd 容器使用锁定 CPython 和当前源码在该独立路径构造 bootstrap、独立快照；候选 Python 自举明确拒绝且不建 socket，独立 bootstrap 可启动候选，真实 peer pidfd/systemd 观察通过，测试 daemon 重启使旧作用域失效、新 peer 可观察。候选快照 SHA256 `76596ee7faeb02e7712e7476ac60dc66a4dea14314cbb26856081f70d4847ec1`。容器关机后确认不存在。完整 Device 1028 passed、3 skipped，ruff 和 diff 检查通过。此实验假设本机管理员可信、独立 bootstrap 安装可信；尚未建立正式制品来源及升级信任链，未将启动证据与 peer 连续身份作为可授权的事务闭环，测试 unit 非生产部署。生产派发保持关闭，原包保护不变。
+
+
+## 88. 冻结源码的独立 bootstrap 开发制品来源验证
+
+以干净 `348dd5c35f633803d3e8f0b62da1c25c401bcbda` 离线构建三组件 wheel。Device wheel SHA256 `fa73bca3c46425a4ce39e1d371c8f99de5cd1f4f182486da4dcfe3673a89af7d`，Bash `aee883b74bb2fc816abb77ba428ed4339c6901726a9ac3098a3ba8737fa16dd3`，FS `b872aa775eaacc9836c0ec94a2abf1e41c8395ef725eecb37d05b521053ab626`；Device wheel 内 `__init__.py`、`native_helper.py`、`native_bootstrap.py`、`management_lock.py` 与冻结 Git 源码逐字节一致。使用已有锁定 CPython、uv 和本地依赖组装 `build/native-payload-p1-348dd5c`，在一次性无网络 amd64 Linux 容器构建未签名 DEB，SHA256 `b41021873d981c1dc224ee4ac05ae160e84d4b6e4f0b05bea985620bfa279225`，109773810 bytes；空容器实际 dpkg 安装后，四个独立 bootstrap 模块与冻结源码逐字节一致，安装 build-inputs 与组装清单一致，bootstrap 无字节码且 `-I -B` 导入路径正确。以该已安装 bootstrap 创建候选并启动测试 systemd daemon，真实 Unix socket peer 与 unit 观察通过；候选快照 SHA256 `1d945ccb4715e96e48220bf13e2b613eabe4e091234691faed3b0820c57e6dcf`，观察结果仍为代码未证明、派发未授权。首次 `--no-build-isolation` 因本机缺 hatchling 失败，改为使用本地缓存的离线隔离构建成功，无网络依赖。DEB 仅保存在容器、未签名未发布；容器正常关机请求超时后再次关机并确认不存在。本证据不覆盖 RPM、目标主机、正式信任根/发布签名、运行身份事务绑定或升级成功；原包保护及生产派发关闭不变。
