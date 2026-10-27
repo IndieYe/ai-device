@@ -1135,3 +1135,10 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 一次性无网络 Linux amd64/Rosetta systemd 容器使用准确 b4158df DEB 和对应 wheel，运行 `accept-native-update-job.sh` 的 `start-guard-pause`。真实 helper start 进入 systemd `start-pre` 窗口后，测试先核对容器内 daemon MainPID、guard 直接父子关系及命令行，再暂停 guard 并对该测试 daemon 注入异常退出；显式处理测试残留 socket 并启动新 daemon。systemd job 已终结时 guard 仍暂停、sender 回执缺失、package EX 冲突，恢复拒绝且新 start 无新意图；释放 guard、确认匹配回执后，同 ID 不重放，显式 resolve-running 确认运行。生产新 job 派发门禁先拒绝且无 intent。
 
 输出 `paused_guard_blocks_recovery` 与 `daemon_exit_guard_reaped_and_reconciled`，日志 `20261027-231814-288e12.log`；测试 guard 在脚本 finally 恢复，容器已退出。本实验验证的是 start sender guard 而非尚未实现的候选代码生产监督器；不证明宿主断电、目标设备、实际消息处理者或 systemd invocation 绑定，派发保持关闭。
+
+
+## 143. peer 观察初始化中断时回收 pidfd
+
+`_socket_peer_process` 获取 pidfd 后、进入只读观察作用域前，原实现只在限定异常类型时关闭 FD；其他异常或中断可能泄漏描述符。新增模拟 FD 的 `RuntimeError` 和 `KeyboardInterrupt` 回归，修复前两例均复现未关闭；改为同一个 `finally` 覆盖初始化和作用域生命周期，原有身份失败错误转换及 caller 异常语义不变。helper 定向测试 153 通过、1 跳过，完整 Device 回归 1109 通过、4 跳过，ruff 和 `git diff --check` 通过。新增用例使用模拟 getsockopt 和真实 pipe FD，并非实际 Linux pidfd 的故障注入。
+
+只读观察仍不证明实际消息处理者、已加载代码或 invocation 绑定，不允许在观察作用域内执行不可逆动作。生产派发仍关闭；本次修改后旧 b4158df DEB 不包含此修复，尚未构建新包或 RPM。

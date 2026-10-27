@@ -1004,36 +1004,35 @@ def _socket_peer_process(connection):
         raise HelperError("Linux peer process identity required")
     fd = None
     try:
-        raw = connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
-        pid, uid, gid = struct.unpack("3i", raw)
-        if pid <= 1 or uid != 0:
-            raise HelperError("unexpected helper peer credentials")
-        # Python may not expose SO_PEERPIDFD even when the kernel supports it.
-        raw_fd = connection.getsockopt(socket.SOL_SOCKET, getattr(socket, "SO_PEERPIDFD", 77), 4)
-        fd = struct.unpack("i", raw_fd)[0]
-        if fd < 0:
-            raise HelperError("invalid helper peer pidfd")
-        os.set_inheritable(fd, False)
-        with open(f"/proc/self/fdinfo/{fd}", encoding="ascii") as info:
-            fields = dict(line.rstrip().split(":", 1) for line in info if ":" in line)
-        if fields.get("Pid", "").strip() != str(pid):
-            raise HelperError("helper peer pidfd does not match credentials")
-        poller = select.poll()
-        poller.register(fd, select.POLLIN)
-        if poller.poll(0):
-            raise HelperError("helper peer exited during observation")
-    except (OSError, ValueError, struct.error) as exc:
-        if fd is not None and fd >= 0:
-            os.close(fd)
-        if isinstance(exc, HelperError):
-            raise
-        raise HelperError("cannot establish helper peer process identity") from exc
-    try:
+        try:
+            raw = connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+            pid, uid, gid = struct.unpack("3i", raw)
+            if pid <= 1 or uid != 0:
+                raise HelperError("unexpected helper peer credentials")
+            # Python may not expose SO_PEERPIDFD even when the kernel supports it.
+            raw_fd = connection.getsockopt(socket.SOL_SOCKET, getattr(socket, "SO_PEERPIDFD", 77), 4)
+            fd = struct.unpack("i", raw_fd)[0]
+            if fd < 0:
+                raise HelperError("invalid helper peer pidfd")
+            os.set_inheritable(fd, False)
+            with open(f"/proc/self/fdinfo/{fd}", encoding="ascii") as info:
+                fields = dict(line.rstrip().split(":", 1) for line in info if ":" in line)
+            if fields.get("Pid", "").strip() != str(pid):
+                raise HelperError("helper peer pidfd does not match credentials")
+            poller = select.poll()
+            poller.register(fd, select.POLLIN)
+            if poller.poll(0):
+                raise HelperError("helper peer exited during observation")
+        except (OSError, ValueError, struct.error) as exc:
+            if isinstance(exc, HelperError):
+                raise
+            raise HelperError("cannot establish helper peer process identity") from exc
         yield {"pid": pid, "uid": uid, "gid": gid, "pidfd": fd}
         if poller.poll(0):
             raise HelperError("helper peer exited during observation")
     finally:
-        os.close(fd)
+        if fd is not None and fd >= 0:
+            os.close(fd)
 
 
 def _helper_unit_observation(*, runner=subprocess.run):

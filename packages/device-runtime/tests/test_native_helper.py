@@ -571,6 +571,42 @@ def test_peer_process_closes_pidfd_on_each_observation_path(monkeypatch, scenari
                 raise
 
 
+@pytest.mark.parametrize("failure", [RuntimeError("init failed"), KeyboardInterrupt()])
+def test_socket_peer_pidfd_closed_when_initialization_interrupted(monkeypatch, failure):
+    import errno
+    import socket
+    import struct
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(socket, "SO_PEERCRED", 17, raising=False)
+    pidfd, write_fd = os.pipe()
+
+    class Peer:
+        def getsockopt(self, level, option, size):
+            if option == socket.SO_PEERCRED:
+                return struct.pack("3i", 42, 0, 0)
+            return struct.pack("i", pidfd)
+
+    def fail_initialization(fd, inheritable):
+        assert fd == pidfd and inheritable is False
+        raise failure
+
+    monkeypatch.setattr(nh.os, "set_inheritable", fail_initialization)
+    try:
+        with pytest.raises(type(failure)), nh._socket_peer_process(Peer()):
+            pytest.fail("initialization must not succeed")
+        with pytest.raises(OSError) as exc:
+            os.fstat(pidfd)
+        assert exc.value.errno == errno.EBADF
+    finally:
+        os.close(write_fd)
+        try:
+            os.close(pidfd)
+        except OSError as exc:
+            if exc.errno != errno.EBADF:
+                raise
+
+
 def test_helper_unit_peer_observation_refuses_drift_and_pid_mismatch(monkeypatch):
     import sys
     from contextlib import contextmanager
