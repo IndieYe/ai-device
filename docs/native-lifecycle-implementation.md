@@ -1144,3 +1144,10 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 只读观察仍不证明实际消息处理者、已加载代码或 invocation 绑定，不允许在观察作用域内执行不可逆动作。生产派发仍关闭；本次修改后旧 b4158df DEB 不包含此修复，尚未构建新包或 RPM。
 
 真实 Linux 验证：`accept-native-peer-pidfd.py` 在无网络一次性 amd64/Rosetta 容器，以准确 b4158df DEB 提供解释器，显式核对导入当前 Worktree `native_helper.py`。真实 `SO_PEERPIDFD` 获取后注入初始化异常，确认 `/proc` 中 pidfd 对应子进程，异常后 FD 返回 EBADF；随后同一真实连接正常观察并检测 peer 退出。输出 `real_pidfd_initialization_interruption_closed`、`peer_pidfd_bound_and_exit_refused`，日志 `20261027-232952-49a114.log`。这不是新包验收，不证明生产监督、逐消息处理者或所有初始化窗口；生产派发依旧关闭。
+
+
+## 144. 关闭退休证据类型与启动围栏
+
+复现 Python JSON 对象比较中 `true == 1`、`false == 0`：对 job intent、关闭及退休证据分别注入 schema 布尔值、retry/fence/replay 整数，并逐层重算准确摘要，原 `_job_retired` 四例均错误判定为已退休。修复后拒绝四例、保留原证据并阻止 start；关闭入口严格检查完整 intent、schema 和 root 批准类型，关闭/退休幂等读取使用类型敏感 JSON 比较，类型漂移不新增证据。合法关闭、退休、迟到 worker 拒绝和不同 ID 路径沿用既有测试。helper/update/job 回归 254 通过、1 跳过，完整回归 1113 通过、4 跳过，ruff 与 diff 检查通过。测试使用隔离 fixture 和重算摘要，不证明真实生产事务或身份闭环。
+
+旧 worker 冻结 snapshot 不会自动更新，旧测试环境按管理员维护窗口手动退休；不得删除旧意图或迁移围栏。新包未构建，生产新 job 派发仍 default-deny。`Updates._prepared` 等其他批准消费者尚须逐项审查，本节不宣称所有批准/恢复链完成。

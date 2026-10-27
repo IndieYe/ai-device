@@ -238,21 +238,35 @@ def close_before_apply(manager, instance_id, operation_id):
         helper._trusted(approved)
         digest = helper._digest(prepared)
         if (
-            intent.get("schema_version") != 1
+            not isinstance(intent, dict)
+            or type(intent.get("schema_version")) is not int
+            or intent.get("schema_version") != 1
             or intent.get("state") != "job_dispatch_intent"
             or intent.get("close_protocol") != "package-lease-v1"
             or intent.get("instance_id") != instance_id
             or intent.get("operation_id") != operation_id
             or intent.get("unit") != unit
             or intent.get("prepared_sha256") != digest
-            or json.loads(approved.read_bytes())
-            != {"prepared_sha256": digest, "approved_by_uid": 0}
+            or not helper._same_json(
+                json.loads(approved.read_bytes()), {"prepared_sha256": digest, "approved_by_uid": 0}
+            )
         ):
             raise JobError("close intent or approval differs")
         snapshot = stem.with_suffix(".bootstrap")
         bootstrap.validate_snapshot(snapshot)
         if intent.get("runtime_snapshot_sha256") != helper._digest(snapshot / "snapshot.json"):
             raise JobError("close snapshot differs")
+        if not helper._same_json(intent, {
+            "schema_version": 1,
+            "state": "job_dispatch_intent",
+            "close_protocol": "package-lease-v1",
+            "instance_id": instance_id,
+            "operation_id": operation_id,
+            "unit": unit,
+            "prepared_sha256": digest,
+            "runtime_snapshot_sha256": helper._digest(snapshot / "snapshot.json"),
+        }):
+            raise JobError("close intent or approval differs")
         worker = snapshot / "runtime/lib/python3.13/site-packages/device_runtime"
         for module in ("native_update.py", "native_update_job.py", "native_helper.py"):
             if helper._digest(worker / module) != helper._digest(Path(__file__).with_name(module)):
@@ -269,7 +283,7 @@ def close_before_apply(manager, instance_id, operation_id):
         marker = stem.with_suffix(".job-closed.json")
         if os.path.lexists(marker):
             helper._trusted(marker)
-            if json.loads(marker.read_bytes()) != receipt:
+            if not helper._same_json(json.loads(marker.read_bytes()), receipt):
                 raise JobError("close evidence differs")
         else:
             helper._save_new(marker, receipt)
@@ -287,7 +301,7 @@ def retire_closed_job(manager, instance_id, operation_id):
         close_path = stem.with_suffix(".job-closed.json")
         helper._trusted(path)
         helper._trusted(close_path)
-        if json.loads(close_path.read_bytes()) != closed or closed[
+        if not helper._same_json(json.loads(close_path.read_bytes()), closed) or closed[
             "job_intent_sha256"
         ] != helper._digest(path):
             raise JobError("closed evidence changed")
@@ -305,7 +319,7 @@ def retire_closed_job(manager, instance_id, operation_id):
         retired = stem.with_suffix(".job-retired.json")
         if os.path.lexists(retired):
             helper._trusted(retired)
-            if json.loads(retired.read_bytes()) != receipt:
+            if not helper._same_json(json.loads(retired.read_bytes()), receipt):
                 raise JobError("retirement evidence changed")
         else:
             helper._save_new(retired, receipt)

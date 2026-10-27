@@ -88,6 +88,16 @@ def package_lease(registry, *, exclusive=False, existing=False):
         os.close(fd)
 
 
+def _same_json(left, right):
+    """Compare JSON values without conflating booleans and numbers."""
+    try:
+        return json.dumps(left, sort_keys=True, allow_nan=False) == json.dumps(
+            right, sort_keys=True, allow_nan=False
+        )
+    except (TypeError, ValueError):
+        return False
+
+
 def _job_retired(path):
     """Validate immutable close and retirement evidence; malformed evidence blocks."""
     stem = Path(str(path).removesuffix(".job-intent.json"))
@@ -121,11 +131,12 @@ def _job_retired(path):
             "old_job_replay_allowed": False,
         }
         return (
-            intent.get("schema_version") == 1
+            type(intent.get("schema_version")) is int
+            and intent.get("schema_version") == 1
             and intent.get("state") == "job_dispatch_intent"
             and intent.get("close_protocol") == "package-lease-v1"
-            and close_value == expected_close
-            and retire_value == expected_retire
+            and _same_json(close_value, expected_close)
+            and _same_json(retire_value, expected_retire)
         )
     except (OSError, ValueError, TypeError, HelperError):
         return False

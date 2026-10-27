@@ -1005,9 +1005,42 @@ def test_retired_job_allows_new_id_but_never_replays_old(update, monkeypatch):
     path.write_text(json.dumps(intent))
     with manager._apply_lease(manager.registry / "package-manager"):
         pass
+    for changed in ({**intent, "schema_version": True}, {**intent, "extra": "unexpected"}):
+        path.write_text(json.dumps(changed))
+        with pytest.raises(job.JobError, match="intent or approval"):
+            job.close_before_apply(manager, "probe", "one")
+        assert not stem.with_suffix(".job-closed.json").exists()
+    path.write_text(json.dumps(intent))
+    approved_path = stem.with_suffix(".approved.json")
+    approved_original = approved_path.read_bytes()
+    approved = json.loads(approved_original)
+    approved["approved_by_uid"] = False
+    approved_path.write_text(json.dumps(approved))
+    with pytest.raises(job.JobError, match="intent or approval"):
+        job.close_before_apply(manager, "probe", "one")
+    assert not stem.with_suffix(".job-closed.json").exists()
+    approved_path.write_bytes(approved_original)
     job.close_before_apply(manager, "probe", "one")
+    close_path = stem.with_suffix(".job-closed.json")
+    valid_close = close_path.read_bytes()
+    malformed = json.loads(valid_close)
+    malformed["retry_allowed"] = 0
+    close_path.write_text(json.dumps(malformed))
+    with pytest.raises(job.JobError, match="close evidence differs"):
+        job.retire_closed_job(manager, "probe", "one")
+    assert not stem.with_suffix(".job-retired.json").exists()
+    close_path.write_bytes(valid_close)
     retired = job.retire_closed_job(manager, "probe", "one")
     assert job.retire_closed_job(manager, "probe", "one") == retired
+    retired_path = stem.with_suffix(".job-retired.json")
+    valid_retired = retired_path.read_bytes()
+    malformed_retired = json.loads(valid_retired)
+    malformed_retired["old_job_replay_allowed"] = 0
+    retired_path.write_text(json.dumps(malformed_retired))
+    with pytest.raises(job.JobError, match="retirement evidence changed"):
+        job.retire_closed_job(manager, "probe", "one")
+    assert json.loads(retired_path.read_bytes())["old_job_replay_allowed"] == 0
+    retired_path.write_bytes(valid_retired)
     assert nh._job_retired(path)
     nh._assert_no_package_intent(manager.registry)
     other = stem.parent / "5-probe--other.job-intent.json"
@@ -1047,3 +1080,34 @@ def test_retirement_evidence_fail_closed(update, monkeypatch):
     assert not nh._job_retired(path)
     with pytest.raises(nh.HelperError, match="blocks start"):
         nh._assert_no_package_intent(manager.registry)
+
+
+@pytest.mark.parametrize("drift", ["schema", "retry", "fence", "replay"])
+def test_retirement_fence_rejects_json_type_drift(update, drift):
+    manager, packages, _, _ = update
+    stem = manager.registry / "updates/5-probe--one"
+    path = stem.with_suffix(".job-intent.json")
+    closed_path = stem.with_suffix(".job-closed.json")
+    retired_path = stem.with_suffix(".job-retired.json")
+    intent = {"schema_version": 1, "state": "job_dispatch_intent", "close_protocol": "package-lease-v1"}
+    if drift == "schema":
+        intent["schema_version"] = True
+    path.write_text(json.dumps(intent))
+    closed = {
+        "state": "closed_before_apply", "job_intent_sha256": nh._digest(path),
+        "retry_allowed": 0 if drift == "retry" else False,
+        "fence_retained": 1 if drift == "fence" else True,
+    }
+    closed_path.write_text(json.dumps(closed))
+    retired = {
+        "state": "retired_before_apply", "job_intent_sha256": nh._digest(path),
+        "closed_sha256": nh._digest(closed_path),
+        "old_job_replay_allowed": 0 if drift == "replay" else False,
+    }
+    retired_path.write_text(json.dumps(retired))
+    original = [item.read_bytes() for item in (path, closed_path, retired_path)]
+    assert not nh._job_retired(path)
+    with pytest.raises(nh.HelperError, match="blocks start"):
+        nh._assert_no_package_intent(manager.registry)
+    assert [item.read_bytes() for item in (path, closed_path, retired_path)] == original
+    assert packages.calls == 0
