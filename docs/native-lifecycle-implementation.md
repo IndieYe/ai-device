@@ -1334,3 +1334,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 审查旧协议发现只读 `observe_job` 使用 Python 字典相等比较 apply intent 及 sender/outcome 内的 intent，会将 JSON `true` 与 `1` 视为相同。以人工构造的数值版本事务作边界 fixture，sender 和 outcome 嵌套版本改为 `true` 后仍返回 `package_outcome_recorded`；两项先失败复现（`20261028-013633-1002c2.log`）。这只证明该只读诊断误认类型一致，不证明真实合法版本类型、重复包动作或生产恢复已发生。
 
 在只读观察中用类型敏感 JSON 比较 apply intent、sender/outcome 中完整 intent 和成功包观察，不修改旧记录、不扩大回执或启用恢复。覆盖四条类型漂移、合法正例和拒绝前后文件不变；相关回归 117 通过（`20261028-013724-f13e1f.log`），完整 1148 通过、10 跳过（`20261028-013733-ed8b57.log`）。旧冻结 snapshot 不自动获得修复；此前 `af0d8b5` DEB 不包含该修复，准确新包待验证。生产 job 派发和恢复门禁不变。
+
+
+## 169. job 观察修复的准确 DEB 验收
+
+以干净 `ef7fa12d64e22b332002c1bcfda0c002ccb3e5c9` 离线新构建 wheel 与未签名开发 DEB。Device wheel SHA256 `10847294a0390761b47908ea30f17e01e5ded92497064ce5f72598c53755e401`；七核心模块含新增候选 sender 与 job 修复均逐字节匹配 Git（`20261028-013920-42d1e1.log`）。DEB `build/native-packages-p1-ef7fa12/ai-device-native-client_0.2.2-1_amd64.deb`，109815438 字节，SHA256 `5a981f88c8795f8bda3f8824724e526e6c56c43db0f9c69b10060d13e7402327`（`20261028-013921-573623.log`）。
+
+独立无网络容器干净安装、主 runtime 六模块/bootstrap 四模块与源码比对及重装保护通过（`20261028-014015-c8b3d6.log`）。在独立干净安装的包内解释器中确认 job 模块路径并运行四条诊断类型漂移负例：4 通过（`20261028-014102-3d9d3d.log`）。另在隔离 systemd 中双恢复门禁拒绝且无写入，测试替身之后才运行旧内部逻辑，包钩子仍拒绝、active 不变（`20261028-014018-b0dc5e.log`）；该 fixture 解包后重装同批 wheel，不代表真实升级成功。专属 systemd 容器已停止（`20261028-014105-bc9fe4.log`）。候选 guard 虽含在 wheel 中仍未接入生产；P1 未完成。
