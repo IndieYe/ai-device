@@ -379,3 +379,27 @@ def inspect_helper_transition(registry, unit_dir, version):
             "protocol_compatibility_verified": False,
             "switch_allowed": False,
         }
+
+
+def main():
+    """Explicit experimental candidate daemon entry; no activation or dispatch."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run a verified helper candidate (experimental)")
+    parser.add_argument("--registry", type=Path, required=True)
+    parser.add_argument("--socket", type=Path, required=True)
+    parser.add_argument("--group", type=int, required=True)
+    parser.add_argument("--version", required=True)
+    args = parser.parse_args()
+    try:
+        registry = helper._path(args.registry)
+        run_verified_helper_candidate(
+            registry / "bootstrap-candidates", args.version,
+            registry=registry, socket_path=args.socket, group=args.group,
+        )
+    except (BootstrapError, helper.HelperError, OSError, ValueError, KeyError) as exc:
+        parser.exit(1, f"candidate helper refused: {exc}\n")
+
+
+if __name__ == "__main__":
+    main()

@@ -441,6 +441,29 @@ def test_verified_helper_candidate_refuses_untrusted_launch(runtime, monkeypatch
         bootstrap.run_verified_helper_candidate(candidate.parent, "v1", registry="r", socket_path="s", group=7)
 
 
+def test_candidate_daemon_entry_uses_fixed_registry_candidates(monkeypatch, tmp_path):
+    import sys
+
+    registry = tmp_path / "manager"
+    observed = {}
+    monkeypatch.setattr(bootstrap.helper, "_path", lambda path: path)
+    monkeypatch.setattr(
+        bootstrap, "run_verified_helper_candidate",
+        lambda candidates, version, **kwargs: observed.update(
+            candidates=candidates, version=version, **kwargs
+        ),
+    )
+    monkeypatch.setattr(sys, "argv", [
+        "native_bootstrap", "--registry", str(registry), "--socket", "/run/example.sock",
+        "--group", "123", "--version", "v1",
+    ])
+    bootstrap.main()
+    assert observed == {
+        "candidates": registry / "bootstrap-candidates", "version": "v1",
+        "registry": registry, "socket_path": bootstrap.Path("/run/example.sock"), "group": 123,
+    }
+
+
 def test_transition_observation_is_read_only_and_refuses_drift(runtime, monkeypatch):
 
     source, destination = runtime

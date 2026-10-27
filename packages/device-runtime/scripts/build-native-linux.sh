@@ -38,7 +38,7 @@ mv "$root$bootstrap/python" "$root$bootstrap/runtime"
 site="$root$bootstrap/runtime/lib/python3.13/site-packages"
 rm -rf "$site"
 mkdir -p "$site/device_runtime"
-for module in __init__.py native_helper.py management_lock.py; do
+for module in __init__.py native_helper.py management_lock.py native_bootstrap.py; do
  cp "$root$home/runtime/lib/python3.13/site-packages/device_runtime/$module" "$site/device_runtime/"
 done
 cat > "$root/usr/bin/ai-device-native-helper" <<'EOF'

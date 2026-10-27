@@ -753,3 +753,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 83. 候选 helper 的校验字节执行原型
 
 新增 `run_verified_helper_candidate`：仅 Linux root、候选自身 Python 隔离模式且禁止写字节码时，对已发布候选证据及完整快照做前后校验，从清单校验后读取 `__init__.py`、`management_lock.py`、`native_helper.py` 的具体字节，直接从这些字节编译加载并调用候选 `serve`，不通过之后的磁盘模块导入。测试模拟最终校验后磁盘替换，验证仍执行先前校验字节，并覆盖解释器/隔离模式/字节码及源码漂移拒绝。该入口仅供可信管理员启动器使用，未接入现有独立 bootstrap、unit 或生产派发；验证器自身、解释器/stdlib 原生依赖的可信来源、peer 与启动实例的持续关联、重启和锁交接仍需闭环。模块替换设计仅适用于专用单线程启动进程，不适合复用的管理进程。152 项相关测试通过，完整 Device 1025 passed、3 skipped，ruff 与 diff 检查通过；尚无真实候选进程或准确新制品验收，不能声称运行身份已证明。生产派发保持关闭，包保护不变。
+
+
+## 84. 候选 daemon 入口与隔离启动
+
+`native_bootstrap` 增加仅接受 registry、socket、group 和候选版本的实验 daemon 入口，固定从 registry 的 `bootstrap-candidates` 读取候选，调用第83节校验字节执行原型；Linux 包构建时将该模块纳入独立 bootstrap，原有稳定 helper 入口和 unit 不改、不自动激活候选。一次性无网络 amd64 systemd 容器以锁定 CPython 和当前源码创建独立候选，候选 snapshot SHA256 `8d12cc4e0a7988e4707dc8c8079b1b038a0ae179b7414a83ec8322747f75b5e5`、helper SHA256 `bfa1e31ebb262c60f78a3dce0dcc8d9a2079e24c187fd63eacb12e21c5522e90`；真实候选解释器以 `-I -B -m device_runtime.native_bootstrap` 启动测试 daemon，socket 返回预期拒绝响应。停止该隔离 daemon、显式恢复 socket 后改写候选锁模块，新启动失败且 socket 未创建。首次准备因容器 sh 不支持花括号展开而失败，候选尚未创建；改用逐文件复制后完成。实验实例关机后确认不存在。完整 Device 1027 passed、3 skipped，ruff、shell 语法和 diff 检查通过。实验启动器自身从候选解释器导入，尚未建立独立信任锚、与 socket peer 的连续身份或正式制品验证；未接入生产部署，派发仍关闭，不证明完整身份绑定。

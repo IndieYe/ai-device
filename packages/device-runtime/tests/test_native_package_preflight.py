@@ -6,6 +6,14 @@ from pathlib import Path
 import pytest
 
 
+def test_independent_bootstrap_includes_candidate_launcher():
+    builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
+    source = builder.read_text()
+    assert "for module in __init__.py native_helper.py management_lock.py native_bootstrap.py; do" in source
+    # The stable helper entry is unchanged; candidate launch is not activated.
+    assert "-I -B -m device_runtime.native_helper" in source
+
+
 @pytest.mark.parametrize(
     "existing",
     [None, "packages/old-version", "bootstrap/old-version", "instances", "manager"],
