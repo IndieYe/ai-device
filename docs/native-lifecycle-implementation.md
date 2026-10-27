@@ -788,3 +788,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 90. helper daemon 退出时 guard 生命周期修复
 
 新建 helper unit 显式 `KillMode=process`、`Restart=no`，使 systemd 不因 daemon 退出自动终止仍持锁的 start guard；已有 unit 不自动覆盖、重启或迁移。使用含该未提交源码的测试 Device wheel SHA256 `d2432a074804b2093708bc36ef3a659a897e6c0a5bb24f1651de18f9ddca32d4`，历史 `9b37b30...` DEB 只作为隔离包保护 fixture，在一次性无网络 amd64 systemd 容器分别验证 daemon SIGKILL 与正常 systemctl stop：旧 guard 窗口包锁拒绝独占，显式恢复 socket 并重启 daemon 后新 ID 拒绝且不产生意图；sender 回执出现后同 ID 不重放，显式 resolve-running 写 confirmed_running。正常停止使用登记前绑定的有限期测试 runner，避免真实客户端因缺中心自动重启；因此不是目标设备验收。早期正常停止测试先因对 inactive unit 使用 reset-failed 中断；随后尝试直接改 ExecStart 被完整性检查拒绝，另一次 runner shebang 链接被可信路径检查拒绝，修正后在全新容器通过。所有实验容器关机后确认不存在。完整 Device 1028 passed、3 skipped，ruff、shell 语法与 diff 检查通过。若 guard 挂起、异常退出或回执缺失，仍须保持 unknown 和显式诊断；`KillMode=process` 不承诺 systemd 回收残留 guard，也不证明运行身份或事务授权。生产派发继续关闭，包保护不变，正式制品及目标主机尚未验收。
+
+
+## 91. guard 持续占用与缺回执回归
+
+新增真实 guard 子进程和受控阻塞 sender 的本地测试：guard 同时继承执行锁和包锁，父侧描述符关闭后，对旧 unknown 的停止对账及新 ID 启动仍被拒绝，独占包锁不可取得；释放测试 sender 后，只有无关回执时仍不得对账。测试通过 finally 释放并回收子进程，不以超时为完成依据。完整 Device 回归 1029 passed、3 skipped；ruff 和 diff 检查通过。此测试模拟 sender 持续阻塞，不是 SIGSTOP guard、systemd 或宿主重启验收，也不证明实际运行代码身份、事务交接或可安全派发。

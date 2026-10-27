@@ -855,6 +855,62 @@ def test_systemd_guard_inherits_sender_lock(tmp_path):
         nh.fcntl.flock(probe, nh.fcntl.LOCK_EX | nh.fcntl.LOCK_NB)
 
 
+def test_hung_guard_keeps_both_leases_and_unknown(helper, tmp_path):
+    import threading
+    import time
+
+    service, _adapter, record = stopped_unknown(helper)
+    receipt = service.registry / "sender-probe-one.json"
+    receipt.unlink()
+    executable = tmp_path / "held-systemctl"
+    ready = tmp_path / "sender-ready"
+    release = tmp_path / "sender-release"
+    executable.write_text(
+        f"#!/bin/sh\ntouch '{ready}'\nwhile [ ! -e '{release}' ]; do sleep 0.02; done\n"
+    )
+    executable.chmod(0o700)
+    errors = []
+    thread = None
+    try:
+        with (
+            service._execution_lease("probe", existing=True) as execution_fd,
+            nh.package_lease(service.registry) as package_fd,
+        ):
+            def run_guard():
+                try:
+                    nh.Systemd(str(executable)).start(
+                        record["unit"], lease_fd=execution_fd, package_fd=package_fd,
+                        receipt_path=tmp_path / "unrelated-receipt.json", intent={"fixture": True},
+                    )
+                except (OSError, subprocess.SubprocessError, nh.HelperError) as exc:
+                    errors.append(exc)
+
+            thread = threading.Thread(target=run_guard)
+            thread.start()
+            deadline = time.monotonic() + 5
+            while not ready.exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert ready.exists()
+        # Parent descriptors are closed; only the guard retains these leases.
+        with pytest.raises(nh.HelperError, match="still active"):
+            service.handle(req("resolve-stopped"), peer_uid=record["uid"])
+        with pytest.raises(nh.HelperError, match="unconfirmed"):
+            service.handle(req("start", "new-id"), peer_uid=record["uid"])
+        with pytest.raises(nh.HelperError), nh.package_lease(service.registry, exclusive=True):
+            pass
+        assert not (service.registry / "recovery-probe-one.json").exists()
+        assert not (service.registry / "op-probe-new-id.json").exists()
+    finally:
+        release.touch()
+        if thread is not None:
+            thread.join(timeout=5)
+    assert thread is not None and not thread.is_alive() and not errors
+    # Releasing locks or an unrelated receipt cannot establish recovery.
+    with pytest.raises(nh.HelperError, match="receipt missing"):
+        service.handle(req("resolve-stopped"), peer_uid=record["uid"])
+    assert not (service.registry / "recovery-probe-one.json").exists()
+
+
 def test_stopped_cancel_failure_keeps_unknown(helper):
     service, adapter, record = stopped_unknown(helper)
     adapter.override["Job"] = "42 start"
