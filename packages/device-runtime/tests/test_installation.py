@@ -191,6 +191,53 @@ def test_three_roles_and_stable_entry(tmp_path, delivery, fake_uv):
     assert all(kwargs["cwd"].is_relative_to(root) for _, kwargs in fake_uv)
 
 
+def test_install_existing_instance_remains_untouched(tmp_path, delivery, fake_uv):
+    root = tmp_path / "existing"
+    root.mkdir()
+    (root / "keep").write_bytes(b"preserve")
+    with pytest.raises(InstallationError, match="destination already exists"):
+        install_instance(delivery, instance_id="fixture", roles=["client"], root=root,
+                         server_url="http://127.0.0.1:9")
+    assert sorted(p.name for p in root.iterdir()) == ["keep"]
+    assert (root / "keep").read_bytes() == b"preserve"
+
+
+def test_install_directory_creation_permission_error_is_not_existing(tmp_path, delivery, fake_uv, monkeypatch):
+    root = tmp_path / "denied"
+    original = module.Path.mkdir
+
+    def denied(path, *args, **kwargs):
+        if path == root:
+            raise PermissionError(13, "fixture failure")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(module.Path, "mkdir", denied)
+    with pytest.raises(InstallationError, match=r"cannot create instance directory \(errno 13\)") as captured:
+        install_instance(delivery, instance_id="fixture", roles=["client"], root=root,
+                         server_url="http://127.0.0.1:9")
+    assert isinstance(captured.value.__cause__, PermissionError)
+    assert not root.exists()
+
+
+@pytest.mark.parametrize("error_number", [13, 28])
+def test_install_io_failure_keeps_partial_state_and_reports_cause(tmp_path, delivery, fake_uv, monkeypatch, error_number):
+    root = tmp_path / "partial-instance"
+
+    def fail_prepare(root, *args, **kwargs):
+        (root / "partial-evidence").write_bytes(b"preserve")
+        raise OSError(error_number, "fixture failure")
+
+    monkeypatch.setattr(module, "_prepare", fail_prepare)
+    with pytest.raises(InstallationError, match="partial.*retained") as captured:
+        install_instance(delivery, instance_id="fixture", roles=["client"], root=root,
+                         server_url="http://127.0.0.1:9")
+    assert isinstance(captured.value.__cause__, OSError)
+    assert captured.value.__cause__.errno == error_number
+    assert str(error_number) in str(captured.value)
+    assert (root / "partial-evidence").read_bytes() == b"preserve"
+    assert not (root / "active.json").exists()
+
+
 def test_rebuild_preserves_identity_configuration_journal_output(tmp_path, delivery, fake_uv):
     root = tmp_path / "instance"
     old = create(root, delivery)

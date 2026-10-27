@@ -447,6 +447,11 @@ def install_instance(
     )
     try:
         root.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as exc:
+        raise InstallationError("cannot create instance; destination already exists") from exc
+    except OSError as exc:
+        raise InstallationError(f"cannot create instance directory (errno {exc.errno})") from exc
+    try:
         with _lock(root):
             active = _prepare(root, bundle, manifest, roles)
             (root / "config").mkdir()
@@ -472,7 +477,7 @@ def install_instance(
         return {"instance_root": str(root), **active}
     except OSError as exc:
         raise InstallationError(
-            "cannot create instance; destination must not already exist"
+            f"instance installation failed (errno {exc.errno}); partial instance retained"
         ) from exc
 
 

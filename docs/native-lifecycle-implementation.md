@@ -1648,3 +1648,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 无网络隔离 systemd、惰性旧包夹具和新 DEB 解包环境中，包内 helper/update/job 模块匹配 wheel；生产 dispatch 在创建 intent 和 runner 前拒绝，真实 systemd snapshot worker 拒绝新动作且不写 apply intent。使用实际包内 `close_before_apply` 和 snapshot，注入目标目录 fsync 错误，初次发布及再次重试均抛错，不报告成功；恢复 fsync 后重试成功，原 job intent 和 active 字节不变，未写 apply intent（`20261028-074132-8260a7.log`，`scripts/accept-native-close-fsync-5728183.sh`）。一次性容器结束后已停止并删除，其他容器未动（`20261028-074156-4532ee.log`）。
 
 这不是干净安装、真实升级、实际掉电、可信运行身份或外部 job 终态证明；目录同步被故障注入，未验证硬件持久性。生产派发、退休、worker 和恢复门禁不变，旧 snapshot 不自动获得修复，P1 未完成。
+
+
+## 211. 新建实例安装失败诊断
+
+共用 `install_instance` 原先把 root 创建及后续所有 `OSError` 都包装为“目标不能已存在”，导致准备过程发生权限错误或磁盘满也被误报；注入 errno 13/28 的 `_prepare` 故障先复现（`20261028-074957-6b6769.log`）。现仅在 root.mkdir 本身的 `FileExistsError` 报目标已存在；目录创建其他错误报告 errno；目录已创建后 I/O 故障报告 errno 和 partial instance retained，保留异常链与现场，不清理、不覆盖、不自动重试。测试覆盖权限、空间、已有实例保护与证据保留；安装及原生安装定向 75 通过（`20261028-075033-76a564.log`），完整 1208 通过、16 跳过（`20261028-075044-966090.log`），ruff 通过。
+
+这只修正诊断，不实现中断安装恢复、自动重建或空间预留，也不保证所有非 OSError 均有该提示。产物尚未重新构建，现有包和运行实例不自动更新，P1 保持未完成。
