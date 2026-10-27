@@ -140,6 +140,23 @@ def snapshot_runtime(source, directory):
     return validate_snapshot(directory)
 
 
+def _reject_helper_bytecode(snapshot):
+    """A source digest cannot identify code loaded from a stale bytecode cache.
+
+    This is only a candidate precondition, not proof of a running process's
+    loaded code. Do not delete or rewrite any existing cache automatically.
+    """
+    inventory = snapshot.get("inventory")
+    if not isinstance(inventory, dict):
+        raise BootstrapError("invalid runtime inventory")
+    if any(
+        part == "__pycache__" or part.endswith((".pyc", ".pyo"))
+        for relative in inventory
+        for part in relative.split("/")
+    ):
+        raise BootstrapError("helper candidate contains bytecode cache")
+
+
 def inspect_helper_candidate(directory):
     """Validate an independent snapshot and probe its helper without activating it.
 
@@ -151,7 +168,8 @@ def inspect_helper_candidate(directory):
     if sys.platform != "linux" or os.geteuid() != 0:
         raise BootstrapError("Linux administrator required")
     directory = helper._path(directory)
-    validate_snapshot(directory)
+    snapshot = validate_snapshot(directory)
+    _reject_helper_bytecode(snapshot)
     runtime = directory / "runtime"
     python = runtime / "bin/python3.13"
     expected = runtime / "lib/python3.13/site-packages/device_runtime/native_helper.py"
@@ -229,6 +247,7 @@ def read_helper_candidate(candidates_dir, version):
     helper._trusted(candidates_dir, directory=True)
     candidate = candidates_dir / version
     snapshot = validate_snapshot(candidate)
+    _reject_helper_bytecode(snapshot)
     path = candidate / "candidate.json"
     helper._trusted(path)
     value = json.loads(path.read_bytes())

@@ -683,3 +683,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 69. systemd 单元与 socket peer 只读关联
 
 新增只读 `observe_helper_unit_peer`：在 peer pidfd 生命周期内两次查询固定 `ai-device-native-helper.service` 的 loaded/active/running、MainPID、InvocationID 和 FragmentPath；缺失、格式无效、两次状态漂移、peer PID 不同或观察时 peer 退出均拒绝。结果明确 `loaded_code_verified=false`、`dispatch_allowed=false`，不做服务操作。一次性 amd64 Linux 6.18 systemd 容器中使用测试 socket 单元验证匹配成功、另一 root 进程拒绝；不是实际 Device helper 安装、加载代码或启动快照验证。测试容器关机命令超时，随后列表确认该 `--rm` 实例已不存在。该观察不承诺返回后的 daemon 状态，未接入生产派发；仍须完成真实代码身份绑定、干净安装及真实互斥故障验收，默认派发拒绝保持不变。
+
+
+## 70. helper 候选字节码缓存门禁
+
+隔离 Python 实验复现：源文件改变但大小和时间戳保持不变时，`python -B` 仍可读取旧 `.pyc`，因此源码 SHA 及 `-B` 本身不能证明实际执行了对应源码。helper 候选 inspect 与已发布候选 read 在校验快照 inventory 后拒绝任何 `__pycache__`、`.pyc`、`.pyo`；不自动删除缓存，且不改变普通事务快照。新增 inspect 和 read 的拒绝回归，完整 Device 回归 1012 passed、3 skipped，ruff 通过。该保守门禁可能拒绝带常规缓存的 runtime，尚未验证当前完整制品能否满足，需后续隔离构建验收；它只排除字节码歧义，不证明运行进程加载了指定源码、systemd 互斥或持续身份。生产派发仍关闭，包保护不变。

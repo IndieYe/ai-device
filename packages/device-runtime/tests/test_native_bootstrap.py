@@ -233,6 +233,39 @@ def test_helper_candidate_probe_refuses_failure(runtime, monkeypatch, failure):
         bootstrap.inspect_helper_candidate(destination)
 
 
+@pytest.mark.parametrize("cache", ["__pycache__/native_helper.cpython-313.pyc", "native_helper.pyc"])
+def test_helper_candidate_refuses_snapshotted_bytecode(runtime, monkeypatch, cache):
+    import subprocess
+
+    source, destination = runtime
+    package = source / "lib/python3.13/site-packages/device_runtime"
+    package.mkdir(parents=True)
+    (package / "native_helper.py").write_text("# source")
+    bytecode = package / cache
+    bytecode.parent.mkdir(parents=True, exist_ok=True)
+    bytecode.write_bytes(b"old bytecode")
+    bootstrap.snapshot_runtime(source, destination)
+    calls = []
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: calls.append(args))
+    with pytest.raises(bootstrap.BootstrapError, match="bytecode cache"):
+        bootstrap.inspect_helper_candidate(destination)
+    assert not calls
+    assert bytecode.read_bytes() == b"old bytecode"
+
+
+def test_read_helper_candidate_refuses_bytecode_in_verified_snapshot(runtime):
+    source, destination = runtime
+    package = source / "lib/python3.13/site-packages/device_runtime"
+    package.mkdir(parents=True)
+    (package / "native_helper.py").write_text("# source")
+    (package / "native_helper.pyc").write_bytes(b"old bytecode")
+    candidate = destination.parent / "v1"
+    bootstrap.snapshot_runtime(source, candidate)
+    with pytest.raises(bootstrap.BootstrapError, match="bytecode cache"):
+        bootstrap.read_helper_candidate(destination.parent, "v1")
+    assert (candidate / "runtime/lib/python3.13/site-packages/device_runtime/native_helper.pyc").exists()
+
+
 def test_publish_versioned_candidate_never_activates(runtime, monkeypatch):
     source, destination = runtime
     module = source / "lib/python3.13/site-packages/device_runtime/native_helper.py"
