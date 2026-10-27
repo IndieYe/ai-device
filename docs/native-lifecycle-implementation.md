@@ -640,3 +640,7 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 59. v24 RPM声明依赖测试事务
 
 一次性Rocky Linux 9 x86_64容器对既有v24开发RPM（SHA256 `da2731ad27205ab25918740f41c2fd8725fab9550229cf62207694267fb0361b`）执行`rpm -qp --requires`和不带`--nodeps`的`rpm -i --test`，均成功；声明依赖仅为五项rpmlib能力。该测试事务未安装包，不等于真实脚本执行、动态库完整性、离线运行时依赖闭包或最新源码制品验收；v24仍使用旧v17 payload。旧helper安全迁移未实现，新job派发关闭，原包保护不变，未操作真实设备。
+
+## 60. v24 RPM隔离运行时链接与模块导入
+
+一次性Rocky Linux 9 x86_64容器无`--nodeps`安装摘要为`da2731ad27205ab25918740f41c2fd8725fab9550229cf62207694267fb0361b`的v24开发RPM。包内client Python导入ssl、sqlite3、ctypes、zlib、cryptography、zstandard并完成Ed25519测试签名；独立bootstrap Python导入上述标准库及native_helper成功。对两个运行时目录内普通文件名匹配`*.so`或`*.so.*`逐个运行ldd，未报告`not found`（非动态对象的ldd错误被忽略）。该证据仅覆盖上述导入与扫描，未证明所有可执行文件、延迟加载、目标实机或完整依赖闭包；制品仍是旧v17 payload，不是最新源码发行。旧helper迁移仍缺，新job派发关闭，原包保护不变，未操作真实设备。
