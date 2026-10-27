@@ -867,3 +867,10 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 105. daemon 租约描述符与真实 fork 隔离验证
 
 `_daemon_lease` 在原有同一加锁上下文中返回实际 FD，现有调用者不变；明确 FD 自身不证明锁存续或授权。新增单测核对 FD、并发租约拒绝和退出关闭；`scripts/probe-native-daemon-lease.py` 在无网络 Linux 6.18.15 amd64/Rosetta 容器加载当前源码、以实际 `_daemon_lease` 获取锁后 fork，验证父上下文关闭后子仍阻止独立租约、子关闭后新租约可取得。`ACTUAL_DAEMON_LEASE_FORK_OK`，日志 `20261027-203530-988a12.log`；相关测试149通过，完整Device回归1038通过3跳过，ruff通过。此改动未新增监督器、候选fork或公开入口，不证明故障恢复/peer/intent；生产派发仍拒绝。实际包及systemd尚未对本改动构建验证。
+
+
+## 106. 真实候选字节与 daemon 租约的隔离 fork 机制实验
+
+新增 `scripts/accept-native-verified-fork.sh`，在无网络一次性 Linux amd64/Rosetta 容器安装第104节 `0dbcf8d` DEB，再仅在容器内将当前 `e7d146a` 的四个源码模块覆盖到独立 bootstrap 并逐字节比较；这不是 `e7d146a` 的准确重建包。真实 bootstrap 发布并检查候选、调用 `_verified_helper_bytes` 后，在容器内把候选 helper 路径替换为立即失败的内容；父进程持真实 daemon 租约 fork 子进程，子进程仅执行继承的验证字节并临时调用内部 `_serve`。观察 socket peer 是子进程，畸形请求拒绝；父关闭租约后另一个租约被拒绝，终止仅本实验子进程并回收后 pidfd 表示退出、租约可重新获取。`VERIFIED_FORK_FIXTURE_OK`，日志 `20261027-203953-8d6757.log`，容器一次性退出。
+
+**限制**：脚本为机制试验，特意绕过生产 `serve` 锁包装，不是受控生产入口；没有启动握手、监督器死亡并存活子进程的交易故障处理、systemd invocation、所有 FD 清理、锁漂移或持久 intent/包事务验证。候选路径替换仅为容器内对照，不应在真实安装中使用。未开放派发、未验证 P1 完成。
