@@ -1465,3 +1465,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 当前实现的旧启动 intent 缺失 `execution_barrier` 或使用版本1时，`resolve-running` 可在无 sender 回执下仅凭当前运行观察与锁空闲写 `confirmed_running`；已有旧恢复记录也能被新 start 和 package apply 消费。针对两种旧 intent、无回执和已有恢复记录的四项测试修复前均失败（`20261028-024646-89ed24.log`），测试使用适配器替身，不证明实际设备已出现重复动作。旧 sender guard 异常退出时子进程可能仍存活，单靠锁空闲无法确认完成。
 
 当前源码只允许 execution barrier 严格整数2的 intent 进入新 resolve-running/resolve-stopped；消费已有恢复记录以授权新 start 或 package apply 时也检查该屏障，旧记录保留，可由 query/reconcile 只读查看，不授权新动作。关闭前的旧 helper 或 snapshot 不自动获得这一门禁，不自动删除或迁移旧记录；需要管理员在维护窗口核实并按后续协议处置。版本2回执仅证明直接 sender 已回收，不宣称完整进程树或 systemd 外部工作已终结。helper/update/job 定向310通过1跳过（`20261028-024742-e26cad.log`）；完整1170通过10跳过，ruff通过（`20261028-024806-1591d3.log`）。准确新包验收待完成。
+
+
+## 186. 旧启动屏障的准确 DEB 及真实 helper 验收
+
+从 `85657189cae7d78fc2157255477350735f76604f` 干净源码离线构建未签名 DEB：`build/native-packages-p1-8565718/ai-device-native-client_0.2.2-1_amd64.deb`，109823294字节，SHA256 `f37cf12b960824e46ae7de38ac71b8027d384016aa1469d07b165ce8fd7b0eec`；Device wheel SHA `6251721d38dbdb83bcbeb75fc3844d5927d6fcc8ab168ad891137d094349120a`。wheel 33 Python源文件与 commit 一致；干净安装、主 runtime 六模块及 bootstrap 四模块核对和原地覆盖保护通过（`20261028-025037-bc0231.log`）。包内7项旧屏障/包事务测试以普通用户通过（`20261028-025121-1042ac.log`）。首次 root 运行 helper 测试因夹具目录所有者不符导致4项失败、3项通过（`20261028-025052-0bfda8.log`），未当作产品通过。
+
+无网络隔离 systemd 中干净安装并注册普通用户测试实例，启动真实 helper，构造旧 barrier 1 intent 和 unknown result：直接 resolve-running/resolve-stopped 均因旧 sender 未证明而拒绝、不创建 recovery；构造历史 recovery 后，真实 socket query 可读，直接 start 指明旧 sender 拒绝，socket start 返回拒绝，原记录不变、无新启动 intent、测试 Device unit inactive/MainPID 0（`20261028-025204-cf692e.log`，脚本 `scripts/accept-native-legacy-start-fence-8565718.sh`）。容器已停止。实验没有启动测试 Device，不证明真实旧 sender 或宿主故障已处理；旧 helper 和旧 snapshot 不自动获得修复，RPM 未构建。
