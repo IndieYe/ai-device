@@ -1185,3 +1185,10 @@ helper/update/job 266 通过、1 跳过；Device 全量 1125 通过、4 跳过�
 这是隔离 fixture 和 systemd 证据，不证明生产监督、实际处理者、固定 invocation、成功升级、真实宿主或正式签名。RPM 无离线 rpmbuild，仍未构建；旧快照不迁移，生产派发关闭。
 
 `baa0797` 准确 DEB 另在独立一次性 systemd 容器运行 `retire-retry`：先验证生产派发门禁拒绝，再以测试进程替身执行关闭和幂等退休；旧迟到 worker 拒绝且不重放，新 ID 的隔离派发仍遭原包保护拒绝并保留新围栏。输出 `retired_old_delayed_worker_refused_new_id_dispatched`，日志 `20261027-235501-cd1e7a.log`，容器正常退出。不证明生产派发或升级成功。
+
+
+## 149. start unknown 恢复屏障类型与嵌套回执
+
+实际 `Helper.handle` 恢复路径复现：意图 `execution_barrier=true` 或 `1.0` 被 Python 当作旧整数 1，缺 sender 回执也能生成 `confirmed_running`；其他畸形版本可在同 ID 路径被接受。新增严格支持缺字段的历史格式或精确整数 1/2；恢复、同 ID 和新 ID 扫描均拒绝其他类型/值。旧整数 1 及无字段行为按原兼容语义保留，不补造旧回执。
+
+sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 当作 `2`；已先复现可错误恢复及放行新 start，再改为类型敏感 JSON 比较。负向测试确认没有新恢复记录、没有重放/新 start 且旧证据字节保留；既有合法恢复、旧版本和互斥回归通过。helper/update/job 277 通过、1 跳过；Device 完整回归 1136 通过、4 跳过，ruff 和 diff 检查通过。使用隔离本地 adapter，不证明真实 systemd 竞态或宿主崩溃；第148节 `baa0797` DEB 不含本次修复，须重新构建准确制品。生产派发依旧关闭，旧记录不删除或自动迁移。

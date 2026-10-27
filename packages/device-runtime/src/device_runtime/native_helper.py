@@ -102,6 +102,15 @@ def _valid_admin_approval(value, prepared_sha256):
     return _same_json(value, {"prepared_sha256": prepared_sha256, "approved_by_uid": 0})
 
 
+def _validate_start_barrier(intent):
+    if not isinstance(intent, dict):
+        raise HelperError("invalid start intent barrier")
+    if "execution_barrier" in intent:
+        barrier = intent["execution_barrier"]
+        if type(barrier) is not int or barrier not in (1, 2):
+            raise HelperError("invalid start intent barrier")
+
+
 def _job_retired(path):
     """Validate immutable close and retirement evidence; malformed evidence blocks."""
     stem = Path(str(path).removesuffix(".job-intent.json"))
@@ -171,7 +180,7 @@ def _valid_sender_completion(receipt, intent):
     return (
         isinstance(receipt, dict)
         and receipt.get("state") == "sender_reaped"
-        and receipt.get("intent") == intent
+        and _same_json(receipt.get("intent"), intent)
         and type(receipt.get("returncode")) is int
     )
 
@@ -181,7 +190,7 @@ def _read_start_recovery(path, intent):
     if (
         not isinstance(recovery, dict)
         or recovery.get("state") not in ("confirmed_running", "confirmed_stopped")
-        or recovery.get("intent") != intent
+        or not _same_json(recovery.get("intent"), intent)
         or recovery.get("start_replayed") is not False
     ):
         raise HelperError("invalid recovery evidence")
@@ -687,6 +696,8 @@ class Helper:
                 stored_intent = (
                     json.loads(intent_path.read_text()) if intent_path.exists() else None
                 )
+                if stored_intent is not None:
+                    _validate_start_barrier(stored_intent)
                 if stored_intent and stored_intent.get("execution_barrier") in (1, 2):
                     expected["execution_barrier"] = stored_intent["execution_barrier"]
                 if stored_intent != expected:
@@ -800,6 +811,7 @@ class Helper:
             }
             if intent_path.exists():
                 existing_intent = json.loads(intent_path.read_text())
+                _validate_start_barrier(existing_intent)
                 if "execution_barrier" not in existing_intent:
                     intent.pop("execution_barrier")
                 else:
@@ -817,6 +829,8 @@ class Helper:
                     else None,
                 }
             for pending in self.registry.glob(f"op-{instance_id}-*.json"):
+                pending_intent = json.loads(pending.read_text())
+                _validate_start_barrier(pending_intent)
                 result_file = pending.with_name(pending.name.replace("op-", "result-", 1))
                 state = None
                 if result_file.exists():
@@ -832,7 +846,7 @@ class Helper:
                         raise HelperError(
                             "unconfirmed operation blocks a new start; reconcile first"
                         )
-                    _read_start_recovery(recovered, json.loads(pending.read_text()))
+                    _read_start_recovery(recovered, pending_intent)
             if snapshot["ActiveState"] not in {"inactive", "failed", "active"}:
                 raise HelperError("service transition requires read-only reconciliation")
             with (

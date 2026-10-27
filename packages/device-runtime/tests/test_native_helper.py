@@ -1746,3 +1746,72 @@ def test_marker_readable_and_operation_receipt_private(tmp_path):
     nh._save_new(receipt, {"operation": "private"})
     assert marker.stat().st_mode & 0o777 == 0o644
     assert receipt.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("barrier", [True, False, 1.0, 2.0, 0, 3, "2", None])
+def test_invalid_start_barrier_blocks_replay_and_running_recovery(helper, barrier):
+    service, adapter, record = helper
+    adapter.failure = True
+    service.handle(req("start"), peer_uid=record["uid"])
+    intent_path = service.registry / "op-probe-one.json"
+    intent = json.loads(intent_path.read_text())
+    intent["execution_barrier"] = barrier
+    intent_path.write_text(json.dumps(intent))
+    receipt_path = service.registry / "sender-probe-one.json"
+    if receipt_path.exists():
+        receipt_path.unlink()
+    adapter.failure = False
+    adapter.active = "active"
+    before = intent_path.read_bytes()
+    calls_before = list(adapter.calls)
+    with pytest.raises(nh.HelperError, match="barrier|identity|matching"):
+        service.handle(req("resolve-running"), peer_uid=record["uid"])
+    assert not (service.registry / "recovery-probe-one.json").exists()
+    with pytest.raises(nh.HelperError, match="barrier|identity|matching"):
+        service.handle(req("start"), peer_uid=record["uid"])
+    assert intent_path.read_bytes() == before
+    assert sum(name == "start" for name, _ in adapter.calls) == sum(name == "start" for name, _ in calls_before)
+
+
+def test_sender_receipt_intent_type_drift_cannot_authorize_recovery(helper):
+    service, _adapter, record = stopped_unknown(helper)
+    receipt_path = service.registry / "sender-probe-one.json"
+    receipt = json.loads(receipt_path.read_text())
+    receipt["intent"]["execution_barrier"] = 2.0
+    receipt_path.write_text(json.dumps(receipt))
+    before = receipt_path.read_bytes()
+    with pytest.raises(nh.HelperError, match="receipt mismatch"):
+        service.handle(req("resolve-stopped"), peer_uid=record["uid"])
+    assert receipt_path.read_bytes() == before
+    assert not (service.registry / "recovery-probe-one.json").exists()
+
+
+def test_recovery_intent_type_drift_blocks_new_start(helper):
+    service, adapter, record = stopped_unknown(helper)
+    service.handle(req("resolve-stopped"), peer_uid=record["uid"])
+    path = service.registry / "recovery-probe-one.json"
+    recovery = json.loads(path.read_text())
+    recovery["intent"]["execution_barrier"] = 2.0
+    path.write_text(json.dumps(recovery))
+    before = path.read_bytes()
+    old_calls = sum(action == "start" for action, _ in adapter.calls)
+    with pytest.raises(nh.HelperError, match="invalid recovery evidence"):
+        service.handle(req("start", "new-id"), peer_uid=record["uid"])
+    assert path.read_bytes() == before
+    assert not (service.registry / "op-probe-new-id.json").exists()
+    assert sum(action == "start" for action, _ in adapter.calls) == old_calls
+
+
+def test_invalid_start_barrier_blocks_new_operation(helper):
+    service, adapter, record = stopped_unknown(helper)
+    path = service.registry / "op-probe-one.json"
+    intent = json.loads(path.read_text())
+    intent["execution_barrier"] = True
+    path.write_text(json.dumps(intent))
+    before = path.read_bytes()
+    starts = sum(action == "start" for action, _ in adapter.calls)
+    with pytest.raises(nh.HelperError, match="invalid start intent barrier"):
+        service.handle(req("start", "new-id"), peer_uid=record["uid"])
+    assert path.read_bytes() == before
+    assert not (service.registry / "op-probe-new-id.json").exists()
+    assert sum(action == "start" for action, _ in adapter.calls) == starts
