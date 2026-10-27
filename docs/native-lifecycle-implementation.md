@@ -835,3 +835,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 99. 消息边界、FD 继承与监督器退出隔离探针
 
 `scripts/probe-native-message-boundaries.py` 在无网络一次性 Linux 6.18.15 amd64/Rosetta 容器中验证：SEQPACKET 两个子发送者各记录的 SCM_CREDENTIALS、数据与附属信息截断标志、意外 SCM_RIGHTS 交付及关闭、FD 在 fork/exec/pass_fds 间的继承差异；模拟监督器退出后，其子进程持有的通道仍可发送。`MESSAGE_BOUNDARIES_OK`，日志 `20261027-201228-eeb8a8.log`，ruff通过。评审及局限见 `native-helper-peer-protocol-review.md`。尚未实现生产接收器、监督器或真实 systemd 故障恢复；不证明 namespace、特权伪造、全错误路径 FD 关闭、锁/intent 或 P1 完成，保持派发关闭。完整回归未重跑。
+
+
+## 100. 隔离逐记录认证原型
+
+新增 `scripts/probe-native-strict-record.py`，无网络隔离 Linux 验证受限 SEQPACKET 记录接收：正确测试子进程通过，错误 PID、超长截断和 SCM_RIGHTS 被拒绝，测试收到的 FD 被关闭且数量不增加。`STRICT_RECORD_PROBE_OK`，日志 `20261027-201451-fa63ab.log`；ruff通过。原型仅凭测试父进程提供 PID，不绑定 pidfd、监督器或 systemd，未涵盖所有凭据/截断/并发故障，绝不接入生产；详细限制见 `native-helper-peer-protocol-review.md`。生产派发保持拒绝，P1未完成。

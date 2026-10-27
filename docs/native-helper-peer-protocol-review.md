@@ -39,6 +39,12 @@
 - 监督器启动证据必须说明谁持有 pidfd、谁验证启动字节、如何识别 systemd invocation/进程退出以及重启后旧记录失效。监督器退出但子进程继续存在时，旧证据如何失效、是否允许新实例启动、残留 socket 和 guard 如何处理仍未解决。不得将方案标记为已证明或开放派发。
 - 即使处理者身份可证，也不取代事务围栏：实例锁→包锁→服务锁；锁内复核身份、批准和冲突 intent；唯一 intent 文件与父目录 fsync 后才跨释放锁/请求 worker 的间隙；所有入口和新实例均需在锁内遵守 intent。未确定 fsync、请求结果或进程树回收时保持 unknown，同 ID 显式对账，不因锁空闲、PID 消失或超时自动重放。
 
+## 隔离逐记录拒绝原型
+
+`scripts/probe-native-strict-record.py` 仅用于实验：使用 SEQPACKET、SO_PASSCRED、有限缓冲和 recvmsg，拒绝空/超长记录、`MSG_TRUNC`/`MSG_CTRUNC`、非唯一凭据、错误 PID/UID 与意外附属数据；收到 SCM_RIGHTS 时关闭可见 FD 后拒绝。隔离 Linux 容器运行结果 `STRICT_RECORD_PROBE_OK`，验证正确 sender、错误 sender、截断、一个意外 FD 和 `/proc/self/fd` 数量无泄漏；日志 `20261027-201451-fa63ab.log`，ruff 通过。
+
+该原型的 expected PID 来自测试父进程，不与 pidfd、可信启动或 systemd invocation 绑定；没有实现完整消息解析、恶意 root/capability、namespace、错误注入、附属数据截断时全部 FD 内核行为、进程死亡竞争或监督器故障关闭，不可进入生产调用链。特别注意 fork 后 FD 能继续使用、PID 可复用，不能把该脚本的整数比较用作授权。
+
 ## 现有代码的局部锁序核查（非闭环证明）
 
 - `Helper.handle` 的 start 路径在实例管理锁下取得 execution lease 与共享 package lease，再检查 `_assert_no_package_intent` 并 `_save_new` start intent；需要启动时才在实例 service lease 下调用 sender，向 sender 传递 execution 与 package fd。该描述限于所读代码，不证明进程树全部故障均收敛。
