@@ -1299,3 +1299,24 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 `probe-native-package-descendant.py` 在无网络一次性 Linux amd64/Rosetta 容器安装准确 `19b7065` DEB，仅容器内将 `/usr/bin/dpkg` 替换为有限寿命 fixture；通过包内真实 `Debian.apply`、独立 snapshot guard 和 package EX 运行该替身，不执行真实包更新。直接替身进程退出后，guard 已发布 `sender_reaped`，其后代仍运行，且包锁可再次取得：`PACKAGE_DIRECT_CHILD_RECEIPT_WITH_DESCENDANT_ALIVE_AND_LOCK_FREE`（`20261028-010851-03d7d6.log`）。fixture 后代自然有限退出，容器随实验结束。此证明所测守卫只等待直接进程，不声称真实 dpkg 必然留下后代。
 
 当前恢复新增临时默认拒绝：Debian 适配器或含 `runtime_snapshot_sha256` 的包事务，不以旧直接子进程回执推导安全恢复；既有记录及围栏不改。真实 job 恢复仍先由独立 job 默认拒绝门禁阻断；测试替身只用于验证既有逻辑。源码回归 1143 通过、4 跳过（`20261028-011109-b2fdfc.log`），新包及真实隔离验收待完成。后续需要版本化 subreaper/进程树回执、退出到 ECHILD、崩溃和锁生命周期验证，旧回执不可升级，生产派发保持关闭。
+
+
+## 165. 包进程树恢复门禁的准确 DEB 隔离验收
+
+从干净检查点 `af0d8b54aa8e0af94730340ac154a0c8c93f9a19` 全新目录离线构建 wheel、payload 和未签名开发 DEB。Device wheel SHA256 `12fb0548d1c03661a9b0f846f9d65a944a7b49f293639a2327d6601061a5bc9f`，六核心模块逐字节匹配 Git（`20261028-011924-978d15.log`）。DEB `build/native-packages-p1-af0d8b5/ai-device-native-client_0.2.2-1_amd64.deb`，109817922 字节，SHA256 `5faae0ec5f2787398718e15411307c4c8c3cf588ad429360b349524122b507a1`（`20261028-011836-1eacb4.log`）。
+
+无网络一次性 Linux 容器干净安装，对照源码核验主 runtime 六模块及 bootstrap 四模块，重装保护拒绝（`20261028-011939-22fe15.log`）。独立隔离 systemd 实验观察 `PRODUCTION_JOB_RECOVERY_GATE_REFUSED_WITHOUT_WRITES` 与 `PRODUCTION_PACKAGE_TREE_GATE_REFUSED_WITHOUT_WRITES`；随后只在测试进程替换两个门禁以回归旧内部逻辑，真实候选包钩子仍拒绝，active 不变（`20261028-011958-113071.log`）。此 job fixture 解包 DEB 并重装同批 wheel，不是干净安装或真实升级成功证据；专属测试容器已停止（`20261028-012035-c00eb3.log`）。P1 未完成；生产派发、job 恢复及未经证明的包树恢复仍默认拒绝，旧 snapshot 不自动获得新门禁。
+
+
+## 166. 包进程树候选 guard 与崩溃、持久化边界
+
+先在准确 `af0d8b5` DEB 的一次性无网络 Linux 容器，以包内准备阶段 `TREE_GUARD` 和真实 package lease 做独立 fixture：正常情况下脱离会话的后代结束并被回收后才有回执；guard 被仅针对该 fixture 的 SIGKILL 杀死时，后代仍存活、锁已释放、没有回执（`20261028-012338-b19c06.log`）。这是机制实验，不是包事务生产实现。
+
+新增未接入生产的 `native_package_sender.py` 候选：固定 `/usr/bin/dpkg --install`、`debian-package-tree-subreaper-v1` intent、版本化回执、subreaper 与 ECHILD、文件及目录 fsync；已有回执和协议不匹配在调用 dpkg 前拒绝。准确 DEB 安装后仅将候选源码作为只读实验输入，容器内把 dpkg 换成 fixture：后代被回收前不发布回执、guard 崩溃无回执且后代存活时锁已释放、协议漂移和已存在回执拒绝包动作（`20261028-012653-67a9a4.log`）。同一实验使用测试专属代码注入目录 fsync 失败，link 后回执可能可见，进程失败，应视为持久性 unknown，不能据文件存在授权恢复。该探针未安装或运行真实包更新，candidate 尚不在此 DEB 中。
+
+候选未绑定正式 apply intent、worker、快照及现有只读观察者；旧 snapshot/回执不自动升级。需解决失败后持久性、进程树真实覆盖、生产调用防重放及受控身份/协调，方可考虑接入；生产派发、job 恢复与未经证明的包恢复仍默认拒绝。以上实验不代表完成 P1 或实机验收。
+
+
+本轮 Mac 完整回归 `1143 passed, 10 skipped`，其中新增六项 Linux-only 单测按平台跳过（`20261028-012754-943825.log`）；以准确 DEB 的隔离 Linux Python 和只读本地纯 Python pytest 依赖再运行新增六项，`6 passed`（`20261028-012919-658d5a.log`）。该结果不替代真实包事务、崩溃持久化或生产集成验收。
+
+自审将候选 guard 的 package log 同步移至后代完全回收之后，避免后代还在写时提前 fsync；隔离实验断言后代日志内容且其余故障边界复验通过（`20261028-013007-02a617.log`）。最终 Mac 回归 `1143 passed, 10 skipped`（`20261028-013023-23b033.log`），Linux 新增测试 `6 passed`（`20261028-013109-b9ff1c.log`）。

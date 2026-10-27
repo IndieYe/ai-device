@@ -79,3 +79,10 @@
 
 
 第161节对当前源码增加临时默认拒绝：job 专用恢复和带 job 摘要的底层恢复不再写新证据，保留只读诊断、已有记录与围栏。旧冻结 snapshot 不自动获得该门禁；这项收紧不修复旧证据，也不代替上面的受控 worker/终态协议和验收。
+
+
+### 包进程树回执候选（未接入生产）
+
+`native_package_sender.py` 提供未接入任何 dispatch/apply/recovery 的候选 guard：新 intent 显式标注 `debian-package-tree-subreaper-v1`，守卫在启动固定 dpkg 前启用 Linux subreaper，回收收养后代直至 ECHILD，文件 fsync、无覆盖 link、目录 fsync 后发布绑定 intent 的版本化回执。包锁 FD 仅由 guard 保留，dpkg 不继承；协议不使用超时强杀包树。已有回执及协议不匹配在动作前拒绝，但该本地检查不替代锁内的持久 intent 和防重放协调。候选只为独立实验，不承诺它的调用方已经保证 package lease、固定 snapshot 或身份正确。
+
+实施记录第166节的隔离 fixture 验证普通完成、guard 崩溃、旧协议和已有回执拒绝，以及目录 fsync 故障。特别是 guard 崩溃可导致包锁释放但后代活着；缺回执只能保持 unknown。另一个关键边界是 link 后目录 fsync 失败：即使回执当前可读也不能仅凭存在判定已持久发布；可见回执、进程退出码或锁空闲均不单独授权恢复。尚须设计并验证受控观察、崩溃与持久化语义，审计所有旧入口和只读观察对版本的支持，再决定是否接入新动作路径；旧 snapshot 不自动升级，生产派发及恢复门禁不因此开放。
