@@ -998,3 +998,10 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 无网络一次性 Linux 6.18 amd64/Rosetta systemd 容器安装第122节准确 DEB 并通过普通用户 helper 基线。新脚本 `packages/device-runtime/scripts/accept-native-systemd-peer.py` 使用独立 bootstrap 内的真实 `scoped_helper_unit_peer` 连接 helper socket，确认 systemd unit MainPID 与 SO_PEERCRED/pidfd 的 peer PID 相同；作用域前后固定 unit 的 LoadState、ActiveState、SubState、MainPID、InvocationID、FragmentPath 保持一致，作用域内仅发无害 query 并收到成功响应。结果明确 `loaded_code_verified=false`、`dispatch_allowed=false`。输出 `SYSTEMD_PEER_OBSERVED_NOT_AUTHORIZED_OK`，日志 `20261027-220507-6784e1.log`；脚本 ruff通过，临时容器退出。
 
 该证据仅为本机隔离 systemd 单次只读观察，不证明 socket 后续消息由同一进程处理、不绑定已验证候选字节、不消除父死亡竞态，也不授权 job 派发或证明目标设备。未修改生产门禁或真实服务。
+
+
+## 125. 隔离 systemd peer 观察期间退出拒绝
+
+在新的无网络一次性 systemd 容器重新安装第122节准确 DEB并运行普通用户基线；扩展 `accept-native-systemd-peer.py`：在只读 scope 内仅对该容器的测试 helper 执行 systemctl stop，确认 peer 退出或 unit 不再稳定时 scope 后置检查拒绝返回成功。`SYSTEMD_PEER_OBSERVED_NOT_AUTHORIZED_OK` 与 `SYSTEMD_PEER_EXIT_DURING_OBSERVATION_REJECTED`，日志 `20261027-220738-fe5644.log`；ruff通过，该一次性容器已退出。
+
+这是隔离测试服务的受控停止，不触碰真实服务。scope 后置失败不能撤销作用域内已有副作用，故仍仅可观察，不证明实际处理者或加载代码，也不授权派发；systemd 调用与 peer 死亡的其他竞态尚未覆盖。

@@ -35,3 +35,18 @@ with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             response.extend(chunk)
         assert json.loads(response)["ok"] is True
 print("SYSTEMD_PEER_OBSERVED_NOT_AUTHORIZED_OK", flush=True)
+
+# Only this disposable container's own helper is stopped, to exercise the
+# real peer/invocation post-check. No irreversible operation uses the scope.
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+    connection.settimeout(5)
+    connection.connect(endpoint)
+    try:
+        with helper.scoped_helper_unit_peer(connection) as observation:
+            assert observation["dispatch_allowed"] is False
+            subprocess.run(["systemctl", "stop", "ai-device-native-helper.service"], check=True, timeout=30)
+    except helper.HelperError as exc:
+        assert "peer exited" in str(exc) or "unit is not stably running" in str(exc), str(exc)
+    else:
+        raise AssertionError("observation accepted a stopped helper")
+print("SYSTEMD_PEER_EXIT_DURING_OBSERVATION_REJECTED", flush=True)
