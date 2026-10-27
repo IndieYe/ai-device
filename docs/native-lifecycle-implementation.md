@@ -798,3 +798,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 92. 暂停 guard 后的持锁与显式对账
 
 新增本地故障测试，对真实 `Systemd.start` 创建的 guard 子进程发 SIGSTOP，并用 waitpid 确认处于暂停状态；随后让受控 sender 退出。父侧描述符已关闭时，guard 仍持有执行锁与包锁，匹配 sender 回执尚未写入，停止对账、新 ID 启动和包锁独占均被拒绝。对测试捕获的该子进程发 SIGCONT 后，guard 回收 sender、写入匹配回执，显式 resolve-stopped 才确认终态。finally 恢复暂停进程并回收测试线程。完整 Device 1030 passed、3 skipped，ruff 与 diff 检查通过；这是本机子进程实验，adapter 为测试替身，不是隔离 systemd、宿主重启或真实设备验收。生产派发仍关闭；Unix socket 传递文件描述符或 inode 匹配本身不能证明预期 flock 正被持有，也不能仅凭单次 peer 存活检查授权不可逆操作，启动实例与事务锁连续绑定仍待完成。
+
+
+## 93. 隔离 systemd 中暂停真实 guard
+
+扩展 disposable `accept-native-update-job.sh` 的 `start-guard-pause`：先确认生产派发默认拒绝；登记有限无网络测试 runner，并在真实 systemd start-pre 窗口核对 helper MainPID、guard 直接父子关系及命令行后暂停 guard，核对 `/proc` 停止状态，再仅对该隔离 daemon 注入 SIGKILL。显式恢复 socket、重启 daemon，早期新 ID 拒绝且无新意图；真实 systemd job 已终结时 guard 仍暂停、回执缺失、独占包锁冲突、resolve-running 拒绝。恢复 guard 后匹配回执出现，同 ID 不重放，显式 resolve-running 确认运行。finally 恢复已识别的测试 guard；两次无网络 amd64 systemd 容器均 exit 0，日志 `20261027-182407-08a029.log`、`20261027-182633-34474d.log`；关机调用超时后以列表确认两个 --rm 实例已退出。测试使用历史 DEB SHA256 `9b37b30b0f915bcbd15dd8d2475559d2e98648438e1ca5f98d4fb63bcab9d00c` 和修复 wheel `d2432a074804b2093708bc36ef3a659a897e6c0a5bb24f1651de18f9ddca32d4`，非正式制品；helper 回归110通过，shell语法和diff检查通过，完整回归沿用前一检查点1030通过3跳过。此实验不证明宿主重启、真实设备、启动代码身份或事务授权；新派发持续拒绝、包保护不变。

@@ -34,7 +34,7 @@ from pathlib import Path
 from device_runtime import native_helper as helper
 from device_runtime import native_update as update
 from device_runtime import native_update_job as job
-if os.environ.get('DEVICE_JOB_FAULT') in ('start-lock','start-guard-crash','start-daemon-crash','start-daemon-stop'):
+if os.environ.get('DEVICE_JOB_FAULT') in ('start-lock','start-guard-crash','start-daemon-crash','start-daemon-stop','start-guard-pause'):
  original_render=helper.render_client_unit
  def delayed_unit(**kwargs):
   return original_render(**kwargs).replace('[Service]\n','[Service]\nExecStartPre=/usr/bin/sleep 8\n')
@@ -42,7 +42,7 @@ if os.environ.get('DEVICE_JOB_FAULT') in ('start-lock','start-guard-crash','star
 registry=Path('/var/lib/ai-device/manager')
 root=Path('/home/probe/instance')
 package=Path('/var/lib/ai-device/inputs/candidate.deb')
-if os.environ.get('DEVICE_JOB_FAULT')=='start-daemon-stop':
+if os.environ.get('DEVICE_JOB_FAULT') in ('start-daemon-stop','start-guard-pause'):
  # The disposable runner is installed before registration so its exact bytes
  # are bound in the normal registry and unit checks; finite, no network.
  (root/'run').write_text(f'#!{sys.executable}\nimport time\ntime.sleep(90)\n')
@@ -67,7 +67,7 @@ def diagnostic(expected):
  assert snapshot()==before,'diagnostic changed persistent files/directories'
  return report
 mode=os.environ.get('DEVICE_JOB_FAULT','none')
-assert mode in ('none','lost-response','source-drift','close-before-apply','retire-retry','start-lock','start-guard-crash','start-daemon-crash','start-daemon-stop')
+assert mode in ('none','lost-response','source-drift','close-before-apply','retire-retry','start-lock','start-guard-crash','start-daemon-crash','start-daemon-stop','start-guard-pause')
 calls=[]
 real_run=subprocess.run
 def runner(argv,**kwargs):
@@ -88,13 +88,13 @@ else:
  raise AssertionError('production dispatch fence unexpectedly allowed a new job')
 assert not stem.with_suffix('.job-intent.json').exists() and not calls
 print(json.dumps({'state':'production_dispatch_fence_refused','runner_calls':0,'intent_created':False}))
-if mode in ('start-lock','start-guard-crash','start-daemon-crash','start-daemon-stop'):
+if mode in ('start-lock','start-guard-crash','start-daemon-crash','start-daemon-stop','start-guard-pause'):
  import threading
  runtime=Path('/run/device-helper-acceptance'); runtime.mkdir(mode=0o755)
  socket_path=runtime/'helper.sock'
  unit=Path('/etc/systemd/system/ai-device-native-helper.service')
  unit_content=helper.render_helper_unit(bootstrap_python=Path(sys.executable),registry=registry,socket_path=socket_path,group=0)
- if mode in ('start-daemon-crash','start-daemon-stop'):
+ if mode in ('start-daemon-crash','start-daemon-stop','start-guard-pause'):
   assert 'KillMode=process\n' in unit_content,'product unit must preserve sender guard'
  unit.write_text(unit_content)
  real_run(['/usr/bin/systemctl','daemon-reload'],check=True)
@@ -108,6 +108,7 @@ if mode in ('start-lock','start-guard-crash','start-daemon-crash','start-daemon-
   try: replies.append(helper.call_helper(socket_path,{'action':'start','instance_id':'probe','operation_id':mode}))
   except Exception as exc: errors.append(str(exc))
  thread=threading.Thread(target=start); thread.start()
+ paused_guard=None
  try:
   deadline=time.monotonic()+10
   while True:
@@ -116,12 +117,26 @@ if mode in ('start-lock','start-guard-crash','start-daemon-crash','start-daemon-
    assert time.monotonic()<deadline,'client did not enter start-pre'
    time.sleep(.05)
   assert (registry/f'op-probe-{mode}.json').exists()
-  if mode in ('start-daemon-crash','start-daemon-stop'):
+  if mode in ('start-daemon-crash','start-daemon-stop','start-guard-pause'):
    import signal
    pid=int(real_run(['/usr/bin/systemctl','show','ai-device-native-helper.service','--property=MainPID','--value'],check=True,capture_output=True,text=True).stdout)
    argv=Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
    assert b'device_runtime.native_helper' in argv and b'serve' in argv,argv
-   if mode=='start-daemon-crash':
+   if mode=='start-guard-pause':
+    processes=real_run(['/usr/bin/ps','-eo','pid=,ppid='],check=True,capture_output=True,text=True).stdout.splitlines()
+    children=[int(parts[0]) for line in processes if len(parts:=line.split())==2 and int(parts[1])==pid]
+    assert len(children)==1,children
+    guard=children[0]
+    guard_argv=Path(f'/proc/{guard}/cmdline').read_bytes().split(b'\0')
+    assert b'-c' in guard_argv and any(b'sender_reaped' in arg for arg in guard_argv),guard_argv
+    os.kill(guard,signal.SIGSTOP); paused_guard=guard
+    deadline=time.monotonic()+5
+    while True:
+     state=Path(f'/proc/{guard}/status').read_text()
+     if any(line.startswith('State:') and line.split()[1]=='T' for line in state.splitlines()): break
+     assert time.monotonic()<deadline,'guard did not stop'
+     time.sleep(.05)
+   if mode in ('start-daemon-crash','start-guard-pause'):
     os.kill(pid,signal.SIGKILL) # Only this disposable test unit's checked MainPID.
    else:
     real_run(['/usr/bin/systemctl','stop','ai-device-native-helper.service'],check=True)
@@ -134,7 +149,7 @@ if mode in ('start-lock','start-guard-crash','start-daemon-crash','start-daemon-
    # An explicit early reconnect must not create another start while the old
    # sender owns the lock and its intent is still unconfirmed.
    assert helper.recover_socket(registry,socket_path)['removed'] is True
-   if mode=='start-daemon-crash':
+   if mode in ('start-daemon-crash','start-guard-pause'):
     real_run(['/usr/bin/systemctl','reset-failed','ai-device-native-helper.service'],check=True)
    real_run(['/usr/bin/systemctl','start','ai-device-native-helper.service'],check=True)
    deadline=time.monotonic()+5
@@ -145,6 +160,23 @@ if mode in ('start-lock','start-guard-crash','start-daemon-crash','start-daemon-
    assert early.get('ok') is False,early
    assert not (registry/'op-probe-during-old-sender.json').exists()
    receipt=registry/f'sender-probe-{mode}.json'
+   if mode=='start-guard-pause':
+    deadline=time.monotonic()+20
+    while True:
+     observation=helper.Systemd().query('ai-device-client-probe.service')
+     if observation['Job'] in ('','0'): break
+     assert time.monotonic()<deadline,observation
+     time.sleep(.1)
+    assert not receipt.exists()
+    try:
+     with helper.package_lease(registry,exclusive=True): pass
+    except helper.HelperError as error: assert 'still executing' in str(error),error
+    else: raise AssertionError('paused guard released package lock')
+    refused=helper.call_helper(socket_path,{'action':'resolve-running','instance_id':'probe','operation_id':mode})
+    assert refused.get('ok') is False,refused
+    assert not (registry/f'recovery-probe-{mode}.json').exists()
+    print(json.dumps({'state':'paused_guard_blocks_recovery','systemd_job_terminal':True,'receipt_missing':True,'package_lease_held':True,'recovery_refused':True}))
+    os.kill(paused_guard,signal.SIGCONT); paused_guard=None
    deadline=time.monotonic()+20
    while not receipt.exists():
     assert time.monotonic()<deadline,'orphan guard receipt not published'
@@ -213,6 +245,8 @@ if mode in ('start-lock','start-guard-crash','start-daemon-crash','start-daemon-
   else: raise AssertionError('job overlapped helper start')
   assert not stem.with_suffix('.job-intent.json').exists() and not calls
  finally:
+  if paused_guard is not None:
+   os.kill(paused_guard,signal.SIGCONT)
   thread.join(timeout=30)
  assert not thread.is_alive() and not errors and replies and replies[0].get('ok') is True,(errors,replies)
  with helper.package_lease(registry,exclusive=True): pass
