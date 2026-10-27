@@ -16,6 +16,7 @@ def test_request_read_deadline(monkeypatch, tmp_path, slow):
     server_end, client = socket.socketpair()
     calls = []
     failures = []
+    response_timeouts = []
 
     class Connection:
         def __enter__(self):
@@ -34,6 +35,7 @@ def test_request_read_deadline(monkeypatch, tmp_path, slow):
             return server_end.recv(size)
 
         def sendall(self, data):
+            response_timeouts.append(server_end.gettimeout())
             server_end.sendall(data)
 
     class Listener:
@@ -98,6 +100,7 @@ def test_request_read_deadline(monkeypatch, tmp_path, slow):
         worker.join(3)
         assert not worker.is_alive()
         assert not failures
+        assert response_timeouts == [5.0]
         if slow:
             assert calls == []
         else:

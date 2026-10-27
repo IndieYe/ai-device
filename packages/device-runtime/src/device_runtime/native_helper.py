@@ -1068,6 +1068,7 @@ def _serve(registry, socket_path, *, group):
                     # Never return command stderr or environment/credential content.
                     response = {"ok": False, "error": "helper_request_refused"}
                 try:
+                    connection.settimeout(5)
                     connection.sendall(json.dumps(response).encode() + b"\n")
                 except OSError:
                     pass  # A lost response must not cause the action to replay.

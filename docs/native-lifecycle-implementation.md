@@ -1584,3 +1584,12 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 现有 `_serve` 串行处理连接，每次 `recv` 的5秒超时会随分片重新计时。本机真实 socketpair、假 listener 和假 handler 的回归中，间隔0.5秒发送空白，超过5秒后再发送合法请求，原代码仍调用 handler（`20261028-040019-f76122.log`）。实验未启动真实服务或 Device。
 
 修改生产 `_serve`：accept 后以 monotonic 设定5秒整帧读取截止时间，每次读取使用剩余时间，完整帧后再次检查 deadline；超时进入既有通用拒绝响应，快速合法请求仍调用 handler，响应写入保留原5秒超时。该时限不包括 accept 队列、handler 执行或响应完成，不改变连接级 `SO_PEERCRED`、动作白名单、更新授权及派发/恢复门禁，也不构成逐消息身份绑定。helper/bootstrap 定向 `220 passed, 1 skipped`（`20261028-040148-29a285.log`），完整 `1202 passed, 16 skipped`（`20261028-040208-2e3198.log`），ruff通过。测试使用 macOS socketpair 与假的 peer/监听器；未做真实 Linux helper 系统验收、未构建新包，旧 helper/snapshot 不自动更新。
+
+
+## 203. 准确包真实 helper 读取截止与拒绝写入时限
+
+从干净提交 `1a58f6d75684532dab33eb4e18ebcb5486a56895` 离线构建未签名 DEB `build/native-packages-p1-1a58f6d/ai-device-native-client_0.2.2-1_amd64.deb`，109834934 字节，SHA256 `e801ab2cdcfb3a592c4cc829c62b137cc5c7c3bef89b1998949d7653faf369b3`。Device wheel SHA256 `29b71db7112bf916697fcfc6f74671b0f333bd25d481513f7d37ea9826293279`，34 个 Python 模块逐字节匹配冻结提交（`20261028-041123-eb61e8.log`）。构建首次尝试因容器工具不支持单文件挂载失败，换只读目录挂载后成功（`20261028-040956-3aa08e.log`）。
+
+以该准确包在无网络 amd64 隔离 systemd 容器中干净安装、普通用户安装实例并启动实际 helper；包内 bootstrap 和 runtime 的 helper 字节均匹配 wheel。慢速未完成帧约 5.004 秒得到拒绝，前后正常 query 成功，Device unit inactive、MainPID 0（`20261028-041213-a9b773.log`，脚本 `scripts/accept-native-helper-deadline-1a58f6d.sh`）；容器已停止。该实验只测请求读取时限和正常响应，不证明宿主重启、逐消息认证、动作身份或更新恢复。
+
+本轮额外检查发现：超时拒绝路径发送响应时仍继承最后一次 recv 的剩余超时，可能缩短原 5 秒写入期限；socketpair 包装观察超时时先失败，慢帧实际为约 0.46 秒（`20261028-041319-13230d.log`）。因此发送所有响应前重新设置 5 秒写入超时，成功路径执行 handler 前的设置保留；不保证网络压力下响应必达，也不扩大读取 deadline。定向 `220 passed, 1 skipped`（`20261028-041401-de6943.log`），完整 `1202 passed, 16 skipped`（`20261028-041419-5ffdf8.log`），ruff 与脚本语法检查通过。上述准确 DEB 早于此后一行修复，不能把其验收当作新代码的包内验收；旧 helper/snapshot 不自动更新。
