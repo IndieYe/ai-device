@@ -1453,3 +1453,8 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 无网络隔离 systemd 中干净安装新包、普通用户安装并注册实例、启动真实 helper，构造结构完整的旧 intent/close/retired 测试记录；结构校验为真但仍处于待处理集合。真实 helper 直接入口确认 `package transaction blocks start`，socket 返回拒绝，原三份证据不变、无启动 intent，Device unit inactive/MainPID 0（`20261028-024222-89eb45.log`，脚本 `scripts/accept-native-retired-job-fence-70d1ef2.sh`）。首次实验误解 query 返回封装，在请求 start 前失败（`20261028-024143-49064c.log`），修正后全新容器重验通过，两容器均停止。
 
 这是新包 helper 的测试，不能约束旧 helper、旧 snapshot 或在途进程；不证明崩溃后的文件系统持久性或旧 worker 已退休。RPM 尚未构建，生产派发、恢复与退休放行仍禁用。
+
+
+## 184. 旧 bootstrap 不自动获得退休围栏
+
+在一次性无网络 Linux 容器中干净安装旧准确 `8b52ab9` DEB，使用该包独立 bootstrap 的真实 `native_helper`，在 root 所有、祖先不可写的 `/run/old-retirement-test` 生成结构完整的 intent/close/retired；旧 `_job_retired` 为真且 `_pending_package_jobs` 返回空（`20261028-024334-3af117.log`）。因此第182节新围栏不能追溯覆盖旧 bootstrap，升级和退休须继续遵循管理员维护窗口，不得把新包测试当旧进程证明。首次以 `/tmp` fixture 运行因其祖先可写导致可信检查失败（`20261028-024309-5497a2.log`），不是有效旧行为证据。该实验只读判断隔离记录，不启动服务或执行包操作。
