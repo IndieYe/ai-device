@@ -8,6 +8,7 @@ import os
 import socket
 import struct
 import sys
+import time
 
 MAX_FRAME = 256
 
@@ -16,7 +17,7 @@ class Refused(ValueError):
     pass
 
 
-def receive_root_frame(connection, *, after_chunk=None):
+def receive_root_frame(connection, *, after_chunk=None, deadline=None):
     """One newline-terminated frame per connection; require same root sender per recv.
 
     The test controls connection setup and enables SO_PASSCRED before any data.
@@ -27,6 +28,11 @@ def receive_root_frame(connection, *, after_chunk=None):
     data = bytearray()
     sender = None
     while True:
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise Refused("frame deadline expired")
+            connection.settimeout(remaining)
         chunk, ancillary, flags, _ = connection.recvmsg(64, socket.CMSG_SPACE(12))
         # Unexpected SCM_RIGHTS can install descriptors even on a refused frame.
         for level, kind, payload in ancillary:

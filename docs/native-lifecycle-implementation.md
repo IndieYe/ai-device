@@ -1570,3 +1570,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 新增未接入产品的 `scripts/probe-native-request-frame-credentials.py`。Linux 一次性容器的 Unix stream 接收端在发送前启用 `SO_PASSCRED`，每次 `recvmsg` 要求唯一完整 `SCM_CREDENTIALS`、相同 PID/UID/GID 且 UID 0，限定单个换行帧和最大长度。通过真实 socket 及 fork fixture 验证同一 root 发送者分段可接收；中途降权、非 root、超长、同次读取多帧及断连未完成均拒绝。模拟缺失/畸形/截断控制信息均拒绝；真实 `SCM_RIGHTS` 注入拒绝且检查已接收的 FD 未泄漏（`20261028-035229-0fac9c.log`），ruff 通过。
 
 这是受控接收端实验，不是生产接口、端到端授权或身份认证完成。实验用 socketpair；上一节真实 listener/connect 仅验证连接创建者与发送者差异。生产设计还需验证监听启用时机、超时、分帧与 JSON、发送进程存活及 PID 复用、受控 handler 代码/动作和 systemd invocation 与 worker/外部工作终态；凭据不证明执行者或持久性。异常 SCM 权限和其他内核版本未全面验证。本轮未重跑完整回归、未构建新包，生产派发/恢复/包保护门禁不变。
+
+
+## 201. 真实 Unix listener 的预排队凭据与请求 deadline
+
+新增未接入生产的 `probe-native-request-listener-credentials.py`，在无网络一次性 Linux PID1 容器用真实 Unix listener/connect：listener 在 bind/listen 前设置 `SO_PASSCRED`，子进程发送数据后父进程才 accept；accepted socket 开关为1，root 预排队请求获得子进程正确凭据。非 root、超长、同次读取多帧、半帧断连及读超时均拒绝（`20261028-035540-4135e1.log`）。
+
+实验还验证单次 socket timeout 不保证整帧限时：两次间隔0.15秒的分片均短于0.25秒，但整帧超过0.25秒仍成功（`20261028-035605-066c93.log`）。在未接入的 `receive_root_frame` 增加可选 monotonic 绝对 deadline，从读取起限定整帧时间，同样慢速输入被拒（`20261028-035641-acb564.log`）；原逐段凭据、异常控制及FD清理实验复跑通过（`20261028-035655-fcdbcb.log`）。ruff通过，容器 `--rm`；不涉及生产 listener、真实 handler、动作、systemd 或设备。deadline 不覆盖 accept 前排队和业务执行，仍须设计整体预算、身份/动作/invocation 绑定、并发和崩溃终态。本轮未重跑完整回归、未构建新包，生产门禁不变。
