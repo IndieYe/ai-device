@@ -566,6 +566,26 @@ class Updates:
                         _verify_job_intent(stem, instance_id, operation_id, job_intent_sha256)
                     except UpdateError as exc:
                         raise UpdateError("job recovery intent differs") from exc
+                    job_receipt = stem.with_suffix(".job-recovery.json")
+                    recovery = stem.with_suffix(".recovery.json")
+                    if job_receipt.exists():
+                        nh._trusted(job_receipt)
+                        if not recovery.exists():
+                            raise UpdateError("job recovery evidence without underlying recovery")
+                        nh._trusted(recovery)
+                        existing_recovery = json.loads(recovery.read_bytes())
+                        if not isinstance(existing_recovery, dict):
+                            raise UpdateError("job recovery evidence changed")
+                        expected_job_receipt = {
+                            "state": "job_reconciled_without_replay",
+                            "job_intent_sha256": job_intent_sha256,
+                            "recovery_sha256": nh._digest(recovery),
+                            "recovery_state": existing_recovery.get("state"),
+                            "retry_allowed": False,
+                            "fence_retained": True,
+                        }
+                        if not nh._same_json(json.loads(job_receipt.read_bytes()), expected_job_receipt):
+                            raise UpdateError("job recovery evidence changed")
                 intent_path = stem.with_suffix(".apply-intent.json")
                 nh._trusted(intent_path)
                 intent = json.loads(intent_path.read_text())

@@ -387,6 +387,18 @@ while True:
  if unit.get('LoadState')=='loaded' and (unit.get('ActiveState') in ('inactive','failed') or (unit.get('ActiveState')=='active' and unit.get('SubState')=='exited' and unit.get('Result')=='success')) and unit.get('MainPID')=='0' and unit.get('Job') in ('','0'): break
  assert time.monotonic()<deadline,'unit did not reach observable terminal state'
  time.sleep(.1)
+orphan=stem.with_suffix('.job-recovery.json')
+orphan.write_text(json.dumps({'retry_allowed':0,'fence_retained':1}))
+before={p.name:p.read_bytes() for p in stem.parent.iterdir() if p.is_file()}
+try:
+ try: job.recover_job(manager,'probe','job-one')
+ except update.UpdateError as error: assert 'job recovery evidence without underlying recovery' in str(error)
+ else: raise AssertionError('orphan job recovery accepted')
+ assert {p.name:p.read_bytes() for p in stem.parent.iterdir() if p.is_file()}==before
+ assert len(calls)==1 and (root/'active.json').read_bytes()==active
+finally:
+ orphan.unlink()  # This file belongs exclusively to the disposable fixture.
+print('ORPHAN_JOB_RECOVERY_REFUSED_BEFORE_WRITE')
 first_recovery=job.recover_job(manager,'probe','job-one')
 second_recovery=job.recover_job(manager,'probe','job-one')
 assert first_recovery==second_recovery
@@ -399,7 +411,7 @@ try:
   receipt_path.write_text(json.dumps({**first_recovery,key:bad}))
   before={p.name:p.read_bytes() for p in stem.parent.iterdir() if p.is_file()}
   try: job.recover_job(manager,'probe','job-one')
-  except job.JobError as error: assert 'job recovery evidence changed' in str(error)
+  except update.UpdateError as error: assert 'job recovery evidence changed' in str(error)
   else: raise AssertionError('type-drifted job recovery accepted')
   assert {p.name:p.read_bytes() for p in stem.parent.iterdir() if p.is_file()}==before
   assert len(calls)==1 and (root/'active.json').read_bytes()==active

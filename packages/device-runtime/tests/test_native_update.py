@@ -842,6 +842,17 @@ def test_explicit_job_recovery_retains_fence_and_never_replays(update, monkeypat
         assert not stem.with_suffix(".recovery.json").exists()
         assert packages.calls == 1
 
+    # An orphan job-recovery receipt cannot justify synthesizing its missing
+    # lower-level recovery evidence, even if the job is observed terminal.
+    orphan = stem.with_suffix(".job-recovery.json")
+    orphan.write_text(json.dumps({"retry_allowed": 0, "fence_retained": 1}))
+    before_orphan = {p.name: p.read_bytes() for p in stem.parent.iterdir() if p.is_file()}
+    with pytest.raises(nu.UpdateError, match="job recovery evidence without underlying recovery"):
+        job.recover_job(manager, "probe", "one", runner=retained)
+    assert {p.name: p.read_bytes() for p in stem.parent.iterdir() if p.is_file()} == before_orphan
+    assert packages.calls == 1
+    orphan.unlink()  # This file is owned by this isolated test fixture only.
+
     first = job.recover_job(manager, "probe", "one", runner=retained)
     assert first["state"] == "job_reconciled_without_replay"
     assert first["fence_retained"] and not first["retry_allowed"]
@@ -853,7 +864,7 @@ def test_explicit_job_recovery_retains_fence_and_never_replays(update, monkeypat
         drifted = {**first, key: bad}
         receipt_path.write_text(json.dumps(drifted))
         before_files = {path.name: path.read_bytes() for path in stem.parent.iterdir() if path.is_file()}
-        with pytest.raises(job.JobError, match="job recovery evidence changed"):
+        with pytest.raises(nu.UpdateError, match="job recovery evidence changed"):
             job.recover_job(manager, "probe", "one", runner=runner)
         assert {path.name: path.read_bytes() for path in stem.parent.iterdir() if path.is_file()} == before_files
         assert packages.calls == 1

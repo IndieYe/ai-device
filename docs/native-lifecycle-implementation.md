@@ -1231,3 +1231,8 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 从干净 `40cb25b5498b9c2cc4d748c4c9787c48daa40525` 离线构建三包，Device wheel SHA256 `2ec8f073908912174b553b61986e715ca994711ee0cc927d11c39e40b5accaa9`；六核心模块与 Git 逐字节一致（`20261028-003018-fb4c70.log`）。无网络 amd64/Rosetta 一次性构建未签名 DEB：`build/native-packages-p1-40cb25b/ai-device-native-client_0.2.2-1_amd64.deb`，109817092 字节，SHA256 `06d99960ef6228b226c9dddb41a511e57dbeeea2fd0ca78c825a9e55112af42a`（`20261028-003028-8aa96c.log`）。干净安装比对主 runtime 六模块、bootstrap 四模块、批准及退休 fixture 与重装保护通过（`20261028-003116-d32b23.log`）。
 
 另一无网络 systemd 容器核验 DEB 与 wheel 摘要；脚本先证明生产派发默认拒绝、runner 0 次且无 intent，再仅在本次测试进程 monkeypatch gate 运行独立 job。真实旧版 inert 测试包作为源包，候选包实际 preinst 拒绝覆盖，active 未变、outcome unknown；缺 sender 拒绝，补回原 sender 后显式对账，类型漂移 `retry_allowed=0` 与 `fence_retained=1` 均拒绝且该测试台账文件字节不变、包动作未增加，恢复原回执后合法重入。日志 `20261028-003137-5fb3e6.log`；测试容器已停止（`20261028-003208-2e7e52.log`）。fixture 先解压 DEB 并重装准确 wheel，故该 job 验收须与独立干净安装的包内模块核验合并理解；不代表真实升级成功、生产 gate 打开或身份/观察竞态闭环。RPM、实机和宿主重启仍未验收。
+
+
+## 155. 孤立 job 恢复回执前置拒绝
+
+`recover_job` 原先调用 `Updates.recover` 后才校验 job-recovery；当 job-recovery 已存在而底层 recovery 缺失时，会先新建底层 recovery 再拒绝不匹配。定向 fixture 先复现（`20261028-003353-05a707.log`）。现仅在携带 job intent 的恢复路径、实例锁与 package EX 内，先检查既有 job-recovery：缺底层 recovery 即拒绝；两者均存在时根据实际 recovery 摘要、状态及固定字段类型敏感核对后才继续，原记录不写入。测试覆盖孤立回执、两种布尔/数字漂移、全部台账文件字节和包动作次数、首次恢复及合法重入；测试数据由隔离 fixture 建立并清理。定向、ruff、shell 语法与 diff 检查通过，完整源码回归 1143 通过、4 跳过（`20261028-003455-e35e8d.log`）。验收脚本已增加孤立回执真实隔离测试，但本节源码尚未构建新包、该脚本尚未以新代码执行。该检查不提供 systemd 观察与恢复的原子性，不开放派发，也不证明处理者身份。
