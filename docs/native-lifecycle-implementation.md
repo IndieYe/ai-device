@@ -808,3 +808,8 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 94. 显式候选 bootstrap unit 入口
 
 新增 `deploy --candidate-version`：限定固定独立 bootstrap Python，要求现有 registry 的包锁和已发布候选，独占包锁内复核候选后只创建全新 unit；unit 使用 `-I -B -m device_runtime.native_bootstrap` 和精确版本，启动时现有入口重新核验并执行内存中的候选字节。默认无版本仍走原 unit；不覆盖已有 unit、不自动 reload、启用或启动。测试覆盖错误解释器、非法版本、候选失败、包锁冲突、旧 unit 不覆盖和显式成功；完整 1035 passed、3 skipped，ruff/diff 检查通过。本项仅提供受控启动路径，部署时检查和启动间可能变化，由启动时重新检查；未用本次制品执行真实 systemd 干净安装，不证明实际 socket peer 身份或事务锁连续性，生产派发保持关闭。
+
+
+## 95. 当前制品候选 unit 与实际 socket peer
+
+干净提交 `2e526edad9be922794f437160f8c097f8c14f3f5` 离线构建 Device wheel SHA256 `fbd637c12e4e8abc89cbce6b8962ae23a4523bef1d7dda32c5976d821aca5cc5`；其 `__init__`、helper、bootstrap、management_lock 四模块逐字节等于提交，helper SHA256 `a16b7ea80397fa7ef8a3dc48edb663cffa8970126878896a5d6f40a6139d290b`。沿用锁定依赖和 uv 组装 payload；无网络 Ubuntu 24.04.5 x86_64 systemd 容器构建未签名 DEB SHA256 `a9883d35190ede5a51ee468fa237634d26adedaebb4996a63466d72a21a795d5`，空环境 dpkg 安装后核对独立 bootstrap 四模块摘要。通过包内稳定 helper 命令显式发布候选并 deploy unit，候选快照 SHA256 `d26b47c7482ca022cb22c41115ec71d539fa40677b4c26df9d6e96f1e57c43a1`；deploy 报告未启用、未启动，随后测试显式 daemon-reload/start，实际 unit 为固定独立 Python 的 `-I -B -m device_runtime.native_bootstrap` 和精确版本。真实 AF_UNIX peer 的 pidfd、unit MainPID 与 InvocationID 对应，返回 `loaded_code_verified=false`、`dispatch_allowed=false`；未知实例查询拒绝。只在隔离环境停止 daemon 并显式恢复 socket 后修改候选锁模块，unit 变 failed、无 socket，直接启动报告 `runtime snapshot drift`。初次安装后摘要命令因 `/bin/sh` 不支持花括号展开失败，逐文件核验后继续；reset-failed 对已卸载 unit 失败不作为通过依据。容器关机请求超时，后列表确认 --rm 实例不存在；DEB 仅容器内、随实例退出，不是正式制品。此结果不证明运行代码身份已与 peer/事务锁连续绑定，不证明目标设备、RPM、升级或宿主重启；生产派发及包保护不变。完整源码回归沿用第94节1035通过3跳过，本轮未重跑。
