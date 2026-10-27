@@ -576,3 +576,7 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 44. 独立bootstrap候选helper自检原型
 
 新增inspect_helper_candidate，只接受Linux root可信独立事务快照；先完整验证快照，以快照内Python -I -B导入helper，核对base_prefix、模块绝对路径及Python 3.13，超时/导入失败/身份不符拒绝，结束后再次核对清单，返回snapshot及helper摘要和未激活状态。只执行可信管理员候选，不验签、不修改unit、不启动或切换服务，不证明helper协议兼容。单测覆盖身份、超时、运行中漂移及无额外文件；v25 wheel在一次性隔离Linux复制独立CPython并真实运行候选自检成功。完整972 passed/3 Linux skipped（41.43s）。该能力尚未接入版本化候选发布、稳定入口、旧helper安全迁移和事务切换；旧包保护不变，P1未完成。
+
+## 45. 版本化helper候选发布原型
+
+新增publish_helper_candidate，调用方须持包事务锁，在可信管理候选目录以受限版本ID复制独立运行时快照，执行helper身份自检后无覆盖写candidate.json，绑定来源、快照和helper摘要，显式未激活。重复调用重验快照与证据；不完整目录、来源冲突或证据变化拒绝，不自动删除或修复。v26 wheel在一次性隔离Linux中持包EX锁真实发布并重复验证成功；完整974 passed/3 Linux skipped（42.04s）。此函数尚无管理入口、签名验证、活动指针、跨版本协议兼容或服务切换；不证明旧helper已升级，原包保护保持。P1仍未完成。

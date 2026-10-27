@@ -231,3 +231,40 @@ def test_helper_candidate_probe_refuses_failure(runtime, monkeypatch, failure):
     monkeypatch.setattr(subprocess, "run", run)
     with pytest.raises(bootstrap.BootstrapError):
         bootstrap.inspect_helper_candidate(destination)
+
+
+def test_publish_versioned_candidate_never_activates(runtime, monkeypatch):
+    source, destination = runtime
+    module = source / "lib/python3.13/site-packages/device_runtime/native_helper.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("# fixture")
+
+    def inspect(candidate):
+        bootstrap.validate_snapshot(candidate)
+        return {
+            "snapshot_sha256": bootstrap._digest(candidate / "snapshot.json"),
+            "helper_sha256": bootstrap._digest(
+                candidate / "runtime/lib/python3.13/site-packages/device_runtime/native_helper.py"
+            ),
+        }
+
+    monkeypatch.setattr(bootstrap, "inspect_helper_candidate", inspect)
+    first = bootstrap.publish_helper_candidate(source, destination.parent, "v1")
+    assert first["version"] == "v1" and first["activated"] is False
+    assert bootstrap.publish_helper_candidate(source, destination.parent, "v1") == first
+    receipt = destination.parent / "v1/candidate.json"
+    receipt.write_text("{}")
+    with pytest.raises(bootstrap.BootstrapError, match="publication evidence differs"):
+        bootstrap.publish_helper_candidate(source, destination.parent, "v1")
+    assert receipt.read_text() == "{}"
+
+
+def test_publish_refuses_invalid_or_incomplete_version(runtime, monkeypatch):
+    source, destination = runtime
+    with pytest.raises(ValueError, match="identifier"):
+        bootstrap.publish_helper_candidate(source, destination.parent, "../bad")
+    candidate = destination.parent / "v2"
+    candidate.mkdir()
+    with pytest.raises(FileNotFoundError):
+        bootstrap.publish_helper_candidate(source, destination.parent, "v2")
+    assert list(candidate.iterdir()) == []

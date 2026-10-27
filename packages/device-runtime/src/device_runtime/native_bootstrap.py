@@ -184,3 +184,39 @@ def inspect_helper_candidate(directory):
         "python": str(python),
         "activated": False,
     }
+
+
+def publish_helper_candidate(source, candidates_dir, version):
+    """Prepare a versioned, independently checked candidate without activating it.
+
+    The caller must serialize publication with the administrator package lease.
+    A partially prepared version is never removed or overwritten.
+    """
+    if sys.platform != "linux" or os.geteuid() != 0:
+        raise BootstrapError("Linux administrator required")
+    helper._identifier(version)
+    source = helper._path(source)
+    candidates_dir = helper._path(candidates_dir)
+    helper._trusted(candidates_dir, directory=True)
+    candidate = candidates_dir / version
+    # An existing complete snapshot can be revalidated; incomplete data is
+    # rejected by snapshot_runtime and retained for explicit review.
+    snapshot_runtime(source, candidate)
+    checked = inspect_helper_candidate(candidate)
+    receipt = {
+        "schema_version": 1,
+        "state": "helper_candidate_published_not_activated",
+        "version": version,
+        "source": str(source),
+        "snapshot_sha256": checked["snapshot_sha256"],
+        "helper_sha256": checked["helper_sha256"],
+        "activated": False,
+    }
+    path = candidate / "candidate.json"
+    if os.path.lexists(path):
+        helper._trusted(path)
+        if json.loads(path.read_bytes()) != receipt:
+            raise BootstrapError("candidate publication evidence differs")
+    else:
+        helper._save_new(path, receipt)
+    return receipt

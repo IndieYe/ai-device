@@ -235,3 +235,5 @@ Python recover_job新增管理员显式对账原型：仅已进入apply、匹配
 开发v24 DEB/RPM已在隔离包管理器验证其他版本目录及悬空bootstrap链接拒绝、全新安装和manager存在时卸载拒绝；RPM用--nodeps。此为钩子验证而非正式发行、稳定bootstrap升级或真实设备验收。
 
 独立事务快照支持管理员候选helper自检原型：绑定快照与模块摘要、检查隔离Python及helper加载路径，前后核验快照；未验签、未启动服务或切换bootstrap，不代表旧helper已迁移。
+
+版本化helper候选发布原型在调用方持包锁时复制并自检独立快照，以版本ID和摘要写不可覆盖的未激活证据；冲突或不完整现场拒绝。不含管理入口、签名、旧helper切换或服务兼容保证。
