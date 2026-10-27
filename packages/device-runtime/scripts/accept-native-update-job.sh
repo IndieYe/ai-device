@@ -392,6 +392,21 @@ second_recovery=job.recover_job(manager,'probe','job-one')
 assert first_recovery==second_recovery
 assert first_recovery['state']=='job_reconciled_without_replay'
 assert first_recovery['retry_allowed'] is False and first_recovery['fence_retained'] is True
+receipt_path=stem.with_suffix('.job-recovery.json')
+original_receipt=receipt_path.read_bytes()
+try:
+ for key, bad in (('retry_allowed',0),('fence_retained',1)):
+  receipt_path.write_text(json.dumps({**first_recovery,key:bad}))
+  before={p.name:p.read_bytes() for p in stem.parent.iterdir() if p.is_file()}
+  try: job.recover_job(manager,'probe','job-one')
+  except job.JobError as error: assert 'job recovery evidence changed' in str(error)
+  else: raise AssertionError('type-drifted job recovery accepted')
+  assert {p.name:p.read_bytes() for p in stem.parent.iterdir() if p.is_file()}==before
+  assert len(calls)==1 and (root/'active.json').read_bytes()==active
+finally:
+ receipt_path.write_bytes(original_receipt)
+assert job.recover_job(manager,'probe','job-one')==first_recovery
+print('JOB_RECOVERY_TYPE_DRIFT_REFUSED')
 assert len(calls)==1 and (root/'active.json').read_bytes()==active
 assert stem.with_suffix('.job-intent.json').exists() and stem.with_suffix('.apply-intent.json').exists()
 try: helper._assert_no_package_intent(registry)
