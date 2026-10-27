@@ -247,7 +247,7 @@ class Updates:
                 self._check_candidate(binding, intent)
             path = stem.with_suffix(".prepared.json")
             if path.exists():
-                if json.loads(path.read_text()) != intent:
+                if not nh._same_json(json.loads(path.read_text()), intent):
                     raise UpdateError("operation ID conflicts with prepared transaction")
             else:
                 _atomic(path, intent)

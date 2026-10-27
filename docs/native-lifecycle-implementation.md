@@ -1514,3 +1514,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 新增纯测试模型 `tests/test_native_worker_coordination_fixture.py`，使用 spawn 独立进程、非阻塞独占 flock、排他创建 intent、文件和目录 fsync，测试同一 lease 的两个合作 worker：首个写入 intent 并持锁时，竞争者返回 busy；正常完成、intent 后进程退出及副作用后进程退出三种情况下，释放锁后竞争者仍因原 intent 返回 occupied，不重放动作。第三方独立 fixture 不参与该锁与意图，证明 worker 在 intent 后退出、锁释放及后续 worker 被阻止时，外部工作仍能继续并产生自身副作用。4 项测试重复三次通过（`20261028-032009-32f729.log`），完整回归 `1181 passed, 16 skipped`（`20261028-032013-f63087.log`），ruff 通过。
 
 这些是当前宿主 macOS 的合作进程模型，不是生产 worker、真实 systemd、断电或原子恢复证明，也不验证受控 handler、实际 invocation 身份、真实外部动作、任意系统参与者、记录与作用的原子提交或目录 fsync 失败；记录存在不等于持久性已证明。实验不修改生产代码、门禁或旧环境，不允许删除 intent 以消除阻塞。需要单独设计与外部工作事实源和受控 invocation 关联的可验证终态与崩溃恢复，且所有相关入口必须共同参与。
+
+
+## 193. 既有更新准备记录重用的 JSON 类型校验
+
+`Updates.prepare` 对已存在 prepared 记录原先使用 Python 字典相等比较，将 JSON `true` 与整数 `1` 视为相等。隔离 fixture 在现有记录将 `schema_version` 改成 `true` 后重新调用真实 prepare 入口，原代码未拒绝（`20261028-032343-933860.log`）；这不证明正常管理流程会自动产生该记录，也不代表包已执行。
+
+修复为使用既有 `_same_json` 类型敏感比较，拒绝已有记录与当前准备事实的类型漂移；记录原样保留，不触发包动作，完全一致的记录仍可重用。新增 schema 布尔漂移、嵌套数值/布尔漂移和正常重用三项回归。更新与 job 定向 `140 passed`（`20261028-032422-04f920.log`），完整回归 `1184 passed, 16 skipped`（`20261028-032432-44e351.log`），ruff 及 diff 检查通过。仅覆盖准备记录重用；不声称所有其他比较已审核，未修改生产派发、恢复及包保护门禁，未构建新包，旧快照不自动获得修复。

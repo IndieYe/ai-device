@@ -84,6 +84,44 @@ def update(tmp_path, monkeypatch):
     return manager, packages, helper, package
 
 
+def test_prepare_rejects_boolean_schema_on_existing_transaction(update):
+    manager, packages, _, package = update
+    prepared = manager.registry / "updates/5-probe--one.prepared.json"
+    record = json.loads(prepared.read_bytes())
+    record["schema_version"] = True
+    prepared.write_text(json.dumps(record))
+    before = prepared.read_bytes()
+    with pytest.raises(nu.UpdateError, match="operation ID conflicts"):
+        manager.prepare("probe", "one", package, sha256=nh._digest(package), version="2")
+    assert prepared.read_bytes() == before
+    assert packages.calls == 0
+
+
+def test_prepare_reuses_identical_transaction_without_writes(update):
+    manager, packages, _, package = update
+    prepared = manager.registry / "updates/5-probe--one.prepared.json"
+    before = prepared.read_bytes()
+    result = manager.prepare("probe", "one", package, sha256=nh._digest(package), version="2")
+    assert result == json.loads(before)
+    assert prepared.read_bytes() == before
+    assert packages.calls == 0
+
+
+def test_prepare_rejects_nested_boolean_number_drift(update):
+    manager, packages, _, package = update
+    packages.observation["fixture_sequence"] = 1
+    manager.prepare("probe", "nested", package, sha256=nh._digest(package), version="2")
+    prepared = manager.registry / "updates/5-probe--nested.prepared.json"
+    record = json.loads(prepared.read_bytes())
+    record["source_package"]["fixture_sequence"] = True
+    prepared.write_text(json.dumps(record))
+    before = prepared.read_bytes()
+    with pytest.raises(nu.UpdateError, match="operation ID conflicts"):
+        manager.prepare("probe", "nested", package, sha256=nh._digest(package), version="2")
+    assert prepared.read_bytes() == before
+    assert packages.calls == 0
+
+
 def test_apply_requires_approval(update):
     manager, packages, _, _ = update
     (manager.registry / "updates/5-probe--one.approved.json").unlink()
