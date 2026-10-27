@@ -1167,3 +1167,10 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 `accept-native-46c2f06-deb.sh` 在一次性无网络容器核对 Hash、干净 dpkg 安装、包内六模块及独立 bootstrap 四模块与冻结源码一致；独立解释器从包内导入，对批准和退休类型漂移进行替身 fixture、默认派发门禁与原覆盖保护检查通过，日志 `20261027-234333-aef3a0.log`。真实隔离 systemd 基线普通 UID12345、稳定 PID、非 owner 拒绝通过，日志 `20261027-234412-76f8de.log`。另一次真实隔离 systemd job 先确认生产门禁拒绝、runner 0 且无 intent，再由测试进程替换门禁；worker 遭原包 preinst 拒绝，missing sender 阻恢复、显式对账幂等、只派发一次、围栏保留且 active 不变，日志 `20261027-234506-3d6b30.log`。两 systemd 测试容器已正常退出。
 
 上述证据不证明生产监督、消息处理者或 invocation 绑定、成功升级、宿主重启、真实设备或正式签名。新 RPM 未构建；本次无网络隔离镜像确认缺少 rpmbuild，不以旧 RPM 代替。
+
+
+## 147. 已退休 job 的完整身份围栏
+
+针对 `_job_retired` 只检查 schema/state/protocol 的缺口，构造缺失或漂移 instance、operation、unit、prepared/snapshot 摘要及多余字段的七组证据，并重算 close/retire 摘要；修复前七组均错误放行。现要求完整字段集、严格 schema、合法 ID 与事务 stem 匹配、确定性 unit 及两摘要的严格 SHA256 格式，再检查原关闭/退休证据与无 apply/sender/outcome。失败保留原字节并阻挡 start；合法退休与迟到 worker 测试不变。不读取或重建历史 snapshot，不把格式一致宣称为批准或执行来源认证。
+
+helper/update/job 266 通过、1 跳过；Device 全量 1125 通过、4 跳过，ruff/diff 检查通过。第146节 DEB 源码 `46c2f06` 不含本次更改；须重新构建准确包和相关隔离验收。旧快照不自动迁移，生产派发仍关闭。

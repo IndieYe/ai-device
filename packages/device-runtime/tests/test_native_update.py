@@ -1084,12 +1084,19 @@ def test_retirement_evidence_fail_closed(update, monkeypatch):
 
 @pytest.mark.parametrize("drift", ["schema", "retry", "fence", "replay"])
 def test_retirement_fence_rejects_json_type_drift(update, drift):
+    import hashlib
+
     manager, packages, _, _ = update
     stem = manager.registry / "updates/5-probe--one"
     path = stem.with_suffix(".job-intent.json")
     closed_path = stem.with_suffix(".job-closed.json")
     retired_path = stem.with_suffix(".job-retired.json")
-    intent = {"schema_version": 1, "state": "job_dispatch_intent", "close_protocol": "package-lease-v1"}
+    intent = {
+        "schema_version": 1, "state": "job_dispatch_intent", "close_protocol": "package-lease-v1",
+        "instance_id": "probe", "operation_id": "one",
+        "unit": "ai-device-package-" + hashlib.sha256(str(stem).encode()).hexdigest() + ".service",
+        "prepared_sha256": "a" * 64, "runtime_snapshot_sha256": "b" * 64,
+    }
     if drift == "schema":
         intent["schema_version"] = True
     path.write_text(json.dumps(intent))
@@ -1155,3 +1162,43 @@ def test_malformed_approval_after_apply_blocks_replay_observe_and_recovery(updat
     assert packages.calls == 1
     assert {path.name: path.read_bytes() for path in evidence_paths if path.is_file()} == evidence_before
     assert sorted(stem.parent.glob("5-probe--one.*")) == evidence_paths
+
+
+@pytest.mark.parametrize("drift", ["missing", "extra", "instance", "operation", "unit", "prepared", "snapshot"])
+def test_retirement_rejects_incomplete_job_identity(update, drift):
+    import hashlib
+
+    manager, packages, _, _ = update
+    stem = manager.registry / "updates/5-probe--one"
+    path = stem.with_suffix(".job-intent.json")
+    close_path = stem.with_suffix(".job-closed.json")
+    retire_path = stem.with_suffix(".job-retired.json")
+    intent = {
+        "schema_version": 1, "state": "job_dispatch_intent", "close_protocol": "package-lease-v1",
+        "instance_id": "probe", "operation_id": "one",
+        "unit": "ai-device-package-" + hashlib.sha256(str(stem).encode()).hexdigest() + ".service",
+        "prepared_sha256": "a" * 64, "runtime_snapshot_sha256": "b" * 64,
+    }
+    if drift == "missing":
+        del intent["instance_id"]
+    elif drift == "extra":
+        intent["extra"] = True
+    else:
+        field = {"instance": "instance_id", "operation": "operation_id", "unit": "unit",
+                 "prepared": "prepared_sha256", "snapshot": "runtime_snapshot_sha256"}[drift]
+        intent[field] = "wrong"
+    path.write_text(json.dumps(intent))
+    close_path.write_text(json.dumps({
+        "state": "closed_before_apply", "job_intent_sha256": nh._digest(path),
+        "retry_allowed": False, "fence_retained": True,
+    }))
+    retire_path.write_text(json.dumps({
+        "state": "retired_before_apply", "job_intent_sha256": nh._digest(path),
+        "closed_sha256": nh._digest(close_path), "old_job_replay_allowed": False,
+    }))
+    before = [p.read_bytes() for p in (path, close_path, retire_path)]
+    assert not nh._job_retired(path)
+    with pytest.raises(nh.HelperError, match="blocks start"):
+        nh._assert_no_package_intent(manager.registry)
+    assert [p.read_bytes() for p in (path, close_path, retire_path)] == before
+    assert packages.calls == 0

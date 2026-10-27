@@ -115,6 +115,21 @@ def _job_retired(path):
         intent = json.loads(path.read_bytes())
         if not isinstance(intent, dict):
             return False
+        if set(intent) != {
+            "schema_version", "state", "close_protocol", "instance_id", "operation_id",
+            "unit", "prepared_sha256", "runtime_snapshot_sha256",
+        }:
+            return False
+        instance_id = _identifier(intent["instance_id"])
+        operation_id = _identifier(intent["operation_id"])
+        if stem.name != f"{len(instance_id)}-{instance_id}--{operation_id}":
+            return False
+        expected_unit = "ai-device-package-" + hashlib.sha256(str(stem).encode()).hexdigest() + ".service"
+        if intent["unit"] != expected_unit or any(
+            not isinstance(intent[key], str) or not re.fullmatch(r"[0-9a-f]{64}", intent[key])
+            for key in ("prepared_sha256", "runtime_snapshot_sha256")
+        ):
+            return False
         close_value = json.loads(closed.read_bytes())
         retire_value = json.loads(retired.read_bytes())
         if any(
