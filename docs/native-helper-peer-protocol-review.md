@@ -95,3 +95,10 @@
 3. 审查 daemon/start、guard/sender、登记恢复、dispatch/apply、worker、包钩子等所有入口的描述符、锁序和 intent。对继承监听或连接 FD 的真实代码给出防泄漏证明及负向测试。
 4. 隔离 systemd 故障注入覆盖守护进程与监督器退出、后代存活、挂起、响应丢失、fsync 中断、重启、迟到 worker 和重复 ID；证明 unknown 保持封锁并只能基于准确证据显式对账。
 5. 上述全部通过后，另行完成 P1 其他包与激活门禁并按有效授权审查，才能讨论调整 default-deny；本设计、探针和文档不授权生产派发或真实设备操作。
+
+
+## 继承描述符的显式解锁反例
+
+一次性 Linux amd64/Rosetta 容器中，以真实 `_daemon_anchor` 和 `_daemon_file_lease` 获取两个锁并 fork。子进程对继承的文件锁描述执行 `LOCK_UN` 后，父进程仍持可 `fstat` 的原 FD，但独立文件锁已可取得；目录锚点仍阻止 `_daemon_lease`。子进程再对目录描述执行 `LOCK_UN`，父进程两个 FD 均仍有效时，独立完整租约即可取得。探针 `scripts/probe-native-daemon-explicit-unlock.py`，输出 `INHERITED_EXPLICIT_UNLOCK_CONFIRMED`，日志 `20261027-212307-33dd04.log`。
+
+这验证活 FD、inode 匹配或父进程未退出均不能证明锁仍持有；继承者和任何可操作同一 open-file description 的参与者必须遵守不显式解锁的协议。该实验不代表恶意 root 防御，也没有实现生产监督器或安全交接；须同时设计父子退出、泄漏及锁生命周期，才能据以开放派发。其他文件系统、内核、systemd 和目标设备未覆盖。
