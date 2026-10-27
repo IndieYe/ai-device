@@ -114,12 +114,48 @@ def test_dispatch_records_once_without_replay(transaction, monkeypatch, lost):
     first = job.dispatch_job(manager, "probe", "one", runner=runner)
     assert first["state"] == ("dispatch_unknown" if lost else "dispatch_accepted")
     assert first["package_execution_confirmed"] is False
+    # Accepted and unknown dispatch both leave a durable start fence.
+    with pytest.raises(job.helper.HelperError, match="package transaction blocks start"):
+        job.helper._assert_no_package_intent(manager.registry)
     second = job.dispatch_job(manager, "probe", "one", runner=runner)
     assert second["state"] == "dispatch_already_recorded" and not second["replayed"]
     assert len(calls) == 1
     assert calls[0][0] == "/usr/bin/systemd-run"
     assert "--property=Restart=no" in calls[0]
     assert "--property=RemainAfterExit=yes" in calls[0]
+
+
+def test_dispatch_rejected_by_real_shared_start_sender_lock(transaction, monkeypatch):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from device_runtime import native_update as update
+
+    monkeypatch.setattr(job.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(__import__("sys"), "platform", "linux")
+    monkeypatch.setattr(job, "_require_proven_job_fence", lambda: None)
+    transaction.with_suffix(".apply-intent.json").unlink()
+    registry = transaction.parent.parent
+
+    @contextmanager
+    def txn(*args):
+        yield {}, transaction
+
+    @contextmanager
+    def lease(*args):
+        with job.helper.package_lease(registry, exclusive=True) as fd:
+            yield fd
+
+    manager = SimpleNamespace(
+        packages=update.Debian(), registry=registry, _transaction=txn,
+        _prepared=lambda *args: {}, _apply_lease=lease,
+    )
+    calls = []
+    with job.helper.package_lease(registry):
+        with pytest.raises(job.helper.HelperError, match="still executing"):
+            job.dispatch_job(manager, "probe", "one", runner=lambda *a, **k: calls.append(a))
+    assert not transaction.with_suffix(".job-intent.json").exists()
+    assert not calls
 
 
 @pytest.mark.parametrize(

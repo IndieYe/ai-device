@@ -947,6 +947,27 @@ def test_systemd_guard_inherits_package_lease(tmp_path):
     assert json.loads((tmp_path / "receipt.json").read_text())["state"] == "sender_reaped"
 
 
+def test_start_rejected_while_job_publishes_under_exclusive_package_lock(helper):
+    service, adapter, record = helper
+    with nh.package_lease(service.registry, exclusive=True):
+        with pytest.raises(nh.HelperError, match="still executing"):
+            service.handle(req("start"), peer_uid=record["uid"])
+    assert not (service.registry / "op-probe-one.json").exists()
+    assert not any(action == "start" for action, _ in adapter.calls)
+
+
+def test_published_job_intent_fences_start_after_package_lock_release(helper):
+    service, adapter, record = helper
+    updates = service.registry / "updates"
+    updates.mkdir()
+    with nh.package_lease(service.registry, exclusive=True):
+        nh._save_new(updates / "fixture.job-intent.json", {"state": "job_dispatch_intent"})
+    with pytest.raises(nh.HelperError, match="package transaction blocks start"):
+        service.handle(req("start"), peer_uid=record["uid"])
+    assert not (service.registry / "op-probe-one.json").exists()
+    assert not any(action == "start" for action, _ in adapter.calls)
+
+
 def test_inherited_package_lock_survives_callers_fd_close(helper):
     import sys
 
