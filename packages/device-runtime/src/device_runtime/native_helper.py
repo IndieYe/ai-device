@@ -697,12 +697,28 @@ class Helper:
                 path = self.registry / f"op-{instance_id}-{operation_id}.json"
                 result["intent"] = json.loads(path.read_text()) if path.exists() else None
                 stored_result = self.registry / f"result-{instance_id}-{operation_id}.json"
+                if result["intent"] is not None:
+                    intent = result["intent"]
+                    if (
+                        not isinstance(intent, dict)
+                        or intent.get("action") != "start"
+                        or intent.get("instance_id") != instance_id
+                        or intent.get("operation_id") != operation_id
+                    ):
+                        raise HelperError("operation journal identity differs")
+                elif stored_result.exists() or recovery_path.exists():
+                    raise HelperError("operation journal intent missing")
                 result["result"] = (
                     json.loads(stored_result.read_text()) if stored_result.exists() else None
                 )
                 result["recovery"] = (
                     json.loads(recovery_path.read_text()) if recovery_path.exists() else None
                 )
+                if result["recovery"] is not None and (
+                    not isinstance(result["recovery"], dict)
+                    or result["recovery"].get("intent") != result["intent"]
+                ):
+                    raise HelperError("operation recovery identity differs")
                 return result
             intent_path = self.registry / f"op-{instance_id}-{operation_id}.json"
             result_path = self.registry / f"result-{instance_id}-{operation_id}.json"

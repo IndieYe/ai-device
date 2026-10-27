@@ -135,6 +135,37 @@ def test_query_and_reconcile_never_start(helper):
     assert not any(action == "start" for action, _ in adapter.calls)
 
 
+@pytest.mark.parametrize("action", ["query", "reconcile"])
+def test_read_rejects_operation_filename_identity_collision(helper, action):
+    service, adapter, record = helper
+    # probe + one-two and probe-one + two share the legacy filename.
+    (service.registry / "op-probe-one-two.json").write_text(
+        json.dumps({"action": "start", "instance_id": "probe-one", "operation_id": "two"})
+    )
+    (service.registry / "result-probe-one-two.json").write_text('{"state":"started"}')
+    request = {"action": action, "instance_id": "probe", "operation_id": "one-two"}
+    with pytest.raises(nh.HelperError, match="journal identity differs"):
+        service.handle(request, peer_uid=record["uid"])
+    assert not any(name == "start" for name, _ in adapter.calls)
+
+
+@pytest.mark.parametrize("suffix", ["result", "recovery"])
+def test_read_rejects_orphan_operation_record(helper, suffix):
+    service, _, record = helper
+    (service.registry / f"{suffix}-probe-one.json").write_text("{}")
+    with pytest.raises(nh.HelperError, match="intent missing"):
+        service.handle(req("reconcile"), peer_uid=record["uid"])
+
+
+def test_read_rejects_recovery_bound_to_different_intent(helper):
+    service, _, record = helper
+    intent = {"action": "start", "instance_id": "probe", "operation_id": "one"}
+    (service.registry / "op-probe-one.json").write_text(json.dumps(intent))
+    (service.registry / "recovery-probe-one.json").write_text('{"intent":{}}')
+    with pytest.raises(nh.HelperError, match="recovery identity differs"):
+        service.handle(req("reconcile"), peer_uid=record["uid"])
+
+
 def test_start_idempotency(helper):
     service, adapter, record = helper
     result = service.handle(req("start"), peer_uid=record["uid"])

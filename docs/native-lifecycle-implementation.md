@@ -620,3 +620,7 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 ## 54. systemd mask 与旧代码直接调用的隔离边界
 
 一次性Linux容器提取v17原DEB，以`systemctl --root=/ mask ai-device-native-helper.service`创建指向`/dev/null`的持久unit mask，并核实链接；随后直接运行v17 bootstrap Python调用实际旧`_daemon_lease`，仍成功获取registry锁。该实验只证明unit mask不约束直接调用旧代码的锁函数，并非真实daemon直接启动或宿主重启实验；也未证明其他启动入口均已封闭。迁移不能仅用mask或锁空闲作为旧helper不会再运行的证据。当前没有安全迁移实现，新job派发保持关闭、原包保护不变；无真实服务操作。
+
+## 55. helper只读操作台账身份校验
+
+旧helper台账名以实例ID和操作ID用连字符拼接，不同ID对可能命中同一文件。新版helper的query/reconcile读取前核对意图的action、实例和操作身份；有结果或恢复但无意图时拒绝，恢复证据须绑定同一意图。避免只读查询将另一操作结果当成当前操作；不重放、不修改旧台账。新增碰撞、孤立记录和恢复不匹配测试，helper 88项通过，完整回归988通过、3跳过。已运行v17不受此修复约束；跨重启安全迁移仍缺，新job派发继续关闭，原包保护不变，未操作真实设备。
