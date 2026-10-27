@@ -905,3 +905,10 @@ RPM内嵌Lua无lstat，Rocky9实测posix.readlink可识别悬空链接；pretran
 为 `dispatch_job` 的 dormant 测试路径注入 intent 文件 fsync 和目录 fsync 错误：两种情况均传播异常且未调用 systemd runner；目录 fsync 失败后 intent 仍可见时，同 ID 仅返回已记录且不重派。仅测试中 monkeypatch 关闭 default-deny；生产门禁未变。job 测试17通过，ruff通过，日志 `20261027-211245-8b6320.log`。静态核查 `Updates.apply` 在调用包管理器前 `_atomic` 写 apply intent，但本轮未对该路径注入故障。
 
 修正第110节草案：对严格保证 `_save_new` 成功返回后才派发、且文件系统持久性和所有参与者遵守该顺序的路径，fsync 失败后 intent 可能消失并不单独证明外部动作已执行；不能无条件断言必须增加独立durable围栏。全入口、成功返回后的实际崩溃/文件系统保证、响应丢失和未知对账尚未验证，不可因此解除阻塞或开放派发。完整回归本轮未跑。
+
+
+## 112. start 与 apply intent 的 fsync 故障注入
+
+在真实 `_save_new` 文件与目录 fsync 处分别注入错误：helper start 两种情况下均未调用 fake sender；目录 fsync 失败且 intent 可见时，同 ID 返回 unknown、不重放，新 ID 拒绝。Debian apply 分支以测试替身模拟运行时准备与包操作，两种失败均未调用 fake 包管理器、active 不变；目录失败且 intent 可见时同 ID 仅观察、不重放。此前 dormant job 测试仍保留。针对性 helper/update/job 共190通过，相关测试 ruff通过；Device 完整回归1049通过、3跳过（日志 `20261027-212038-c7ec3d.log`）。
+
+限制：测试运行于本机进程并注入异常，非真实 systemd、dpkg、进程崩溃或断电；Debian runtime 准备为替身，故不证明快照自身持久化、外部参与者一致遵守顺序或全部入口安全。未开放生产派发，受控身份及事务闭环仍未完成。

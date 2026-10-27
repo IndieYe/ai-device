@@ -191,6 +191,44 @@ def test_existing_recovery_must_remain_bound(helper, action, change):
     assert sum(name == "start" for name, _ in adapter.calls) == before
 
 
+@pytest.mark.parametrize("failure_stage", ["file", "directory"])
+def test_start_intent_fsync_failure_never_calls_sender(helper, monkeypatch, failure_stage):
+    service, adapter, record = helper
+    original_save = nh._save_new
+    original_fsync = os.fsync
+    armed = False
+
+    def inject_save(path, value, **kwargs):
+        nonlocal armed
+        if path.name != "op-probe-one.json":
+            return original_save(path, value, **kwargs)
+        armed = True
+        try:
+            return original_save(path, value, **kwargs)
+        finally:
+            armed = False
+
+    def fail_fsync(fd):
+        if armed and stat.S_ISDIR(os.fstat(fd).st_mode) == (failure_stage == "directory"):
+            raise OSError("injected start intent fsync failure")
+        return original_fsync(fd)
+
+    monkeypatch.setattr(nh, "_save_new", inject_save)
+    monkeypatch.setattr(nh.os, "fsync", fail_fsync)
+    with pytest.raises(OSError, match="injected start intent fsync failure"):
+        service.handle(req("start"), peer_uid=record["uid"])
+    intent = service.registry / "op-probe-one.json"
+    assert intent.exists() is (failure_stage == "directory")
+    assert not any(action == "start" for action, _ in adapter.calls)
+    assert not (service.registry / "sender-probe-one.json").exists()
+    if intent.exists():
+        result = service.handle(req("start"), peer_uid=record["uid"])
+        assert result["result"]["state"] == "unknown" and result["replayed"] is False
+        with pytest.raises(nh.HelperError, match="unconfirmed operation"):
+            service.handle(req("start", "two"), peer_uid=record["uid"])
+        assert not any(action == "start" for action, _ in adapter.calls)
+
+
 def test_start_idempotency(helper):
     service, adapter, record = helper
     result = service.handle(req("start"), peer_uid=record["uid"])

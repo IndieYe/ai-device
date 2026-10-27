@@ -1,4 +1,6 @@
 import json
+import os
+import stat
 import subprocess
 from contextlib import contextmanager
 
@@ -86,6 +88,53 @@ def test_apply_requires_approval(update):
     with pytest.raises(FileNotFoundError):
         manager.apply("probe", "one")
     assert packages.calls == 0
+
+
+@pytest.mark.parametrize("failure_stage", ["file", "directory"])
+def test_apply_intent_fsync_failure_never_calls_package_manager(update, monkeypatch, failure_stage):
+    manager, packages, helper, _ = update
+    # Exercise the Debian-specific preparation branch without invoking dpkg or
+    # copying a runtime; this fixture does not establish snapshot durability.
+    debian = nu.Debian()
+    prepared = []
+    monkeypatch.setattr(debian, "prepare_execution", lambda stem: prepared.append(stem) or {
+        "runtime_snapshot_sha256": "fixture-snapshot"
+    })
+    monkeypatch.setattr(debian, "metadata", packages.metadata)
+    monkeypatch.setattr(debian, "installed", packages.installed)
+    monkeypatch.setattr(debian, "apply", packages.apply)
+    manager.packages = debian
+    original_atomic = nu._atomic
+    original_fsync = os.fsync
+    armed = False
+
+    def inject_atomic(path, value):
+        nonlocal armed
+        assert path.name.endswith(".apply-intent.json")
+        armed = True
+        try:
+            return original_atomic(path, value)
+        finally:
+            armed = False
+
+    def fail_fsync(fd):
+        if armed and stat.S_ISDIR(os.fstat(fd).st_mode) == (failure_stage == "directory"):
+            raise OSError("injected apply intent fsync failure")
+        return original_fsync(fd)
+
+    monkeypatch.setattr(nu, "_atomic", inject_atomic)
+    monkeypatch.setattr(nh.os, "fsync", fail_fsync)
+    old_active = (helper.root / "active.json").read_bytes()
+    with pytest.raises(OSError, match="injected apply intent fsync failure"):
+        manager.apply("probe", "one")
+    intent = manager.registry / "updates/5-probe--one.apply-intent.json"
+    assert len(prepared) == 1 and packages.calls == 0
+    assert intent.exists() is (failure_stage == "directory")
+    assert (helper.root / "active.json").read_bytes() == old_active
+    if intent.exists():
+        observation = manager.apply("probe", "one")
+        assert observation["apply_intent"] is not None and observation["outcome"] is None
+        assert len(prepared) == 1 and packages.calls == 0
 
 
 def test_apply_and_same_id_no_replay(update):
