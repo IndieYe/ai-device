@@ -1257,3 +1257,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 干净 `cf18a80e09152a30c0262d387e8eb7ad182d4214` 离线构建三包，Device wheel SHA256 `22d43231e25f34855820629c09b8ef1f50a14f370e91b4c6923b152ad7652dbb`，六核心模块逐字节匹配 Git（`20261028-004319-919e0d.log`）。无网络 amd64/Rosetta Linux 构建 DEB：`build/native-packages-p1-cf18a80/ai-device-native-client_0.2.2-1_amd64.deb`，109817244 字节，SHA256 `723f8ed833d6e841ba78775ccdb0a48af765bdf830cea22d8b7fa2c34e01f9ee`（`20261028-004330-8047e8.log`），为未签名开发制品。独立干净安装核对主 runtime 六模块、bootstrap 四模块及覆盖保护通过（`20261028-004417-ec8669.log`）。
 
 另一无网络 systemd 容器核对 DEB 与 wheel，先验证生产 gate 拒绝且零 runner/intent，再仅测试进程替换 gate；候选被原包保护拒绝，保持 unknown 和 active 不变。`GENERIC_RECOVERY_JOB_INTENT_REFUSED`、`ORPHAN_JOB_RECOVERY_REFUSED_BEFORE_WRITE`、`JOB_RECOVERY_TYPE_DRIFT_REFUSED` 均通过，测试台账字节未变，合法显式对账仍幂等（`20261028-004438-361db2.log`）。fixture 解包准确 DEB 并重装同批 wheel；包内无源码安装核对单独见上。容器已停止（`20261028-004517-1bd48c.log`）。仅覆盖该隔离路径，不证明生产 job 派发、升级成功、实际处理者身份、观察与恢复原子化、RPM 或目标设备。
+
+
+## 159. 真实 systemd 恢复观察竞态复现
+
+在一次性无网络 amd64/Rosetta systemd 容器，以准确 cf18a80 DEB 和 wheel（第158节摘要）运行 `accept-native-update-job.sh` 的 `observation-race` 模式。原生产 gate 先拒绝且零 runner/intent；仅测试进程替换 gate，测试注入有限 `ExecStartPre` 延迟。job 首次执行经原包保护拒绝并产出 sender/outcome，等待真实 unit 到达 active/exited、MainPID=0、无 Job。测试 runner 先捕获真实终态，再仅重启该隔离 fixture unit，确认同一 unit 进入 activating 后，才把旧输出返回给 `recover_job`。该调用仍写出 `.recovery.json` 和 `.job-recovery.json`：`STALE_TERMINAL_OBSERVATION_WROTE_RECOVERY_WHILE_UNIT_ACTIVATING`（`20261028-004746-90e33f.log`）；active 不变且恢复回执仍保留 fence、禁止重试。测试容器已停止（`20261028-004832-919dbe.log`）。
+
+此实验确证终态观察与恢复写入不是原子操作；不证明包操作重复、真实管理员违规或生产 dispatch 已开放。测试通过主动重启同一隔离 transient unit 构造窗口，不能外推到任意 systemd/宿主故障。两次观察仍不能填平最终检查到提交的窗口；必须设计和验证可信受控 worker、持久完成证据及同一 invocation 的协调与锁生命周期，不以本探针或 pidfd 自报当生产身份。当前 job 恢复功能仍存在此已复现限制，生产派发保持关闭，不能称 P1 完成。

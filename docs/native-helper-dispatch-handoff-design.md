@@ -55,3 +55,8 @@
 现有 `recover_job` 在进入 `Updates.recover` 之前读取 systemd unit 的终态；`Updates.recover` 随后在实例锁和 package EX 下重新核对 job intent 摘要、批准、sender 回执和实际包状态并写恢复证据。六字段严格解析只能拒绝格式不确定，**不把观察与锁内恢复变成原子操作**：当前未把同一 systemd InvocationID 与受控 worker 身份绑定，也不能仅凭锁证明 unit 在观察后未被重启或替换。事后再观察无法撤销已写入的恢复证据；简单前后对比也不能消除检查与提交之间的竞态。
 
 现有 apply intent 已存在时同 ID 迟到 worker 走观察而不重放（实施记录第134节），且恢复证据本身不解除 intent、启动围栏或授权新 ID；这些约束降低了局部风险，但不证明所有并发入口、unit 身份或宿主崩溃恢复。将来启用派发前须为固定 invocation、受控 worker 和不可重放的持久终态设计可验证的协调协议，覆盖恢复锁期间竞态及失败后仍为 unknown；不凭当前只读快照开放派发。
+
+
+### 已复现：终态过期后仍写恢复证据
+
+实施记录第159节以准确 cf18a80 包、隔离 systemd 和测试专属有限延迟，捕获真实终态后重启测试 unit，并在 unit `activating` 时向 `recover_job` 交还旧观察；实际写出 recovery 与 job-recovery。原 intent/fence 保留、active 不变；没有证明真实包动作重复。由此确认观察窗口是可复现限制，不能只因前后快照一致或 package lock 空闲而开放生产派发。真正修复需要同一受控 invocation 的完成证明和与恢复写入共用的可验证协调；尚未实现。

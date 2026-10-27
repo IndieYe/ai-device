@@ -67,12 +67,12 @@ def diagnostic(expected):
  assert snapshot()==before,'diagnostic changed persistent files/directories'
  return report
 mode=os.environ.get('DEVICE_JOB_FAULT','none')
-assert mode in ('none','lost-response','source-drift','close-before-apply','retire-retry','start-lock','start-guard-crash','start-daemon-crash','start-daemon-stop','start-guard-pause')
+assert mode in ('none','lost-response','source-drift','close-before-apply','retire-retry','start-lock','start-guard-crash','start-daemon-crash','start-daemon-stop','start-guard-pause','observation-race')
 calls=[]
 real_run=subprocess.run
 def runner(argv,**kwargs):
  calls.append(argv)
- if mode in ('source-drift','close-before-apply','retire-retry'):
+ if mode in ('source-drift','close-before-apply','retire-retry','observation-race'):
   # Test-only bounded queue delay; production dispatch has no arbitrary properties.
   argv=[argv[0],'--no-block','--property=ExecStartPre=/usr/bin/sleep 8','--property=StandardError=file:/var/lib/ai-device/worker-test-error.log',*argv[1:]]
  result=real_run(argv,**kwargs)
@@ -387,6 +387,28 @@ while True:
  if unit.get('LoadState')=='loaded' and (unit.get('ActiveState') in ('inactive','failed') or (unit.get('ActiveState')=='active' and unit.get('SubState')=='exited' and unit.get('Result')=='success')) and unit.get('MainPID')=='0' and unit.get('Job') in ('','0'): break
  assert time.monotonic()<deadline,'unit did not reach observable terminal state'
  time.sleep(.1)
+if mode=='observation-race':
+ # Only the unit created by this disposable fixture is restarted. The runner
+ # captures the genuine terminal observation, then waits for the same unit to
+ # start again before releasing that stale observation to recover_job.
+ def stale_terminal_then_restart(argv, **kwargs):
+  old=real_run(argv, **kwargs)
+  assert 'MainPID=0\n' in old.stdout and 'ActiveState=active\n' in old.stdout
+  real_run(['/usr/bin/systemctl','restart','--no-block',first['unit']],check=True)
+  until=time.monotonic()+10
+  while True:
+   current=real_run(['/usr/bin/systemctl','show',first['unit'],'--property=ActiveState,Job'],check=True,capture_output=True,text=True).stdout
+   if 'ActiveState=activating\n' in current:
+    break
+   assert time.monotonic()<until, 'fixture unit did not enter activating state'
+   time.sleep(.02)
+  return old
+ result=job.recover_job(manager,'probe','job-one',runner=stale_terminal_then_restart)
+ assert result['fence_retained'] is True and result['retry_allowed'] is False
+ assert stem.with_suffix('.recovery.json').exists() and stem.with_suffix('.job-recovery.json').exists()
+ assert (root/'active.json').read_bytes()==active and len(calls)==1
+ print('STALE_TERMINAL_OBSERVATION_WROTE_RECOVERY_WHILE_UNIT_ACTIVATING',flush=True)
+ raise SystemExit(0)
 # General recovery must not bypass the job-specific entry when an intent exists.
 before={p.name:p.read_bytes() for p in stem.parent.iterdir() if p.is_file()}
 try: manager.recover('probe','job-one')
