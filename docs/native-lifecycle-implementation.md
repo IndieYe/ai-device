@@ -1264,3 +1264,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 在一次性无网络 amd64/Rosetta systemd 容器，以准确 cf18a80 DEB 和 wheel（第158节摘要）运行 `accept-native-update-job.sh` 的 `observation-race` 模式。原生产 gate 先拒绝且零 runner/intent；仅测试进程替换 gate，测试注入有限 `ExecStartPre` 延迟。job 首次执行经原包保护拒绝并产出 sender/outcome，等待真实 unit 到达 active/exited、MainPID=0、无 Job。测试 runner 先捕获真实终态，再仅重启该隔离 fixture unit，确认同一 unit 进入 activating 后，才把旧输出返回给 `recover_job`。该调用仍写出 `.recovery.json` 和 `.job-recovery.json`：`STALE_TERMINAL_OBSERVATION_WROTE_RECOVERY_WHILE_UNIT_ACTIVATING`（`20261028-004746-90e33f.log`）；active 不变且恢复回执仍保留 fence、禁止重试。测试容器已停止（`20261028-004832-919dbe.log`）。
 
 此实验确证终态观察与恢复写入不是原子操作；不证明包操作重复、真实管理员违规或生产 dispatch 已开放。测试通过主动重启同一隔离 transient unit 构造窗口，不能外推到任意 systemd/宿主故障。两次观察仍不能填平最终检查到提交的窗口；必须设计和验证可信受控 worker、持久完成证据及同一 invocation 的协调与锁生命周期，不以本探针或 pidfd 自报当生产身份。当前 job 恢复功能仍存在此已复现限制，生产派发保持关闭，不能称 P1 完成。
+
+
+## 160. 独立进程封闭锁协议原型
+
+`probe-native-job-seal-lock.py` 是无网络一次性 Linux amd64/Rosetta 容器的 fixture，使用准确 cf18a80 DEB 包内的实例非阻塞锁、package EX 非阻塞锁与 `_save_new` 持久 no-replace 发布。子进程实际持两锁并通过管道发屏障，父进程分别用独立描述符尝试实例锁和包锁，均观察实际冲突而不是仅判断调度暂停。恢复先持锁并保存 fixture 封闭标记后，另一独立 fixture worker 重新取得锁、看到标记并拒绝创建动作文件（`20261028-005358-f9cf66.log`）；worker 先持锁创建动作文件后，恢复进程取得锁、重读动作并标注封闭状态（`20261028-005401-cfbe89.log`）。各场景独立全新容器，脚本 ruff 通过。
+
+该结果只证明被测参与者、所述两次顺序和实际 flock 冲突；锁争用时现有接口是立即拒绝而非自动等待。测试封闭/动作文件不是产品 worker、持久完成凭证或恢复策略，不证明全入口参与、旧 snapshot、sender/进程树、锁泄漏、fsync 断电、systemd invocation 或受控身份。未改变产品、既有事务或生产派发；第159节过期观察竞态仍未修复。
