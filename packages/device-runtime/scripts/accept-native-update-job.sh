@@ -364,6 +364,22 @@ assert 'helper transaction required' in stem.with_suffix('.package.log').read_te
 assert (root/'active.json').read_bytes()==active
 report=diagnostic('package_outcome_recorded')
 assert report['outcome']==outcome
+# Production recovery gate must refuse before systemd observation or writes.
+before={p.name:p.read_bytes() for p in stem.parent.iterdir() if p.is_file()}
+for action in (
+ lambda: job.recover_job(manager,'probe','job-one',runner=lambda *a,**k: (_ for _ in ()).throw(AssertionError('unexpected observation'))),
+ lambda: manager.recover('probe','job-one',job_intent_sha256=helper._digest(stem.with_suffix('.job-intent.json'))),
+):
+ try: action()
+ except update.UpdateError as error: assert 'job recovery disabled' in str(error)
+ else: raise AssertionError('production job recovery unexpectedly enabled')
+assert {p.name:p.read_bytes() for p in stem.parent.iterdir() if p.is_file()}==before
+assert len(calls)==1 and (root/'active.json').read_bytes()==active
+print('PRODUCTION_JOB_RECOVERY_GATE_REFUSED_WITHOUT_WRITES',flush=True)
+# Test-only substitute to exercise the historical paths after verifying the
+# unmodified production fence. Never used as evidence of production permission.
+update._require_proven_job_recovery_fence=lambda: None
+print('DISPOSABLE_RECOVERY_FENCE_SUBSTITUTE',flush=True)
 # Only the disposable fixture's receipt is temporarily hidden and restored.
 # Test this before any recovery receipt is written.
 sender_path=stem.with_suffix('.sender.json')

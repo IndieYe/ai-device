@@ -26,6 +26,11 @@ class UpdateError(ValueError):
     pass
 
 
+def _require_proven_job_recovery_fence():
+    """Keep job recovery closed until worker completion is coordinated durably."""
+    raise UpdateError("job recovery disabled: worker completion fence unproven")
+
+
 def _verify_job_intent(stem, instance_id, operation_id, expected_digest):
     """Revalidate a job under the caller's instance and package leases."""
     path = stem.with_suffix(".job-intent.json")
@@ -558,6 +563,8 @@ class Updates:
 
     def recover(self, instance_id, operation_id, *, job_intent_sha256=None):
         """Record observed outcome after sender completion; never reapply."""
+        if job_intent_sha256 is not None:
+            _require_proven_job_recovery_fence()
         with self._transaction(instance_id, operation_id) as (binding, stem):
             value = self._prepared(binding, stem)
             with self._apply_lease(self.registry / "package-manager", existing=True):

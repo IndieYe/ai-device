@@ -454,8 +454,11 @@ def recover_job(manager, instance_id, operation_id, *, runner=None):
     """Explicit evidence reconciliation only, never retry or release a fence."""
     import sys
 
+    from . import native_update as update
+
     if sys.platform != "linux" or os.geteuid() != 0:
         raise JobError("Linux administrator required")
+    update._require_proven_job_recovery_fence()
     observation = observe_job(manager, instance_id, operation_id, runner=runner)
     unit = observation["unit_observation"] or {}
     if (

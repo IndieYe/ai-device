@@ -796,6 +796,20 @@ def test_explicit_job_recovery_retains_fence_and_never_replays(update, monkeypat
     }
     stem.with_suffix(".job-intent.json").write_text(json.dumps(intent))
 
+    # Production job recovery is closed at both the public and lower-level
+    # entry, before observation, transaction writes, or package activity.
+    baseline = {p.name: p.read_bytes() for p in stem.parent.iterdir() if p.is_file()}
+    observed = []
+    with pytest.raises(nu.UpdateError, match="job recovery disabled"):
+        job.recover_job(manager, "probe", "one", runner=lambda *a, **k: observed.append(a))
+    with pytest.raises(nu.UpdateError, match="job recovery disabled"):
+        manager.recover("probe", "one", job_intent_sha256=nh._digest(stem.with_suffix(".job-intent.json")))
+    assert not observed and packages.calls == 1
+    assert {p.name: p.read_bytes() for p in stem.parent.iterdir() if p.is_file()} == baseline
+    # The remaining assertions exercise the old reconciliation logic only as a
+    # fixture; this substitute is never a production authorization.
+    monkeypatch.setattr(nu, "_require_proven_job_recovery_fence", lambda: None)
+
     # General update recovery must not bypass job-specific observation/binding.
     before_direct = {p.name: p.read_bytes() for p in stem.parent.iterdir() if p.is_file()}
     with pytest.raises(nu.UpdateError, match="job recovery requires explicit job binding"):

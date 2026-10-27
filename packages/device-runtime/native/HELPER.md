@@ -272,3 +272,8 @@ accept-native-old-helper-fence.sh在一次性容器复现v17旧helper忽略未�
 job 显式恢复在实例事务和包锁内重验完整当前 job intent、准确 prepared 与运行时 snapshot；协议、字段或快照不兼容时保持围栏并拒绝，不自动迁移、删除或重放。该校验不解决 systemd invocation 观察窗口，详见实施记录第135节。
 
 job worker 执行前与显式恢复共用完整意图检查，在实例事务和包锁内拒绝不兼容协议、错误身份及 prepared/snapshot 漂移；已存在 apply intent 的同 ID 仍只观察、不重放。此局部门禁不授权启用派发。
+
+
+### job 恢复写入暂时关闭（覆盖前述旧原型说明）
+
+已在隔离 systemd 复现终态观察过期后仍写恢复证据的竞态。直到受控 worker、消息处理者与 invocation 绑定及持久终态/恢复协调经验证，`recover_job` 与带 job 摘要的 `Updates.recover` 均默认拒绝写入；不得用普通 `recover` 绕过 job 台账。`observe_job` 保持只读，已存在的 intent、sender、恢复记录和围栏保留，不自动删除或迁移。无 job 的直接更新恢复不因该门禁关闭。此限制不等于问题已解决，也不开放生产派发或授予旧 worker 兼容性。
