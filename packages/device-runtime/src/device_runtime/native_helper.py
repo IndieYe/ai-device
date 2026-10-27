@@ -482,7 +482,7 @@ def _register(registry, unit_dir, *, instance_id, root, username, environment_fi
     marker_path = root / MARKER
     if recover:
         _trusted_marker(marker_path)
-        if json.loads(marker_path.read_text()) != marker:
+        if not _same_json(json.loads(marker_path.read_text()), marker):
             raise HelperError(
                 "registration recovery baseline differs or is legacy; explicit adoption required"
             )
@@ -494,7 +494,8 @@ def _register(registry, unit_dir, *, instance_id, root, username, environment_fi
         if path.exists() or path.is_symlink():
             _trusted(path)
             actual = path.read_text() if path == unit_path else json.loads(path.read_text())
-            if actual != expected:
+            matches = actual == expected if path == unit_path else _same_json(actual, expected)
+            if not matches:
                 raise HelperError("registration artifact conflict; no overwrite permitted")
     if not unit_path.exists():
         fd, temporary = tempfile.mkstemp(prefix=".registration-unit-", dir=unit_dir)
