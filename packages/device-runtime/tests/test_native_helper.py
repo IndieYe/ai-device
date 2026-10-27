@@ -506,6 +506,71 @@ def test_peer_process_rejects_non_root_and_unsupported_kernel(monkeypatch):
         pytest.fail("unsupported kernel accepted")
 
 
+@pytest.mark.parametrize("scenario", ["mismatch", "exited_before", "exited_after", "caller_error", "success"])
+def test_peer_process_closes_pidfd_on_each_observation_path(monkeypatch, scenario):
+    import builtins
+    import errno
+    import io
+    import select
+    import struct
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(nh.socket, "SO_PEERCRED", 17, raising=False)
+    pidfd, write_fd = os.pipe()
+    real_open = builtins.open
+
+    class Peer:
+        def getsockopt(self, level, option, size):
+            if option == nh.socket.SO_PEERCRED:
+                return struct.pack("3i", 42, 0, 0)
+            return struct.pack("i", pidfd)
+
+    def fake_open(path, *args, **kwargs):
+        if path == f"/proc/self/fdinfo/{pidfd}":
+            return io.StringIO(f"Pid:\t{43 if scenario == 'mismatch' else 42}\n")
+        return real_open(path, *args, **kwargs)
+
+    class Poller:
+        def __init__(self):
+            self.calls = 0
+
+        def register(self, fd, events):
+            assert fd == pidfd
+            assert events == select.POLLIN
+
+        def poll(self, timeout):
+            assert timeout == 0
+            self.calls += 1
+            if scenario == "exited_before" or (scenario == "exited_after" and self.calls == 2):
+                return [(pidfd, select.POLLIN)]
+            return []
+
+    monkeypatch.setattr(builtins, "open", fake_open)
+    monkeypatch.setattr(select, "poll", Poller)
+    try:
+        if scenario in {"mismatch", "exited_before", "exited_after"}:
+            with pytest.raises(nh.HelperError), nh._socket_peer_process(Peer()) as peer:
+                assert scenario == "exited_after"
+                assert peer["pid"] == 42
+        elif scenario == "caller_error":
+            with pytest.raises(RuntimeError, match="caller failed"), nh._socket_peer_process(Peer()):
+                raise RuntimeError("caller failed")
+        else:
+            with nh._socket_peer_process(Peer()) as peer:
+                assert peer["pid"] == 42 and peer["pidfd"] == pidfd
+                assert os.get_inheritable(pidfd) is False
+        with pytest.raises(OSError) as exc:
+            os.fstat(pidfd)
+        assert exc.value.errno == errno.EBADF
+    finally:
+        os.close(write_fd)
+        try:
+            os.close(pidfd)
+        except OSError as exc:
+            if exc.errno != errno.EBADF:
+                raise
+
+
 def test_helper_unit_peer_observation_refuses_drift_and_pid_mismatch(monkeypatch):
     import sys
     from contextlib import contextmanager

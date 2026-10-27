@@ -979,7 +979,7 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 
 ## 122. 57714ae 离线开发制品及隔离 DEB 验证
 
-在干净提交 `57714ae9d0d18c55a275ea9ebeafb39e12f99bce` 离线构建三组件 wheel；Device wheel SHA256 `e220912487effa908801eaf63116c6ff35df425b5579948981555bfa8b7277fa`，bash `aee883b74bb2fc816abb77ba428ed4339c6901726a9ac3098a3ba8737fa`，fs `b872aa775eaacc9836c0ec94a2abf1e41c8395ef725eecb37d05b521053ab626`。wheel 内六个 bootstrap/helper/update 模块与该提交源码逐字节一致。使用锁定依赖、uv和 CPython 离线组装 `build/native-payload-p1-57714ae/`，一次性无网络 Linux amd64/Rosetta 容器构建未签名 DEB：`build/native-packages-p1-57714ae/ai-device-native-client_0.2.2-1_amd64.deb`，109817790 bytes，SHA256 `b172b35a6882eb61b89b48dba4b27808f3bf6da1d06da8510cb31ca4f2e45d03`。
+在干净提交 `57714ae9d0d18c55a275ea9ebeafb39e12f99bce` 离线构建三组件 wheel；Device wheel SHA256 `e220912487effa908801eaf63116c6ff35df425b5579948981555bfa8b7277fa`，bash `aee883b74bb2fc816abb77ba428ed4339c6901726a9ac3098a3ba8737fa16dd3`，fs `b872aa775eaacc9836c0ec94a2abf1e41c8395ef725eecb37d05b521053ab626`。wheel 内六个 bootstrap/helper/update 模块与该提交源码逐字节一致。使用锁定依赖、uv和 CPython 离线组装 `build/native-payload-p1-57714ae/`，一次性无网络 Linux amd64/Rosetta 容器构建未签名 DEB：`build/native-packages-p1-57714ae/ai-device-native-client_0.2.2-1_amd64.deb`，109817790 bytes，SHA256 `b172b35a6882eb61b89b48dba4b27808f3bf6da1d06da8510cb31ca4f2e45d03`。
 
 在另一个一次性无网络容器中验证包摘要、preinst/prerm 保护文案、全新安装、安装的六个主 runtime 模块与四个独立 bootstrap 模块与源码一致；调用包内 bootstrap helper 验证非整数/缺失 returncode 拒绝、负整数接受，并验证重复安装被原覆盖保护拒绝。`CURRENT_DEB_RECEIPT_GUARD_OK`、`CURRENT_DEB_FRESH_INSTALL_AND_PROTECTION_OK`，日志 `20261027-215650-b18253.log`。脚本 `scripts/accept-native-current-receipt-deb.sh` 固定该包摘要，仅为隔离验收。
 
@@ -1040,3 +1040,10 @@ start barrier 2 与 package apply 显式恢复共用 sender completion 校验：
 新入口 `scripts/accept-native-exact-parent-exit.sh` 在一次性无网络 Linux 6.18 amd64/Rosetta 容器安装第122节准确 `57714ae` DEB，校验 SHA256 `b172b35a6882eb61b89b48dba4b27808f3bf6da1d06da8510cb31ca4f2e45d03`，不挂载或覆盖源码；复用第120节 `probe-native-verified-parent-exit.py`。候选字节经独立 bootstrap 验证后，子加载继承内存字节并 bind socket，观察到 peer 为子且持双锁；监督父退出后，实验 watchdog 观察父 pidfd 并令子退出，双锁释放，陈旧 socket 文件保留且连接拒绝。`VERIFIED_PARENT_EXIT_PIDFD_FIXTURE_OK`，日志 `20261027-222019-747f97.log`，shell语法检查通过。
 
 这消除了第120节旧包源码覆盖的制品歧义，但仍是内部 `_serve` 与测试 watchdog，非生产监督器、systemd invocation、逐消息实际处理者、事务恢复或宿主重启验收；不开放派发，不自动删除陈旧 socket。
+
+
+## 131. 真实 systemd peer 与实际响应者反例及 pidfd 清理回归
+
+在无网络、一次性 Linux 6.18 amd64/Rosetta systemd 容器安装准确 `57714ae` DEB；仅在容器内创建测试 unit，主进程创建监听 socket、fork 子进程处理连接并保持主进程存活。包内真实 `scoped_helper_unit_peer` 前后观察通过，unit MainPID 等于内核 socket peer，返回未证明代码且不允许派发；客户端 `SO_PASSCRED`/`SCM_CREDENTIALS` 实际响应凭据显示发送者为另一 root 子进程。`SYSTEMD_PEER_MAINPID_DIFFERS_FROM_HANDLER_OBSERVED_NOT_AUTHORIZED`，日志 `20261027-223138-a4b7e2.log`；复现脚本 `scripts/accept-native-systemd-handler.sh` 另一次通过（`20261027-223246-dcaf57.log`）。测试 unit 不是生产 helper，两个容器均已关闭；不能将观察成功解释为处理者或加载代码证明。
+
+为只读观察函数增加五种 pidfd 生命周期回归：身份不匹配、进入前退出、退出时复核失败、调用者异常和成功路径均关闭描述符；精确说明内核报告的 peer 可能不是消息处理者。完整 Device 测试 `1107 passed, 3 skipped`（日志 `20261027-222924-4a543e.log`），ruff 和 diff 空白检查通过。修正第122节 Bash wheel SHA256 截短笔误，实测文件摘要为 `aee883b74bb2fc816abb77ba428ed4339c6901726a9ac3098a3ba8737fa16dd3`。本次不改变认证、派发或生产行为；生产受控启动和事务闭环仍未实现。

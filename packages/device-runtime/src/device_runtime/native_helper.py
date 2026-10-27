@@ -992,10 +992,11 @@ def _serve(registry, socket_path, *, group):
 def _socket_peer_process(connection):
     """Pin a Linux Unix-socket peer for observation, never authorize dispatch.
 
-    SO_PEERPIDFD (Linux 6.5+) returns a handle to the socket's actual peer,
-    unlike pidfd_open(peer_pid), which can race with PID reuse. Unsupported
-    kernels and processes that exit during observation fail closed. This does
-    not prove which code the peer loaded or stop a new daemon from starting.
+    SO_PEERPIDFD (Linux 6.5+) pins the kernel-reported socket peer without
+    the PID reuse race in pidfd_open(peer_pid). The peer can be a socket
+    creator rather than the process handling a particular message. Unsupported
+    kernels and peers that exit during observation fail closed. This does not
+    prove the handler, loaded code, or prevent a new daemon from starting.
     """
     import select
 

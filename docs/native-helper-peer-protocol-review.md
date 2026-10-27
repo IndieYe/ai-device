@@ -146,3 +146,10 @@
 一次性无网络 Linux 6.18 amd64/Rosetta 容器安装第122节准确 `57714ae` DEB（SHA256 `b172b35a6882eb61b89b48dba4b27808f3bf6da1d06da8510cb31ca4f2e45d03`），未覆盖包内源码。独立 bootstrap 发布并验证候选字节后，实验篡改容器内候选路径；父持 daemon 双锁 fork 子进程，子以继承的验证字节加载三个候选模块，再对父随机挑战通过 SEQPACKET 发送 READY。父使用直接子 pidfd、SO_PASSCRED 的 PID/UID 和读取前后活性检查核对，并确认竞争 daemon 租约被拒绝；子正常退出后双锁释放。`VERIFIED_CANDIDATE_PIDFD_HANDSHAKE_FIXTURE_OK`，日志 `20261027-221821-c360ce.log`。
 
 这是单次受控机制实验：加载和握手代码为测试脚本，未调用生产 `_serve`、未绑定公开 socket 的实际处理者或 systemd invocation；不证明持锁期间其他继承者行为、父死亡竞态或事务 unknown 收敛。挑战不替代代码信任、持久 intent 和权限检查；不得据此开放派发。
+
+
+## 隔离 systemd：MainPID 与 socket peer 一致仍不证明响应处理者
+
+`scripts/probe-native-systemd-handler.py` 在独立、无网络 Linux 6.18 amd64/Rosetta systemd 容器复现：安装 SHA256 `b172b35a6882eb61b89b48dba4b27808f3bf6da1d06da8510cb31ca4f2e45d03` 的准确 `57714ae` DEB，仅在容器 `/run/systemd/system/` 写入同名测试 unit；unit 主进程 bind/listen 后 fork 子进程处理一次连接并回复，主进程保持存活。包内真实 `scoped_helper_unit_peer` 作用域前后通过，确认 unit MainPID 与内核 socket peer 相同，并返回 `loaded_code_verified=false`、`dispatch_allowed=false`；启用 `SO_PASSCRED` 的接收端从实际响应的 `SCM_CREDENTIALS` 核得发送 PID 为不同的 root 子进程，不依赖消息自报。输出 `SYSTEMD_PEER_MAINPID_DIFFERS_FROM_HANDLER_OBSERVED_NOT_AUTHORIZED`，日志 `20261027-223138-a4b7e2.log`；可复现入口 `scripts/accept-native-systemd-handler.sh` 独立复验通过，日志 `20261027-223246-dcaf57.log`。两个临时容器均已正常关闭。
+
+该反例不是已安装生产 helper 的实际 fork 行为，也不是可用于授权的逐消息协议：客户端、unit 和服务逻辑均为隔离 fixture。它证明即使真实 systemd 的 MainPID、InvocationID 与 socket peer 观察同时成立，仍不能单凭这些事实推断每条响应的执行者，更不能证明加载代码或授权派发。真实 helper 的描述符继承、受控启动、事务和恢复须分别验证；派发继续关闭。
