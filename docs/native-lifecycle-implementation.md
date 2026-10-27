@@ -1625,3 +1625,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 这些证据不证明 RPM、真实宿主/设备、响应背压、受控动作身份、包更新与外部 job 终态或崩溃恢复；惰性旧包 fixture 不是实际升级。旧运行实例不自动更新，所有既定 default-deny 与包覆盖保护维持，P1 未完成。
 
 后续核查：上述三份工具输出文件在接续时已不可读（`20261028-073027-886d40.log`）；验收结果依据此前会话中实际返回的工具输出，本次未重跑，准确 DEB 摘要已重新核对。不要将日志文件名当作当前可读取的独立证据。
+
+
+## 208. 关闭与迟到 worker 的跨进程包锁竞争
+
+新增 `test_close_and_late_worker_use_same_package_lease_across_processes`：独立 spawn 子进程实际调用 `close_before_apply`，在持有生产 package EX 锁并到达关闭标记发布前同步暂停；父进程实际调用 `Updates.apply`，确认由于包锁竞争拒绝且无关闭/apply intent。子进程被释放后走真实 `_save_new` 发布关闭标记；父进程迟到 apply 因已关闭拒绝，原 job intent 与 active 字节不变，无包适配器动作、apply intent、sender 或 outcome。管理身份、snapshot 验证和包适配器为测试替身，实例 lease 也为替身；实际测试的包锁是 OS 跨进程 flock，未运行真实 systemd/设备/包动作。
+
+初版使用 fork 的完整回归通过但报告多线程 fork 警告（`20261028-073259-f5717c.log`），已改 spawn 并显式建立子进程替身；单项连续 5 次通过及更新/job 定向 145 通过（`20261028-073423-12cd9f.log`），完整 1204 通过、16 跳过无该警告（`20261028-073436-7689e7.log`），ruff通过。正常关闭与迟到拒绝不证明目录 fsync 故障的持久性、旧 snapshot 兼容、真实身份、外部 job 终态或崩溃恢复；生产派发、worker 与恢复默认拒绝不变。

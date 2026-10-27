@@ -1,4 +1,5 @@
 import json
+import multiprocessing
 import os
 import stat
 import subprocess
@@ -1191,6 +1192,101 @@ def test_close_before_apply_fences_delayed_worker(update, monkeypatch):
     path.write_text(json.dumps(intent))
     with pytest.raises(job.JobError, match="intent or approval"):
         job.close_before_apply(manager, "probe", "one")
+
+
+def _close_job_in_spawn_child(manager, stem, ready, release, writer):
+    from device_runtime import native_update_job as job
+
+    nu.sys.platform = "linux"
+    nu.os.geteuid = lambda: 0
+    nh._trusted = lambda *args, **kwargs: None
+    job.bootstrap.validate_snapshot = lambda *args: {}
+    real_digest, real_save = nh._digest, nh._save_new
+    nh._digest = lambda path: (
+        "same-worker" if path.name in ("native_update.py", "native_update_job.py", "native_helper.py")
+        else real_digest(path)
+    )
+
+    def blocked_save(destination, value):
+        if destination == stem.with_suffix(".job-closed.json"):
+            ready.set()
+            if not release.wait(10):
+                raise TimeoutError("close fixture was not released")
+        real_save(destination, value)
+
+    nh._save_new = blocked_save
+    try:
+        writer.send(("ok", job.close_before_apply(manager, "probe", "one")))
+    except Exception as exc:  # noqa: BLE001 - return child failures to parent
+        writer.send(("error", repr(exc)))
+    finally:
+        writer.close()
+
+
+def test_close_and_late_worker_use_same_package_lease_across_processes(update, monkeypatch):
+    import hashlib
+
+    from device_runtime import native_update_job as job
+
+    manager, packages, helper, _ = update
+    stem = manager.registry / "updates/5-probe--one"
+    snapshot = stem.with_suffix(".bootstrap")
+    snapshot.mkdir()
+    (snapshot / "snapshot.json").write_text("snapshot")
+    monkeypatch.setattr(job.bootstrap, "validate_snapshot", lambda *args: {})
+    real_digest = nh._digest
+    monkeypatch.setattr(nh, "_digest", lambda path: (
+        "same-worker" if path.name in ("native_update.py", "native_update_job.py", "native_helper.py")
+        else real_digest(path)
+    ))
+    intent = {
+        "schema_version": 1,
+        "state": "job_dispatch_intent",
+        "close_protocol": "package-lease-v1",
+        "instance_id": "probe",
+        "operation_id": "one",
+        "unit": "ai-device-package-" + hashlib.sha256(str(stem).encode()).hexdigest() + ".service",
+        "prepared_sha256": nh._digest(stem.with_suffix(".prepared.json")),
+        "runtime_snapshot_sha256": nh._digest(snapshot / "snapshot.json"),
+    }
+    path = stem.with_suffix(".job-intent.json")
+    path.write_text(json.dumps(intent))
+    intent_bytes = path.read_bytes()
+    active_bytes = (helper.root / "active.json").read_bytes()
+    with manager._apply_lease(manager.registry / "package-manager"):
+        pass  # Provision the real lock used by both operations.
+
+    ctx = multiprocessing.get_context("spawn")
+    ready, release = ctx.Event(), ctx.Event()
+    reader, writer = ctx.Pipe(duplex=False)
+    child = ctx.Process(target=_close_job_in_spawn_child, args=(manager, stem, ready, release, writer))
+    child.start()
+    writer.close()
+    try:
+        assert ready.wait(10), "close did not reach locked publication"
+        with pytest.raises(nu.UpdateError, match="package or start sender still executing"):
+            manager.apply("probe", "one", job_intent_sha256=nh._digest(path))
+        assert not stem.with_suffix(".apply-intent.json").exists()
+        assert not stem.with_suffix(".job-closed.json").exists()
+        release.set()
+        assert reader.poll(10), "close did not return"
+        status, result = reader.recv()
+        assert status == "ok", result
+        assert result["state"] == "closed_before_apply" and result["fence_retained"]
+        child.join(10)
+        assert child.exitcode == 0
+        with pytest.raises(nu.UpdateError, match="closed before execution"):
+            manager.apply("probe", "one", job_intent_sha256=nh._digest(path))
+        assert path.read_bytes() == intent_bytes
+        assert (helper.root / "active.json").read_bytes() == active_bytes
+        assert packages.calls == 0
+        for suffix in (".apply-intent.json", ".sender.json", ".outcome.json"):
+            assert not stem.with_suffix(suffix).exists()
+    finally:
+        release.set()
+        child.join(12)
+        reader.close()
+        assert not child.is_alive(), "close fixture did not finish"
 
 
 def test_close_refuses_busy_package_lease_and_prior_apply(update, monkeypatch):
