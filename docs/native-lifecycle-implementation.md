@@ -510,3 +510,11 @@ native_update_job增加dispatch_job（Python显式入口，未接公开CLI/IPC�
 helper启动/登记和其他包apply被持久job意图阻断。worker从完整快照执行固定模块，重新进入原apply准确批准、绑定、active、包数据库、停止状态及锁协议；额外验证job-intent摘要、prepared及runtime快照摘要。worker已在同一快照时只重验不重拷贝。无删除意图、重派、自动激活或包许可。源码审查发现持锁派发会使worker抢锁失败，改为持久门禁覆盖解锁到派发的空隙，定向断言派发前包锁已释放。
 
 5项新增覆盖派发响应丢失/同ID不重发、排队拒绝直接apply/启动、worker意图与源漂移拒绝、同快照不重拷贝；完整949 passed/3 Linux skipped（42.71s），ruff/format/diff通过。尚未执行真实systemd动态验收，新代码未纳入v17 DEB，不能称job已可交付。需要先冻结本检查点重建wheel/完整运行时，再隔离systemd派发和失响应/源漂移验证。v17包仍含e4a1ba7前管理实现，不混算此原型证据。P1未完成，Device包保护保持。
+
+## 34. 隔离systemd独立job拒绝路径动态验收
+
+冻结ae1acb4构建三组件wheel到build/native-inputs/wheels-p1-job-v18，在新amd64 Apple容器cap-add ALL/container=apple启动独立systemd PID1。新增accept-native-update-job.sh：仅job-v1明确隔离标记及systemd/root接受，提取v17完整DEB、离线替换v18三组件wheel，普通UID12345新建并登记临时实例，不启动客户端。准确prepare/approve→dispatch_job→同ID观察；验证持久job意图拒绝start、systemd从事务快照运行worker，原preinst拒绝覆盖后匹配sender非零回执、unknown outcome、日志准确包含保护拒绝、active不变、Restart=no。未放开任何Device包钩子，未安装成功/激活或使用真实凭证。
+
+脚本全部断言通过并输出ACCEPTANCE_EXIT=0；随后systemctl --force poweroff只关闭该一次性临时容器，外层container run返回130，不把130当测试通过码，实际验收以脚本终态与断言证据为准。--rm容器已退出，无后台遗留。完整源码回归仍为ae1acb4的949 passed/3 skipped（新增脚本未改核心，本轮未重跑完整），sh-n/diff通过。证据仅覆盖真实systemd派发与包保护拒绝，不覆盖成功升级、派发失响应真实注入、排队源漂移动态拒绝或激活。
+
+下一步仍需独立job只读诊断/显式恢复入口、排队源漂移与失响应真实故障、稳定版本化包布局、任务收口/准确停止、准确包许可及激活恢复。P1未完成；原包保护不变，P2—P5未开始。
