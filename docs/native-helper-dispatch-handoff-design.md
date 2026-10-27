@@ -48,3 +48,10 @@
 - 验证唯一实例锁序、持久写入故障和竞争：真实多进程/隔离 systemd，故障注入覆盖 intent 前后、fsync 不确定、释放锁/派发间隙、daemon/SIGKILL、guard挂起、迟到worker、宿主重启与显式对账。
 - 完整审查所有 start、注册、恢复、旧维护入口和包事务参与者；旧 helper 手动退休与新协议启用是不同门禁。
 - 新 schema 与已有 close/retire/recovery 的兼容必须明确；不为迁移删除历史台账。正式信任根、RPM、准确包钩子授权、激活和其他 P1 缺口仍需分别完成。任何局部设计/测试不解除生产 default-deny。
+
+
+## 已执行 job 对账的观察窗口限制
+
+现有 `recover_job` 在进入 `Updates.recover` 之前读取 systemd unit 的终态；`Updates.recover` 随后在实例锁和 package EX 下重新核对 job intent 摘要、批准、sender 回执和实际包状态并写恢复证据。六字段严格解析只能拒绝格式不确定，**不把观察与锁内恢复变成原子操作**：当前未把同一 systemd InvocationID 与受控 worker 身份绑定，也不能仅凭锁证明 unit 在观察后未被重启或替换。事后再观察无法撤销已写入的恢复证据；简单前后对比也不能消除检查与提交之间的竞态。
+
+现有 apply intent 已存在时同 ID 迟到 worker 走观察而不重放（实施记录第134节），且恢复证据本身不解除 intent、启动围栏或授权新 ID；这些约束降低了局部风险，但不证明所有并发入口、unit 身份或宿主崩溃恢复。将来启用派发前须为固定 invocation、受控 worker 和不可重放的持久终态设计可验证的协调协议，覆盖恢复锁期间竞态及失败后仍为 unknown；不凭当前只读快照开放派发。
