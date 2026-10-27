@@ -502,3 +502,11 @@ accept-native-manager-runtime.sh在隔离amd64 Linux、/tmp工作目录，以v15
 只提取不安装的新临时容器：pip check通过，包内native_update/bootstrap/job/candidate/prepare全部导入，从完整独立快照完成Ed25519真实签名验证和zstd压缩解压；模块路径位于快照，无源码依赖。新旧v15 preinst字节cmp一致，提取已有payload后运行新preinst仍准确拒绝覆盖，未移除/覆盖任何设备安装。固化accept-native-manager-package.sh并在第二新容器复跑通过，快照执行后重新inventory一致。无服务操作、无后台或容器遗留。
 
 源码变更仅新增验收脚本及记录；核心完整回归沿用7ffc905的944 passed/3 skipped（本轮没有核心改动，未声称新跑完整）。sh-n/diff通过。原生构建的完整管理运行时前置已在DEB完成，RPM/macOS未对齐；静态job仍不可派发。下一步接一次性job派发前持久门禁/锁交接与worker准确二次复核，隔离systemd动态验收。P1未完成，包钩子准确许可仍未开放。
+
+## 33. 独立job显式派发与worker二次复核原型
+
+native_update_job增加dispatch_job（Python显式入口，未接公开CLI/IPC）：仅root Linux、生产Debian适配器、准确批准，包锁内复制完整快照并逐字节核对native_update/job/helper与当前实现一致。先无覆盖持久job-intent，释放实例/包锁后仅一次systemd-run固定argv/root oneshot/Restart=no/无限事务超时；受理仅dispatch_accepted，错误或超时dispatch_unknown，不代表包执行。已有job意图仅观察不重派，缺派发回执仍阻塞。
+
+helper启动/登记和其他包apply被持久job意图阻断。worker从完整快照执行固定模块，重新进入原apply准确批准、绑定、active、包数据库、停止状态及锁协议；额外验证job-intent摘要、prepared及runtime快照摘要。worker已在同一快照时只重验不重拷贝。无删除意图、重派、自动激活或包许可。源码审查发现持锁派发会使worker抢锁失败，改为持久门禁覆盖解锁到派发的空隙，定向断言派发前包锁已释放。
+
+5项新增覆盖派发响应丢失/同ID不重发、排队拒绝直接apply/启动、worker意图与源漂移拒绝、同快照不重拷贝；完整949 passed/3 Linux skipped（42.71s），ruff/format/diff通过。尚未执行真实systemd动态验收，新代码未纳入v17 DEB，不能称job已可交付。需要先冻结本检查点重建wheel/完整运行时，再隔离systemd派发和失响应/源漂移验证。v17包仍含e4a1ba7前管理实现，不混算此原型证据。P1未完成，Device包保护保持。

@@ -56,3 +56,64 @@ def test_changed_transaction_evidence_refused(transaction, change):
         (transaction.with_suffix(".bootstrap") / "snapshot.json").write_text("changed")
     with pytest.raises(job.JobError, match="approval|intent"):
         job.describe_job(transaction)
+
+
+@pytest.mark.parametrize("lost", [False, True])
+def test_dispatch_records_once_without_replay(transaction, monkeypatch, lost):
+    import subprocess
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from device_runtime import native_update as update
+
+    monkeypatch.setattr(job.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(__import__("sys"), "platform", "linux")
+    # Static fixture already has apply intent; dispatch must begin before apply.
+    transaction.with_suffix(".apply-intent.json").unlink()
+    monkeypatch.setattr(job.bootstrap, "snapshot_runtime", lambda *a: {})
+    real_digest = job.helper._digest
+
+    def digest(path):
+        if path.name in ("native_update.py", "native_update_job.py", "native_helper.py"):
+            return "same-worker-bytes"
+        return real_digest(path)
+
+    monkeypatch.setattr(job.helper, "_digest", digest)
+
+    held = []
+
+    @contextmanager
+    def lease(*a):
+        held.append(True)
+        try:
+            yield
+        finally:
+            held.pop()
+
+    @contextmanager
+    def txn(*a):
+        yield {}, transaction
+
+    manager = SimpleNamespace(
+        packages=update.Debian(),
+        registry=transaction.parent.parent,
+        _transaction=txn,
+        _prepared=lambda *a: {},
+        _apply_lease=lease,
+    )
+    calls = []
+
+    def runner(argv, **kw):
+        assert not held, "release package lease before independent worker starts"
+        calls.append(argv)
+        if lost:
+            raise subprocess.TimeoutExpired(argv, 30)
+
+    first = job.dispatch_job(manager, "probe", "one", runner=runner)
+    assert first["state"] == ("dispatch_unknown" if lost else "dispatch_accepted")
+    assert first["package_execution_confirmed"] is False
+    second = job.dispatch_job(manager, "probe", "one", runner=runner)
+    assert second["state"] == "dispatch_already_recorded" and not second["replayed"]
+    assert len(calls) == 1
+    assert calls[0][0] == "/usr/bin/systemd-run"
+    assert "--property=Restart=no" in calls[0]

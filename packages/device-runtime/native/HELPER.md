@@ -217,3 +217,5 @@ apply意图绑定snapshot回执SHA256，启动前重新核对副本内容及回�
 独立发送者跨替换已增加标准dpkg验收：`accept-native-bootstrap-replacement.sh V15_DEB REPOSITORY` 仅在标记 `DEVICE_DISPOSABLE_CONTAINER=bootstrap-replacement-v1` 的新root Linux临时容器中运行。脚本构建独立名测试包v1/v2，替换移除原CPython解释器及标准库后验证快照guard匹配回执和副本继续可用；不会安装Device包或授予其覆盖许可。真实实验同时修复Debian guard缺少sbin的PATH：固定为 `/usr/sbin:/usr/bin:/sbin:/bin`，不继承调用方PATH。该证据不代表整个管理器已脱离待替换包；独立job、正式包钩子许可和激活恢复仍缺。
 
 快照guard现在独立执行准确包数据库观察并无覆盖/fsync发布outcome：意图绑定target_package，只有dpkg返回0且dpkg-query准确status/version/architecture匹配才为pending activation，其余unknown。dpkg日志写事务.package.log，不依赖父进程管道。sender回执仍先于outcome，缺outcome不猜成功；不解除持久意图或执行激活。隔离替换脚本可加 `BOOTSTRAP_PARENT_EXIT=1` 注入发起进程exit23，已验证其退出后guard仍完成替换及终态落盘。这不是完整systemd独立job/任务收口或Device包覆盖许可。
+
+独立job新增Python显式原型dispatch_job，尚未公开CLI/IPC或真实systemd验收。准确批准后包锁内核对完整快照与当前worker源码，先job-intent持久化，解锁后一次systemd-run；dispatch_accepted/unknown仅表示派发。job意图持续阻止启动、登记和其他包apply，同ID不重发。worker在快照内重进原apply并验证意图、源/批准/停止与锁，不将派发时快照代替执行前重验。没有自动重试/激活/包钩子许可，未知派发暂保持阻塞；新原型尚未纳入v17制品，动态验收待完成。

@@ -95,7 +95,7 @@ def _assert_no_package_intent(registry):
     _trusted(directory, directory=True)
     # Until activation/repair has a verified terminal protocol, no intent is
     # automatically cleared, including failed or recovered package executions.
-    if any(directory.glob("*.apply-intent.json")):
+    if any(directory.glob("*.apply-intent.json")) or any(directory.glob("*.job-intent.json")):
         raise HelperError("package transaction blocks start; administrator recovery required")
 
 

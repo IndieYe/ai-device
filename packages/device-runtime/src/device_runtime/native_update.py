@@ -28,7 +28,11 @@ class UpdateError(ValueError):
 class Debian:
     def prepare_execution(self, stem):
         directory = stem.with_suffix(".bootstrap")
-        nb.snapshot_runtime(Path(sys.base_prefix), directory)
+        if Path(sys.base_prefix) == directory / "runtime":
+            # A systemd worker is already running from this exact snapshot.
+            nb.validate_snapshot(directory)
+        else:
+            nb.snapshot_runtime(Path(sys.base_prefix), directory)
         return {"runtime_snapshot_sha256": nh._digest(directory / "snapshot.json")}
 
     def metadata(self, path):
@@ -367,7 +371,7 @@ class Updates:
         except nh.HelperError as exc:
             raise UpdateError(str(exc)) from exc
 
-    def apply(self, instance_id, operation_id):
+    def apply(self, instance_id, operation_id, *, job_intent_sha256=None):
         with self._transaction(instance_id, operation_id) as (binding, stem):
             value = self._prepared(binding, stem)
             started = stem.with_suffix(".apply-intent.json")
@@ -380,6 +384,25 @@ class Updates:
                 self._apply_lease(self.registry / "package-manager") as sender_fd,
                 nh._instance_service_lease(Path(binding["root"])),
             ):
+                job_path = stem.with_suffix(".job-intent.json")
+                for pending_job in stem.parent.glob("*.job-intent.json"):
+                    if pending_job != job_path or job_intent_sha256 is None:
+                        raise UpdateError("queued package job blocks direct apply")
+                    nh._trusted(pending_job)
+                    if nh._digest(pending_job) != job_intent_sha256:
+                        raise UpdateError("package job intent changed")
+                    job_value = json.loads(pending_job.read_bytes())
+                    if job_value.get("prepared_sha256") != nh._digest(
+                        stem.with_suffix(".prepared.json")
+                    ):
+                        raise UpdateError("queued job prepared evidence changed")
+                    nb.validate_snapshot(stem.with_suffix(".bootstrap"))
+                    if job_value.get("runtime_snapshot_sha256") != nh._digest(
+                        stem.with_suffix(".bootstrap") / "snapshot.json"
+                    ):
+                        raise UpdateError("queued job runtime changed")
+                if job_intent_sha256 is not None and not job_path.exists():
+                    raise UpdateError("package job intent missing")
                 for path in stem.parent.glob("*.apply-intent.json"):
                     raise UpdateError(
                         "existing package transaction requires recovery or activation"

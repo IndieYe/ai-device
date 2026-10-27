@@ -145,3 +145,16 @@ def test_guard_owns_durable_outcome(runtime, monkeypatch, code, query_ok):
     outcome = json.loads(stem.with_suffix(".outcome.json").read_bytes())
     expected = "package_applied_pending_activation" if code == 0 and query_ok else "unknown"
     assert outcome["state"] == expected and outcome["intent"] == intent
+
+
+def test_worker_already_inside_snapshot_does_not_recopy(runtime, monkeypatch):
+    from device_runtime import native_update as update
+
+    source, destination = runtime
+    stem = destination.parent / "inside"
+    monkeypatch.setattr(update.sys, "base_prefix", str(source))
+    adapter = update.Debian()
+    first = adapter.prepare_execution(stem)
+    snapshot = stem.with_suffix(".bootstrap")
+    monkeypatch.setattr(update.sys, "base_prefix", str(snapshot / "runtime"))
+    assert adapter.prepare_execution(stem) == first

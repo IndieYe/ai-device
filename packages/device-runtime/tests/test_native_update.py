@@ -436,3 +436,45 @@ def test_snapshot_intent_recovery_checks_target_and_receipt(update, monkeypatch)
     stem.with_suffix(".apply-intent.json").write_text(json.dumps(intent))
     with pytest.raises(nu.UpdateError, match="intent differs"):
         manager.recover("probe", "one")
+
+
+def test_queued_job_blocks_direct_apply_and_start(update):
+    manager, packages, _helper, _package = update
+    path = manager.registry / "updates/5-probe--one.job-intent.json"
+    path.write_text("{}")
+    with pytest.raises(nu.UpdateError, match="queued package job"):
+        manager.apply("probe", "one")
+    with pytest.raises(nh.HelperError, match="blocks start"):
+        nh._assert_no_package_intent(manager.registry)
+    assert packages.calls == 0
+
+
+def test_worker_rechecks_job_intent_and_source(update, monkeypatch):
+    manager, packages, helper, _package = update
+    stem = manager.registry / "updates/5-probe--one"
+    snapshot = stem.with_suffix(".bootstrap")
+    snapshot.mkdir()
+    (snapshot / "snapshot.json").write_text("snapshot")
+    monkeypatch.setattr(nu.nb, "validate_snapshot", lambda directory: {})
+    intent = {
+        "prepared_sha256": nh._digest(stem.with_suffix(".prepared.json")),
+        "runtime_snapshot_sha256": nh._digest(snapshot / "snapshot.json"),
+    }
+    path = stem.with_suffix(".job-intent.json")
+    path.write_text(json.dumps(intent))
+    digest = nh._digest(path)
+    with pytest.raises(nu.UpdateError, match="job intent changed"):
+        manager.apply("probe", "one", job_intent_sha256="wrong")
+    assert packages.calls == 0
+    # Existing source checks run again at worker execution, not just dispatch.
+    active = helper.root / "active.json"
+    before = active.read_bytes()
+    active.write_text('{"release":"changed"}')
+    with pytest.raises(nu.UpdateError, match="source active"):
+        manager.apply("probe", "one", job_intent_sha256=digest)
+    active.write_bytes(before)
+    assert (
+        manager.apply("probe", "one", job_intent_sha256=digest)["outcome"]["state"]
+        == "package_applied_pending_activation"
+    )
+    assert packages.calls == 1
