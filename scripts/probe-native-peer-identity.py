@@ -158,11 +158,31 @@ def test_inherited_listener(path):
         reap(creator)
 
 
+def test_stream_sender_credentials():
+    receiver, sender = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    receiver.settimeout(5)
+    receiver.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
+    pid = fork_send(sender)
+    sender.close()
+    try:
+        data, controls, flags, _ = receiver.recvmsg(1, socket.CMSG_SPACE(CRED.size))
+        assert data == b"x" and not flags & socket.MSG_CTRUNC
+        creds = [CRED.unpack(payload[:CRED.size]) for level, kind, payload in controls
+                 if level == socket.SOL_SOCKET and kind == socket.SCM_CREDENTIALS]
+        assert len(creds) == 1 and creds[0][0] == pid, creds
+        assert peer(receiver)[0] == os.getpid()
+        print(f"stream SCM_CREDENTIALS sender={creds[0][0]} child={pid}, peer creator={peer(receiver)[0]}", flush=True)
+    finally:
+        receiver.close()
+        reap(pid)
+
+
 def main():
     if sys.platform != "linux" or not hasattr(os, "fork"):
         raise RuntimeError("Linux fork environment required")
     print(f"kernel={os.uname().release} pid={os.getpid()}", flush=True)
     test_socketpair()
+    test_stream_sender_credentials()
     with tempfile.TemporaryDirectory(prefix="device-peer-probe-") as temp:
         test_listener(os.path.join(temp, "parent.sock"), False)
         test_listener(os.path.join(temp, "child.sock"), True)

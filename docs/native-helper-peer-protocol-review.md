@@ -17,6 +17,8 @@
 3. 子进程自己 bind/listen：客户端 peer 与 pidfd 对应子进程；子进程退出并 wait 后，pidfd poll 报告退出。
 4. 创建监听 socket 的进程 fork 后代，由后代 accept/响应：客户端 peer 仍是创建者，实际响应进程却是后代。验证脚本明确让创建者保持存活，避免把退出或 PID 复用误当作解释。
 
+5. fork 前创建的 `SOCK_STREAM` socketpair，子进程发送一个字节，父进程 `recvmsg` 在启用 `SO_PASSCRED` 后收到该子进程的 `SCM_CREDENTIALS`，而 `SO_PEERCRED` 仍为创建者。日志 `20261027-200909-30634d.log`；这是单次简单发送，不证明流分帧或多发送者交错时可以无歧义地认证完整请求。
+
 结论：将启动前创建的 socketpair 的 `SO_PEERCRED` 当作子进程证明，以及把客户端 peer/pidfd 等同于实际 accept/响应进程，均不成立。`SCM_CREDENTIALS` 是该次隔离实验的数据报发送者证据，不是代码来源证明；不能据此推断 root/capability、PID namespace、流式分帧、文件描述符传递或任意平台上的完整授权语义。
 
 ## 对可实施方案的收紧
