@@ -1710,12 +1710,13 @@ def test_retirement_rejects_incomplete_job_identity(update, drift):
     assert packages.calls == 0
 
 
-def test_query_supervisor_unknown_blocks_apply_without_writes(update):
+def test_query_supervisor_unknown_blocks_apply_without_writes(update, monkeypatch):
     manager, packages, _, _ = update
     marker = manager.registry / 'query-supervisor.intent.json'
     marker.write_bytes(b'unknown')
     stem = manager.registry / 'updates/5-probe--one'
     before = {p.name: p.read_bytes() for p in stem.parent.iterdir() if p.is_file()}
+    monkeypatch.setattr(packages, 'metadata', lambda *_: pytest.fail('metadata called despite unknown intent'))
     with pytest.raises(nu.UpdateError, match='query supervisor intent remains unknown'):
         manager.apply('probe', 'one')
     assert not stem.with_suffix('.apply-intent.json').exists()
@@ -1724,7 +1725,7 @@ def test_query_supervisor_unknown_blocks_apply_without_writes(update):
     assert marker.read_bytes() == b'unknown' and packages.calls == 0
 
 
-def test_query_supervisor_unknown_blocks_recovery_without_writes(update):
+def test_query_supervisor_unknown_blocks_recovery_without_writes(update, monkeypatch):
     manager, packages, _, _ = update
     packages.mode = 'crash'
     manager.apply('probe', 'one')
@@ -1732,6 +1733,7 @@ def test_query_supervisor_unknown_blocks_recovery_without_writes(update):
     marker.write_bytes(b'unknown')
     directory = manager.registry / 'updates'
     before = {p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()}
+    monkeypatch.setattr(packages, 'metadata', lambda *_: pytest.fail('metadata called despite unknown intent'))
     with pytest.raises(nu.UpdateError, match='query supervisor intent remains unknown'):
         manager.recover('probe', 'one')
     assert {p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()} == before
@@ -1803,3 +1805,21 @@ def test_prepare_holds_package_shared_lock_during_metadata(update, monkeypatch):
     monkeypatch.setattr(packages, 'metadata', metadata)
     manager.prepare('probe', 'two', package, sha256=nh._digest(package), version='2')
     assert seen == [True]
+
+
+def test_apply_rechecks_supervisor_intent_after_prevalidation(update, monkeypatch):
+    manager, packages, _, _ = update
+    marker = manager.registry / 'query-supervisor.intent.json'
+    original = manager._prepared_for_mutation
+
+    def inject_after_prevalidation(binding, stem):
+        result = original(binding, stem)
+        marker.write_bytes(b'unknown')
+        return result
+
+    monkeypatch.setattr(manager, '_prepared_for_mutation', inject_after_prevalidation)
+    with pytest.raises(nu.UpdateError, match='query supervisor intent remains unknown'):
+        manager.apply('probe', 'one')
+    stem = manager.registry / 'updates/5-probe--one'
+    assert not stem.with_suffix('.apply-intent.json').exists()
+    assert packages.calls == 0 and marker.read_bytes() == b'unknown'

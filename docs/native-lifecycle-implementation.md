@@ -2069,3 +2069,10 @@ job/update 定向 164 passed；完整回归 1358 passed / 16 skipped、ruff 通�
 第260节的调用方在默认拒绝前会创建 updates 目录。现新增长期受实例锁保护的 dispatch 预检查事务：准确判断该 ID 的 job intent 不存在时先调用既有默认拒绝门禁，只有既有 intent 的观察或测试明确替身放行才初始化事务；原私有函数保留再次检查以防调用方绕过和交错。已存在的 intent 继续走既有核验和不重放逻辑，异常 symlink 仍拒绝。实例管理锁本身可能创建实例锁文件，因此不声称整个调用零文件副作用。
 
 隔离 Linux 用真实 `Updates` 和受控 helper，确认新 job 在 binding、updates 目录和 runner 前拒绝（`20261028-122040-1f79f9.log`）；未运行真实 systemd job，容器已删除。完整 1359 passed / 16 skipped、ruff 通过（`20261028-122044-911fb4.log`）；首次定向测试通过但 ruff 报新增测试导入分组，修正后完整重跑通过。更改只收紧默认拒绝，不能替代旧版本、并发进程树及持久终态协议。
+
+
+## 262. 新 apply 与 recover 在包元数据查询前检查监督意图
+
+新 apply 和 recover 原先在获取最终 package EX 前调用 `_prepared`，其中包含包元数据子进程，即使之后因监督未知意图拒绝也已执行查询。现对这两条变更路径在实例事务内先持 package SH 检查意图并完成准备校验，随后释放 SH、仍在原 package EX 内再次检查后才执行变更；已有 apply intent 的观察分支保持原只读语义。测试覆盖预校验与 EX 之间出现意图时二次检查拒绝、无 apply intent 和包动作；recover 在意图已存在时不调用元数据。
+
+定向 165 passed；隔离 Linux 旧 DEB 源码覆盖确认意图存在时新 apply 在元数据和 apply intent 前拒绝（`20261028-122514-0f99a6.log`），包适配器为测试替身，容器已删除；完整 1360 passed / 16 skipped、ruff 通过（`20261028-122518-698b9e.log`）。当前 `_transaction` 在这些检查前可能创建 updates 目录及 fsync，实例锁文件也可能创建，不能声称整个调用零文件副作用。reconcile 和既有 intent 观察仍会初始化事务目录及调用包查询，不能把逻辑只读等同于无文件或进程副作用；这些查询后代、旧快照和 durable 恢复仍未闭环。生产门禁未开放。

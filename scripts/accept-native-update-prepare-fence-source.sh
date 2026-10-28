@@ -55,6 +55,12 @@ with tempfile.TemporaryDirectory(prefix='device-prep-fence-',dir='/root') as d:
     manager.prepare('probe','one',package,sha256=h._digest(package),version='2')
     prepared=registry/'updates/5-probe--one.prepared.json'; before=prepared.read_bytes()
     marker=registry/'query-supervisor.intent.json'; marker.write_bytes(b'unknown')
+    metadata_before=packages.calls
+    try: manager.apply('probe','one')
+    except u.UpdateError as exc: assert 'query supervisor intent remains unknown' in str(exc)
+    else: raise AssertionError('new apply accepted unknown intent')
+    assert packages.calls==metadata_before and not (registry/'updates/5-probe--one.apply-intent.json').exists()
+    print('NEW_APPLY_REFUSED_BEFORE_METADATA_OR_INTENT')
     try: manager.approve('probe','one',prepared_sha256=h._digest(prepared))
     except u.UpdateError as exc: assert 'query supervisor intent remains unknown' in str(exc)
     else: raise AssertionError('unknown intent accepted')

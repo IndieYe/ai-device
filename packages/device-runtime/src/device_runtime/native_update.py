@@ -463,13 +463,23 @@ class Updates:
         except nh.HelperError as exc:
             raise UpdateError(str(exc)) from exc
 
+    def _prepared_for_mutation(self, binding, stem):
+        """Check supervisor intent before metadata subprocesses for mutations."""
+        try:
+            with nh.package_lease(self.registry):
+                nh._assert_no_query_supervisor_intent(self.registry)
+                return self._prepared(binding, stem)
+        except nh.HelperError as exc:
+            raise UpdateError(str(exc)) from exc
+
     def apply(self, instance_id, operation_id, *, job_intent_sha256=None):
         with self._transaction(instance_id, operation_id) as (binding, stem):
-            value = self._prepared(binding, stem)
             started = stem.with_suffix(".apply-intent.json")
             outcome = stem.with_suffix(".outcome.json")
             if started.exists():
+                value = self._prepared(binding, stem)
                 return self._observation(stem, value)
+            value = self._prepared_for_mutation(binding, stem)
             # One unresolved transaction per instance, including applied pending
             # activation. New IDs never bypass a failed/unknown transaction.
             with (
@@ -621,7 +631,7 @@ class Updates:
         if job_intent_sha256 is not None:
             _require_proven_job_recovery_fence()
         with self._transaction(instance_id, operation_id) as (binding, stem):
-            value = self._prepared(binding, stem)
+            value = self._prepared_for_mutation(binding, stem)
             with self._apply_lease(self.registry / "package-manager", existing=True):
                 if job_intent_sha256 is None and (
                     os.path.lexists(stem.with_suffix(".job-intent.json"))
