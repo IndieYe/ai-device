@@ -52,6 +52,10 @@ chmod 755 "$root/usr/bin/ai-device-native-helper"
 # not be writable by the client or group before a root helper trusts them.
 chmod -R go-w "$root$home"
 chmod -R go-w "$root$bootstrap"
+# Building the bootstrap imports CPython modules, which leaves __pycache__ trees
+# inside the payload. Bytecode belongs to the running interpreter, not to the
+# package, so ship a clean tree and let erase handle only caches created later.
+find "$root$home" "$root$bootstrap" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
 # Fail closed: no upgrade/removal of an existing native instance until helper
 # transactions are implemented. This development package only supports fresh install.
 cat > "$work/preflight" <<'EOF'
@@ -85,8 +89,22 @@ EOF
  cat > "$root/DEBIAN/prerm" <<'EOF'
 #!/bin/sh
 set -eu
-for path in /opt/ai-device/instances /var/lib/ai-device/manager /etc/systemd/system/ai-device-native-helper.service; do
+# Erasing the package deletes the payload and its bundled interpreter, so an
+# existing instance would be left with a run script whose interpreter is gone.
+for path in /opt/ai-device/instances /var/lib/ai-device/manager /var/lib/ai-device/native /etc/systemd/system/ai-device-native-helper.service; do
  [ ! -e "$path" ] && [ ! -L "$path" ] || { echo 'explicit instance/service uninstall required' >&2; exit 1; }
+done
+# A registered client unit means a device instance still depends on this payload.
+for unit in /etc/systemd/system/ai-device-client-*.service; do
+ [ ! -e "$unit" ] && [ ! -L "$unit" ] || { echo 'registered device instance still uses this payload; unregister it first' >&2; exit 1; }
+done
+# The bundled interpreters write bytecode caches into these trees at run time.
+# The package cannot list them, so erase would leave them behind and a later
+# install would be refused by the layout guard below. Remove only caches; the
+# shipped payload files themselves stay under dpkg's control.
+for cache in /opt/ai-device/packages/0.2.2-native1 /opt/ai-device/bootstrap/0.2.2-native1; do
+ [ -d "$cache" ] || continue
+ find "$cache" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
 done
 EOF
  chmod 755 "$root/DEBIAN/prerm"
@@ -114,10 +132,59 @@ for _,path in ipairs(p) do
  if posix.stat(path) or posix.readlink(path) then error('existing native installation: helper transaction required') end
 end
 %preun -p <lua>
-for _,path in ipairs({'/opt/ai-device/instances','/var/lib/ai-device/manager','/etc/systemd/system/ai-device-native-helper.service'}) do
+-- Erasing the package deletes the payload and its bundled interpreter, so an
+-- existing instance would be left with a run script whose interpreter is gone
+-- (systemd then fails with 203/EXEC). Any state that indicates a live or
+-- registered instance must refuse the erase; the data itself must be kept.
+local guards = {
+ '/opt/ai-device/instances',
+ '/var/lib/ai-device/manager',
+ '/var/lib/ai-device/native',
+ '/etc/systemd/system/ai-device-native-helper.service'
+}
+for _,path in ipairs(guards) do
  if posix.stat(path) or posix.readlink(path) then error('explicit instance/service uninstall required') end
 end
+-- Any registered client unit means a device instance still depends on this payload.
+local units = posix.dir('/etc/systemd/system') or {}
+for _,name in ipairs(units) do
+ if string.match(name, '^ai%-device%-client%-.+%.service$') then
+  error('registered device instance still uses this payload; unregister it first')
+ end
+end
+-- The bundled interpreters write __pycache__ trees into these directories at
+-- run time; the package cannot list them, so erase would otherwise leave them
+-- behind and block the next install. Remove only those caches.
+local function drop_caches(dir)
+ local ok, entries = pcall(posix.dir, dir)
+ if not ok or not entries then return end
+ for _,name in ipairs(entries) do
+  if name ~= '.' and name ~= '..' then
+   local child = dir .. '/' .. name
+   if name == '__pycache__' then
+    local files = posix.dir(child) or {}
+    for _,f in ipairs(files) do
+     if f ~= '.' and f ~= '..' then posix.unlink(child .. '/' .. f) end
+    end
+    posix.rmdir(child)
+   elseif posix.stat(child) then
+    drop_caches(child)
+   end
+  end
+ end
+end
+drop_caches('/opt/ai-device/packages/0.2.2-native1')
+drop_caches('/opt/ai-device/bootstrap/0.2.2-native1')
 %files
+# Own the parent directories so erase removes them when empty. Otherwise an
+# empty /opt/ai-device/packages left behind by a first erase makes the
+# %pretrans guard refuse every later install (dpkg removes its own empty
+# parent directories, rpm only removes what %files owns).
+%dir /opt/ai-device
+%dir /opt/ai-device/packages
+%dir /opt/ai-device/bootstrap
+# The build strips __pycache__ before packaging, so the manifest stays free of
+# bytecode caches without per-path excludes.
 /opt/ai-device/packages/0.2.2-native1
 /usr/bin/ai-device-native-install
 /opt/ai-device/bootstrap/0.2.2-native1

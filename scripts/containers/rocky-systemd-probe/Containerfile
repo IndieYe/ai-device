@@ -1,0 +1,37 @@
+# Disposable Rocky 9 systemd qualification image (amd64, run under Rosetta).
+#
+# Counterpart of ../systemd-probe/Containerfile for RPM-path verification:
+# the .rpm package and its %pretrans/%preun Lua scriptlets need rpm/dnf and a
+# real PID1 systemd to exercise unit enable and boot auto-start.
+#
+# Build:
+#   container build --platform linux/amd64 \
+#     -t device-qual-rocky9-systemd-amd64:probe \
+#     -f scripts/containers/rocky-systemd-probe/Containerfile \
+#     scripts/containers/rocky-systemd-probe
+#
+# Nothing here loads or tests a production artifact; units created in the
+# disposable container are inert fixtures.
+FROM docker.io/library/rockylinux:9
+
+ENV container=apple
+
+RUN dnf install -y \
+        systemd \
+        dbus \
+        python3 \
+        ca-certificates \
+        procps-ng \
+        util-linux \
+    && dnf clean all
+
+RUN systemctl mask \
+        systemd-firstboot.service \
+        systemd-udev-trigger.service \
+        systemd-udevd.service \
+        systemd-modules-load.service \
+        systemd-journald-audit.socket \
+    || true
+
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

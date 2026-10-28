@@ -152,3 +152,81 @@ def test_rpm_uninstall_guard_checks_dangling_entries():
                  "/etc/systemd/system/ai-device-native-helper.service"):
         assert path in script
     assert "posix.stat(path) or posix.readlink(path)" in script
+
+
+def _deb_prerm(tmp_path):
+    builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
+    source = builder.read_text()
+    script = source.split("cat > \"$root/DEBIAN/prerm\" <<'EOF'\n", 1)[1].split("\nEOF", 1)[0]
+    root = tmp_path / "opt/ai-device"
+    units = tmp_path / "etc/systemd/system"
+    units.mkdir(parents=True)
+    script = script.replace("/opt/ai-device/instances", str(root / "instances"))
+    script = script.replace("/var/lib/ai-device/manager", str(tmp_path / "manager"))
+    script = script.replace("/var/lib/ai-device/native", str(tmp_path / "registry"))
+    script = script.replace("/etc/systemd/system/ai-device-native-helper.service", str(units / "helper.service"))
+    script = script.replace("/etc/systemd/system/ai-device-client-*.service", str(units / "ai-device-client-*.service"))
+    return script
+
+
+@pytest.mark.parametrize("marker", ["instances", "manager", "registry"])
+def test_remove_refuses_when_instance_state_exists(tmp_path, marker):
+    """Erasing deletes the payload, so any instance state must block removal."""
+    script = _deb_prerm(tmp_path)
+    target = {
+        "instances": tmp_path / "opt/ai-device/instances",
+        "manager": tmp_path / "manager",
+        "registry": tmp_path / "registry",
+    }[marker]
+    target.mkdir(parents=True)
+    result = subprocess.run(["/bin/sh"], input=script, text=True, capture_output=True, check=False)
+    assert result.returncode != 0
+    assert "explicit instance/service uninstall required" in result.stderr
+
+
+def test_remove_refuses_when_a_client_unit_is_registered(tmp_path):
+    script = _deb_prerm(tmp_path)
+    (tmp_path / "etc/systemd/system/ai-device-client-dev1.service").write_text("")
+    result = subprocess.run(["/bin/sh"], input=script, text=True, capture_output=True, check=False)
+    assert result.returncode != 0
+    assert "registered device instance still uses this payload" in result.stderr
+
+
+def test_remove_allows_erase_on_a_clean_host(tmp_path):
+    script = _deb_prerm(tmp_path)
+    result = subprocess.run(["/bin/sh"], input=script, text=True, capture_output=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+
+def test_rpm_preun_guards_registered_client_units():
+    builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
+    source = builder.read_text().split("%preun -p <lua>", 1)[1].split("%files", 1)[0]
+    assert "/var/lib/ai-device/native" in source
+    assert "ai%-device%-client%-" in source
+    assert "registered device instance still uses this payload" in source
+
+
+def test_remove_clears_runtime_bytecode_caches():
+    """Erase must drop __pycache__ trees the bundled interpreter created.
+
+    They are not package-owned, so leaving them would block the next install
+    through the same layout guard that protects the payload.
+    """
+    builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
+    source = builder.read_text()
+    deb = source.split("cat > \"$root/DEBIAN/prerm\" <<'EOF'\n", 1)[1].split("\nEOF", 1)[0]
+    assert "__pycache__" in deb
+    assert "/opt/ai-device/packages/0.2.2-native1" in deb
+    rpm = source.split("%preun -p <lua>", 1)[1].split("%files", 1)[0]
+    assert "drop_caches" in rpm
+    assert "__pycache__" in rpm
+
+
+def test_build_strips_bytecode_before_packaging():
+    """The shipped payload must not carry caches made while building it."""
+    builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
+    source = builder.read_text()
+    strip = '-type d -name __pycache__ -prune -exec rm -rf {} +'
+    assert strip in source
+    # Packaging starts at the deb/rpm branch, so the strip must come first.
+    assert source.index(strip) < source.index('if [ "$kind" = deb ]')

@@ -2731,3 +2731,127 @@ MainPID 变化证明是重启后的新进程，不是旧进程残留。
 「安装 → 登记 → enable → 重启自启 → 以注册用户运行」在 `.deb` 链路上成立。
 
 未覆盖：`.rpm` 同一链路；`uninstall` 是否清除 enable 符号链接；真实设备重启（仅容器 PID1 重启）。
+
+
+## 290. RPM 链路：构建、安装、登记、启用与重启自启
+
+第 289 节只覆盖 `.deb`。本节补齐 `.rpm`，使两条包链路有同等证据。
+
+### 构建
+源码 `76c4060` 的 payload 与 `.deb` 完全同源。首次在 Rocky 9 容器用 `build-native-linux.sh rpm` 构建，产出：
+
+| 项 | 值 |
+| --- | --- |
+| 文件 | `build/native-packages-p1-76c4060/ai-device-native-client-0.2.2-1.x86_64.rpm` |
+| 大小 | 106423810 |
+| SHA256 | `2c2b2b790f0f9f40b59a4d40b5513a66ff8b40c747ebb310042fe8b91923944d` |
+
+`rpm2cpio` 解出的 device wheel 与 `.deb` 内一致（`1b21bad1...`），确认同源。`rpm -qp --requires` 仅五项 rpmlib 能力（`AutoReqProv: no`），`--scripts` 显示 `%pretrans`/`%preun` Lua 守卫与 DEB 的 preinst/prerm 同意图。
+
+**边界**：构建镜像 `rockylinux:9` 无 `rpmbuild`，需 `dnf install rpm-build`（联网，一次性容器，与历史 v24 同法）。宿主与既有镜像均无离线 rpmbuild，因此**这不是离线构建**。新增 `scripts/containers/rocky-systemd-probe/Containerfile` 供后续复用。
+
+### 阶段 1（`20261028-202432`）
+`rpm -ivh --nodeps` → 普通用户 UID12345 建实例 → root 登记（`enabled:false`）→ `enable` 建 wants 符号链接 → `active/running`，MainPID 127。
+
+首次运行失败于 `adduser`：脚本沿用 Debian 语法，Rocky 只有 `useradd`。属验收脚本移植错误，非产品缺陷，已改为 `useradd --uid 12345 --user-group --create-home`。
+
+### 阶段 2（`20261028-202534`）
+容器 stop+start（新 PID1），**未发 start 命令**：
+
+| 检查 | 结果 |
+| --- | --- |
+| UnitFileState / ActiveState / SubState | `enabled` / `active` / `running` |
+| MainPID | 23（≠ 阶段 1 的 127）|
+| /proc uid | 12345，非 root |
+| cwd | `/home/nativedev/instance` |
+
+### 进程子树补充（回应第 288 节的缺口）
+第 288 节只验证了 MainPID 包装器。本次在 RPM 环境核对了整棵子树：
+
+- PID 23 = `run` 包装器，uid real/eff/saved/fs = 12345
+- PID 31 = 真正 client `python -m device_runtime.cli client --state-dir .../state/client --server-url wss://center.invalid --device-id dev1`，四个 uid 同为 12345
+
+即实际加载代码的 client 进程本身也是非 root 运行，而不只是外层包装器。
+
+`exe` 读为 `/run/rosetta/rosetta`，是 amd64 容器在 Rosetta 下运行的结果，非产品异常。
+
+### 关于 `release` 值不同
+RPM 安装得到 `release: 0.2.2-9323288...`，DEB 是 `0.2.2-3c9bf8b...`。查 `installation.py:327` 为 `manifest["release_version"] + "-" + uuid.uuid4().hex`，**每次安装随机生成**，两次 DEB 安装之间同样不同。不是 RPM/DEB 差异，也不影响身份绑定（绑定依据是 `bundle_sha256`）。
+
+### 结论与边界
+`.rpm` 与 `.deb` 在隔离容器中达成同等结论：安装 → 登记 → enable → 重启自启 → 以注册用户运行，且 client 子树身份正确。
+
+未覆盖：RPM `--nodeps`（不作依赖验收）；实机与真实宿主重启；真实凭证联网运行；RPM 离线构建。
+
+`uninstall` 与 enable 符号链接的关系在第 291 节跟进，并发现两个真实卸载缺陷。
+
+
+## 291. 卸载缺陷：运行中实例被删 payload、卸载不彻底
+
+第 290 节完成后转向卸载验收，发现两个真实缺陷，均已复现、修复、回归。
+
+### 缺陷一：运行中的已登记实例被 `rpm -e` 直接删除 payload
+
+复现（修复前，一次性 Rocky 容器）：安装 → 普通用户建实例 → root 登记 → `systemctl start`（`active`）→ 直接 `rpm -e`。结果 `rc=0`，`/opt/ai-device/packages/0.2.2-native1` 被删除，而服务仍显示 `active`。随后 `systemctl restart` 失败：
+
+```
+Failed to execute /home/nativedev/instance/run: No such file or directory
+Main process exited, code=exited, status=203/EXEC
+```
+
+原因：`run` 脚本的 shebang 指向包内解释器，payload 被删后实例彻底不可启动，而 `active.json` 仍指向已消失的 release。
+
+根因：`%preun` 守卫检查的是旧布局路径 `/opt/ai-device/instances`、`/var/lib/ai-device/manager`，而当前实际登记在 `/var/lib/ai-device/native`（`register` 的 registry 是参数，无内建默认值），实例根在普通用户家目录。**守卫路径与实际布局完全不匹配，等于没有守卫。** DEB 的 `prerm` 同一组路径，缺陷相同。
+
+修复：两包守卫都补上 `/var/lib/ai-device/native`，并增加"存在 `ai-device-client-*.service` 登记 unit 即拒绝"这一不依赖路径约定的判据。
+
+### 缺陷二：卸载不彻底，且导致后续无法安装
+
+修复守卫后又发现：卸载成功后 `packages/0.2.2-native1` 残留 **43 个 `.pyc`**（`runtime/lib/python3.13/{json,re,pathlib,collections,encodings}/__pycache__`），bootstrap 也残留。这些是包内解释器运行时写出的字节码缓存，不在包清单内。
+
+后果有两层：
+1. 目录非空，`%pretrans` 的 `posix.stat('/opt/ai-device/packages')` 命中，判为"existing native installation"，**之后任何安装都被拒绝**（实测 `install skipped`）。
+2. rpm 卸载留下空父目录同理——已由第 290 节的 `%dir` 修复解决。
+
+修复分三处：
+- 构建完成后 `find ... -type d -name __pycache__ -prune -exec rm -rf {} +`，交付干净 payload（DEB 同样受益）。
+- DEB `prerm` 用 `find` 清理运行期缓存。
+- RPM `%preun` 用 Lua `drop_caches` 递归清理（无 `find` 可用）。
+
+修复后 rpm 清单不再含 pyc（`rpm -qlp | grep -c pycache` 为 0），卸载无 warning。
+
+### 验收
+
+`scripts/accept-native-uninstall-guard-76c4060.sh`，**每步真实断言**，失败即非零退出：
+
+| 场景 | 期望 | DEB | RPM |
+| --- | --- | --- | --- |
+| 干净主机卸载 | 允许 | 通过 | 通过 |
+| 卸载后布局目录 | 不留空目录 | 通过 | 通过 |
+| 干净卸载后重装 | 允许 | 通过 | 通过 |
+| 已登记且运行中卸载 | 拒绝 | 通过 | 通过 |
+| 拒绝后 payload/实例/运行态 | 完好 | 通过 | 通过 |
+| 移除登记后卸载 | 允许 | 通过 | 通过 |
+| 卸载后实例数据 | 保留 | 通过 | 通过 |
+| 卸载后包目录残留文件 | 无 | 通过 | 通过 |
+| 卸载后再次安装 | 允许 | 通过 | 通过 |
+
+日志：DEB `20261028-210031`、RPM `20261028-210050`（均为 r6 制品的干净容器）。
+
+### 制品
+`build/native-packages-p1-76c4060-r6/`，源码 `76c4060`：
+
+| 包 | SHA256 |
+| --- | --- |
+| `.deb` | `d04bf54d9f5012fe9f318e70683fcc5932c2a6362fa08131173a81694db57e49` |
+| `.rpm` | `1d3766db5b02954539e215425b2068656b2c8c3ae44a8eaff0d4faf1ec6c7b64` |
+
+（第 290 节的 r1 制品保留未删，其 `2c2b2b79...`/`7a427beb...` 不含本节修复。）
+
+回归：**1485 passed, 17 skipped, 5 warnings**，Ruff 通过。新增 4 个测试锁定守卫语义与缓存清理。
+
+### 边界
+- 守卫是"存在登记 unit 即拒绝"，仍是粗粒度；没有正式的 unregister 命令，验收脚本用删除 registry 记录模拟管理员移除，**不代表产品已提供该入口**。
+- DEB 卸载仍会产生 `directory not empty so not removed` 之外的正常清理；不证明所有运行时产物都被枚举。
+- 未验证：卸载与升级并发、helper 自身 unit 的卸载、实机与真实包管理器策略差异。
+- 不调查恶意 root 场景；守卫目的是一致性与数据保留，不是安全边界。
