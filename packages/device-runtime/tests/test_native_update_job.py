@@ -1455,3 +1455,29 @@ def test_worker_records_start_even_when_apply_import_fails(transaction, monkeypa
         job.main()
     # Start evidence survived the failure that happened after it.
     assert recorded == [(str(transaction.parent.parent), "probe", "one", "a" * 64)]
+
+
+def test_null_evidence_is_not_treated_as_absent(transaction, monkeypatch):
+    """A file containing JSON null must not read as "no evidence yet".
+
+    Absence means "not written"; null means "written and corrupt". Collapsing
+    them lets a damaged apply-intent be silently skipped.
+    """
+    monkeypatch.setattr(job, "_boot_id", lambda: BOOT)
+    _job_intent_for(transaction)
+    path = transaction.with_suffix(".apply-intent.json")
+    path.write_text("null")
+    with pytest.raises(job.JobError, match="evidence is null"):
+        job.observe_job(
+            SimpleNamespace(registry=transaction.parent.parent),
+            "probe",
+            "one",
+            runner=_unit(LOADED_FAILED),
+        )
+
+
+def test_missing_evidence_still_reads_as_none(transaction):
+    """The absence path must keep returning None, not raise."""
+    missing = transaction.with_suffix(".sender.json")
+    assert not missing.exists()
+    assert job._read_job_evidence(missing) is None

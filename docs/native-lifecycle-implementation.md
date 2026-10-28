@@ -2356,3 +2356,30 @@ worker 在 `main()` 中**先写** `.job-run-start.json`，再做任何 apply 相
 - `_boot_id` 的格式校验：boot_id 参与「记录是否来自本次启动」的判断，格式错误必须拒绝而非猜测。
 - duplicate-start 拒绝：`_save_new` 的 no-replace 语义天然提供，几乎零成本，且防止同一次派发被启动两次。
 - intent 摘要复核：防止 run-start 与 task intent 错配，是这条证据成立的前提，不能省。
+
+
+## 279. 修复：`null` 证据被当作「不存在」
+
+### 问题
+`_read_job_evidence` 对不存在的文件返回 `None`，但文件内容为 JSON `null` 时 `json.loads` 同样返回 `None`。两者因此无法区分。
+
+实测（root 容器，`20261028-170329`）：
+
+| 场景 | 修复前 | 修复后 |
+| --- | --- | --- |
+| 无 apply-intent 文件 | `apply_intent_present=false` | 不变 |
+| apply-intent 内容为 `null` | **被接受**，`apply_intent_present=false` | `JobError: job evidence is null` |
+| sender 为 `null` 且无 apply-intent | 被孤儿检查拒绝 | 不变 |
+
+即：一个损坏或被篡改的 apply-intent 会被静默降级成「还没写」，而「没有 apply-intent」与「有但坏了」在语义上差别很大——前者是尚未开始，后者是证据被破坏。
+
+### 修复
+`_read_job_evidence` 在解析后显式拒绝 `None`，区分「文件不存在」与「内容是 null」。改动 4 行。
+
+### 验证
+- 新增 `test_null_evidence_is_not_treated_as_absent`、`test_missing_evidence_still_reads_as_none`（后者锁住缺失路径仍返回 None，防止修过头）。
+- 容器复验：null 证据被拒，真缺失行为不变（`20261028-170520`）。
+- 完整回归 **1454 passed, 16 skipped**，ruff 通过。
+
+### 影响面
+只影响已有的 job 证据读取路径，不新增状态、字段或门禁。所有生产永拒保持原样。

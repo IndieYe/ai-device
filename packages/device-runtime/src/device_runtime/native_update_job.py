@@ -387,18 +387,27 @@ def _require_proven_retirement_fence():
 
 
 def _read_job_evidence(path):
-    """Read an existing regular evidence file; absence differs from junk."""
+    """Read an existing regular evidence file; absence differs from junk.
+
+    A file containing JSON `null` parses to None, which would be indistinguishable
+    from absence and would let corrupt evidence be silently ignored. Reject it
+    here: every caller treats a missing file as "no evidence yet", which is a
+    materially weaker statement than "evidence is malformed".
+    """
     if not os.path.lexists(path):
         return None
     try:
         helper._trusted(path)
         if not stat.S_ISREG(path.lstat().st_mode):
             raise JobError("job evidence must be a regular file")
-        return json.loads(path.read_bytes())
+        value = json.loads(path.read_bytes())
     except helper.HelperError as exc:
         raise JobError("job evidence is not trusted") from exc
     except OSError as exc:
         raise JobError("job evidence is unavailable") from exc
+    if value is None:
+        raise JobError("job evidence is null")
+    return value
 
 
 def retire_closed_job(manager, instance_id, operation_id):
