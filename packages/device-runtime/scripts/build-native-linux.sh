@@ -61,11 +61,11 @@ if [ -e /opt/ai-device/packages ] || [ -L /opt/ai-device/packages ] || [ -e /opt
  echo 'existing native versioned layout; helper transaction required' >&2
  exit 1
 fi
-if [ -e /opt/ai-device/instances ] || [ -e /var/lib/ai-device/manager ] || [ -e /opt/ai-device/bootstrap/0.2.2-native1 ]; then
+if [ -e /opt/ai-device/instances ] || [ -L /opt/ai-device/instances ] || [ -e /var/lib/ai-device/manager ] || [ -L /var/lib/ai-device/manager ] || [ -e /opt/ai-device/bootstrap/0.2.2-native1 ] || [ -L /opt/ai-device/bootstrap/0.2.2-native1 ]; then
  echo 'native lifecycle helper transaction required; no files have been replaced' >&2
  exit 1
 fi
-if [ -e /opt/ai-device/packages/0.2.2-native1 ]; then
+if [ -e /opt/ai-device/packages/0.2.2-native1 ] || [ -L /opt/ai-device/packages/0.2.2-native1 ]; then
  echo 'existing native payload; in-place package replacement is not yet supported' >&2
  exit 1
 fi
@@ -86,7 +86,7 @@ EOF
 #!/bin/sh
 set -eu
 for path in /opt/ai-device/instances /var/lib/ai-device/manager /etc/systemd/system/ai-device-native-helper.service; do
- [ ! -e "$path" ] || { echo 'explicit instance/service uninstall required' >&2; exit 1; }
+ [ ! -e "$path" ] && [ ! -L "$path" ] || { echo 'explicit instance/service uninstall required' >&2; exit 1; }
 done
 EOF
  chmod 755 "$root/DEBIAN/prerm"
@@ -114,8 +114,9 @@ for _,path in ipairs(p) do
  if posix.stat(path) or posix.readlink(path) then error('existing native installation: helper transaction required') end
 end
 %preun -p <lua>
-if posix.stat('/opt/ai-device/instances') then error('explicit instance/service uninstall required') end
-if posix.stat('/var/lib/ai-device/manager') or posix.stat('/etc/systemd/system/ai-device-native-helper.service') then error('explicit helper uninstall required') end
+for _,path in ipairs({'/opt/ai-device/instances','/var/lib/ai-device/manager','/etc/systemd/system/ai-device-native-helper.service'}) do
+ if posix.stat(path) or posix.readlink(path) then error('explicit instance/service uninstall required') end
+end
 %files
 /opt/ai-device/packages/0.2.2-native1
 /usr/bin/ai-device-native-install

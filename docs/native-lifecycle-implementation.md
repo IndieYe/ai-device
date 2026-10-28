@@ -1994,3 +1994,10 @@ query-only、未接生产的监督候选在直接子回收结果未知时，不�
 定向测试 342 passed / 1 skipped；最新完整回归 1334 passed / 16 skipped，ruff 通过（`20261028-113858-b8c4b7.log`）。一次性隔离 Linux 使用旧 DEB 加当前源码覆盖、真实 socket 和跨进程文件锁，确认拒绝四个入口、socket/意图保留、daemon 持锁时另一进程无法获取监督者锁（`20261028-113853-116f32.log`）；服务监听循环为替身，未启动 Device/systemd，容器按授权删除。首次新增测试因缺导入失败、部署重构测试因缺局部变量失败，修正后重跑通过。
 
 此措施仅覆盖当前源码参与者，非完整生产封锁：`run_verified_helper_candidate` 在进入冻结候选自身 `serve` 前先执行候选验证，旧 snapshot 中的 `serve` 不会自动获得新检查；验证导入可派生后代，不能凭 daemon 锁空闲或 socket 不存在证明树已收口。已经运行的旧进程、包钩子、其他退休/更新入口、持久终态与管理员恢复仍需审计。DEB/RPM 覆盖保护和所有原有拒绝门禁不放宽；不得删除意图绕过。
+
+
+## 253. 包安装和卸载钩子拒绝断链路径
+
+审计发现 DEB preflight 对 instances 与 manager、DEB prerm 对实例目录/manager/helper unit 仅用 `-e`，断链 symlink 可能被误判为不存在；RPM preun 同样仅用 `posix.stat`。现对这些既有保护目标增加 `-L` 或 `posix.readlink` 拒绝；只收紧缺口，不赋予更新、卸载或恢复许可。固定版本 payload/bootstrap 子路径也显式检查符号链接。旧已构建包不自动更新。
+
+从构建脚本提取 DEB preflight/prerm 的定向测试 23 passed，覆盖空路径、文件和断链 symlink；RPM 为源码断言，未执行 Lua/RPM。一次性隔离 Linux 容器运行提取的脚本并核对断链条目保留（`20261028-114307-088350.log`），未执行真实包安装卸载，容器已删除。完整回归 1345 passed / 16 skipped，ruff 通过（`20261028-114316-6d7aa0.log`）。未构建新 DEB/RPM，实际包管理器事务、RPM 运行行为和目标系统验证仍待完成；不得视为覆盖全部监督意图入口。

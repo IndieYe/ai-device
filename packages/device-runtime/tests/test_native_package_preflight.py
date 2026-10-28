@@ -105,3 +105,50 @@ def test_packaged_helper_entry_disables_bytecode_writes():
         "exec /opt/ai-device/bootstrap/0.2.2-native1/runtime/bin/python3.13 "
         "-I -B -m device_runtime.native_helper" in script
     )
+
+
+@pytest.mark.parametrize("existing", ["instances", "manager"])
+def test_deb_preflight_refuses_dangling_management_symlink(tmp_path, existing):
+    source = (Path(__file__).parents[1] / "scripts/build-native-linux.sh").read_text()
+    script = source.split("cat > \"$work/preflight\" <<'EOF'\n", 1)[1].split("\nEOF", 1)[0]
+    root = tmp_path / "opt/ai-device"
+    manager = tmp_path / "var/lib/ai-device/manager"
+    script = script.replace("/opt/ai-device", str(root)).replace("/var/lib/ai-device/manager", str(manager))
+    path = manager if existing == "manager" else root / existing
+    path.parent.mkdir(parents=True)
+    path.symlink_to("missing")
+    result = subprocess.run(["/bin/sh"], input=script, text=True, capture_output=True, check=False)
+    assert result.returncode != 0 and path.is_symlink()
+
+
+@pytest.mark.parametrize("existing", [None, "instances", "manager", "service"])
+@pytest.mark.parametrize("kind", ["file", "dangling_symlink"])
+def test_deb_uninstall_refuses_existing_or_dangling_entry(tmp_path, existing, kind):
+    source = (Path(__file__).parents[1] / "scripts/build-native-linux.sh").read_text()
+    script = source.split("cat > \"$root/DEBIAN/prerm\" <<'EOF'\n", 1)[1].split("\nEOF", 1)[0]
+    root = tmp_path / "opt/ai-device"
+    manager = tmp_path / "var/lib/ai-device/manager"
+    service = tmp_path / "etc/systemd/system/ai-device-native-helper.service"
+    script = script.replace("/opt/ai-device", str(root)).replace(
+        "/var/lib/ai-device/manager", str(manager)
+    ).replace("/etc/systemd/system/ai-device-native-helper.service", str(service))
+    if existing:
+        path = {"instances": root / "instances", "manager": manager, "service": service}[existing]
+        path.parent.mkdir(parents=True)
+        if kind == "file":
+            path.touch()
+        else:
+            path.symlink_to("missing")
+    result = subprocess.run(["/bin/sh"], input=script, text=True, capture_output=True, check=False)
+    assert (result.returncode == 0) == (existing is None)
+    if existing:
+        assert path.is_file() if kind == "file" else path.is_symlink()
+
+
+def test_rpm_uninstall_guard_checks_dangling_entries():
+    source = (Path(__file__).parents[1] / "scripts/build-native-linux.sh").read_text()
+    script = source.split("%preun -p <lua>", 1)[1].split("%files", 1)[0]
+    for path in ("/opt/ai-device/instances", "/var/lib/ai-device/manager",
+                 "/etc/systemd/system/ai-device-native-helper.service"):
+        assert path in script
+    assert "posix.stat(path) or posix.readlink(path)" in script
