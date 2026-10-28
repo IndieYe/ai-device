@@ -1696,3 +1696,12 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 新增定向测试检查默认拒绝不写 intent、不获取包锁，隔离替身允许下锁内准备不重取实例事务、不启动外部进程、已有 intent 不重派；使用生产 `_transaction`、`Helper._lease` 和 `package_lease` 的真实独立文件描述符，验证 intent 保存时实例与包锁均拒绝竞争，事务退出后可重新取得（`20261028-082016-6c70ee.log`，更新/job 定向 150 通过）。既有派发测试额外跟踪实例→包锁顺序，验证 runner 仅在两锁释放后调用。完整 1220 通过、16 跳过（`20261028-082041-cb2c75.log`），ruff 与 diff 检查通过。
 
 真实锁测试为同进程独立 open，绑定、批准、snapshot 与生产门禁使用替身；不证明跨进程、实际 systemd、持锁身份、受控 handler/消息/invocation 或崩溃恢复。新准确包尚未构建验收，旧 helper 和 snapshot 不自动更新；生产派发、worker、恢复与覆盖保护不变，P1 未完成。
+
+
+## 217. 锁内准备拆分的准确 DEB 默认门禁验收
+
+从干净源码检查点 `513fb1d792aa43f4d1548d1b3dcde9904e7751b4` 离线构建未签名 DEB `build/native-packages-p1-513fb1d/ai-device-native-client_0.2.2-1_amd64.deb`，105242314 字节，SHA256 `7cba514a7db82e694373bd239dac821029092443c16e21ea22e1aeb8d6c94cdc`；Device wheel SHA256 `6a47513dd0562622d27075ad2c1d5848019c48531593abf7b39f8e355d191fac`，34 个 Python 模块与提交逐字节一致（`20261028-082339-7cc198.log`）。
+
+无网络隔离 systemd 容器安装惰性旧包夹具并解包准确 DEB，普通用户创建实例、登记、准备和批准；包内 worker、update、helper 模块与 wheel 字节一致。未修改生产门禁时，实际 `dispatch_job` 对新 ID 在写 intent 或调用 runner 前拒绝；人工保存匹配 intent 后同 ID 返回只观察、不重派；以该 snapshot 在真实隔离 systemd 中执行 worker，新动作默认拒绝，intent 和 active 不变且不创建 apply intent/sender/outcome（`20261028-082437-ac97b5.log`；`scripts/accept-native-worker-default-deny-513fb1d.sh`）。构建与验收专用容器均已回收（`20261028-082459-f25563.log`）。
+
+这是旧包惰性夹具加新 DEB 解包，不是干净包安装或实际升级；人工 intent 不证明真实派发、受控 handler、逐消息身份、invocation、worker 进程树或崩溃恢复。生产门禁及覆盖保护不变，旧包与 snapshot 不自动更新，P1 未完成。
