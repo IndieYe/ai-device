@@ -1951,3 +1951,12 @@ query-only、未接生产的监督候选在直接子回收结果未知时，不�
 ## 247. 查询中间后代先退出的收养时序
 
 扩展第245节真实 query handler 与两代测试替身场景：监督停止并回收 handler 后，通过已持 pidfd 仅终止明确的中间替身，确认孙进程仍存活；通过 `/proc/<grandchild>/status` 观察其 PPid 已变为监督者，双锁仍不可重取。显式释放孙进程后观察退出，监督正常结束、双锁重取（`DEVICE_SUPERVISOR_MODE=intermediate-exit`，`20261028-105641-cf9bd4.log`）。一次性无网络容器已删除；真实 systemctl、外部 job、父监督崩溃恢复及持久围栏不在实验范围，生产门禁不变。
+
+
+## 248. 监督持久意图原语与跨锁反例
+
+真实 query handler 的隔离替身运行时，daemon 双锁与 package EX 可同时取得（`20261028-110016-8c5d3f.log`）；两类锁不天然互斥。该测试不执行包动作，不证明现有生产事务可越过其他门禁；但不能据 daemon 双锁推断包事务被封闭。
+
+新增未接生产、未接入查询监督候选的 `_publish_query_supervisor_intent` 原语：调用方必须自行持有全部参与者的共同租约，固定文件名 no-replace 发布绑定 run ID 和 snapshot digest 的意图，使用既有文件 fsync、硬链接和目录 fsync 路径；已存在、坏文件、断链符号链接或发布不确定均拒绝，不自动删除、退休或恢复。该函数不验证实际持锁，不提供跨入口保护、发布后可运行证明或持续身份。Linux 源码覆盖旧包的两进程竞争仅一方成功，目录 fsync 注入失败后可见意图保留且不覆盖（`scripts/accept-native-query-intent-source.sh`，`20261028-110233-5c6c6e.log`）；注入不是掉电持久证明，容器已删除。
+
+完整回归首次 1315 passed / 16 skipped / 1 failed，失败为安装 runner 子进程就绪超时（`20261028-110302-8ab0bd.log`），单项重跑通过（`20261028-110414-663094.log`），完整重跑 1316 passed / 16 skipped（`20261028-110425-223a52.log`）；首次超时根因未知。ruff 通过。下一步须设计与 package SH/EX、daemon 及所有旧入口一致的锁序、意图观察和安全终态；不可仅把本原语接到单个入口后声称已形成持久围栏，生产门禁继续关闭。

@@ -121,3 +121,76 @@ def test_adopted_children_unknown_does_not_become_echild(monkeypatch):
     monkeypatch.setattr(b.os, 'waitpid', fail)
     with pytest.raises(OSError, match='unknown wait error'):
         b._wait_adopted_query_children()
+
+
+def test_query_intent_publication_is_no_replace(tmp_path, monkeypatch):
+    monkeypatch.setattr(b.helper, '_path', lambda path: path)
+    monkeypatch.setattr(b.helper, '_trusted', lambda *_a, **_kw: None)
+    intent = b._publish_query_supervisor_intent(tmp_path, run_id='a'*32, snapshot_sha256='b'*64)
+    path = tmp_path / 'query-supervisor.intent.json'
+    before = path.read_bytes()
+    assert intent['run_id'] == 'a'*32
+    with pytest.raises(b.BootstrapError, match='already exists'):
+        b._publish_query_supervisor_intent(tmp_path, run_id='c'*32, snapshot_sha256='b'*64)
+    assert path.read_bytes() == before
+
+
+def test_query_intent_rejects_existing_dangling_symlink(tmp_path, monkeypatch):
+    monkeypatch.setattr(b.helper, '_path', lambda path: path)
+    monkeypatch.setattr(b.helper, '_trusted', lambda *_a, **_kw: None)
+    path = tmp_path / 'query-supervisor.intent.json'
+    path.symlink_to(tmp_path / 'missing')
+    with pytest.raises(b.BootstrapError, match='already exists'):
+        b._publish_query_supervisor_intent(tmp_path, run_id='a'*32, snapshot_sha256='b'*64)
+    assert path.is_symlink()
+
+
+def test_query_intent_directory_fsync_failure_is_unknown(tmp_path, monkeypatch):
+    import stat
+
+    monkeypatch.setattr(b.helper, '_path', lambda path: path)
+    monkeypatch.setattr(b.helper, '_trusted', lambda *_a, **_kw: None)
+    real_fsync = b.os.fsync
+
+    def fsync(fd):
+        if stat.S_ISDIR(b.os.fstat(fd).st_mode):
+            raise OSError('injected directory fsync failure')
+        return real_fsync(fd)
+
+    monkeypatch.setattr(b.os, 'fsync', fsync)
+    with pytest.raises(b.BootstrapError, match='failed or unknown'):
+        b._publish_query_supervisor_intent(tmp_path, run_id='a'*32, snapshot_sha256='b'*64)
+    path = tmp_path / 'query-supervisor.intent.json'
+    assert path.exists()
+    with pytest.raises(b.BootstrapError, match='already exists'):
+        b._publish_query_supervisor_intent(tmp_path, run_id='a'*32, snapshot_sha256='b'*64)
+
+
+@pytest.mark.parametrize('run_id,digest', [('a'*31, 'b'*64), ('a'*32, 'b'*63), (True, 'b'*64)])
+def test_query_intent_rejects_invalid_input_before_publish(tmp_path, run_id, digest):
+    with pytest.raises(b.BootstrapError, match='invalid query supervisor'):
+        b._publish_query_supervisor_intent(tmp_path, run_id=run_id, snapshot_sha256=digest)
+    assert not list(tmp_path.iterdir())
+
+
+def test_query_intent_file_fsync_failure_has_no_published_intent(tmp_path, monkeypatch):
+    monkeypatch.setattr(b.helper, '_path', lambda path: path)
+    monkeypatch.setattr(b.helper, '_trusted', lambda *_a, **_kw: None)
+
+    def fail(_fd):
+        raise OSError('injected file fsync failure')
+
+    monkeypatch.setattr(b.os, 'fsync', fail)
+    with pytest.raises(b.BootstrapError, match='failed or unknown'):
+        b._publish_query_supervisor_intent(tmp_path, run_id='a'*32, snapshot_sha256='b'*64)
+    assert not (tmp_path / 'query-supervisor.intent.json').exists()
+
+
+def test_query_intent_does_not_accept_malformed_existing_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(b.helper, '_path', lambda path: path)
+    monkeypatch.setattr(b.helper, '_trusted', lambda *_a, **_kw: None)
+    path = tmp_path / 'query-supervisor.intent.json'
+    path.write_bytes(b'not-json')
+    with pytest.raises(b.BootstrapError, match='already exists'):
+        b._publish_query_supervisor_intent(tmp_path, run_id='a'*32, snapshot_sha256='b'*64)
+    assert path.read_bytes() == b'not-json'

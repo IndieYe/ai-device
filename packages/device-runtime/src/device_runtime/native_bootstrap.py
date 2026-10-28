@@ -513,6 +513,36 @@ def _reap_gated_child_waitpid(pid, *, deadline):
         time.sleep(0.01)
 
 
+def _publish_query_supervisor_intent(registry, *, run_id, snapshot_sha256):
+    """Publish a one-use candidate intent; not a cross-entry fence.
+
+    The caller must hold all participating leases and must not start any
+    subprocess before successful return. Existing or uncertain publication is
+    not reusable. No automatic retirement or recovery is implemented.
+    """
+    if not isinstance(run_id, str) or not re.fullmatch(r"[0-9a-f]{32}", run_id):
+        raise BootstrapError("invalid query supervisor run id")
+    if not isinstance(snapshot_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", snapshot_sha256):
+        raise BootstrapError("invalid query supervisor snapshot digest")
+    registry = helper._path(registry)
+    helper._trusted(registry, directory=True)
+    intent = registry / "query-supervisor.intent.json"
+    if os.path.lexists(intent):
+        raise BootstrapError("query supervisor intent already exists; remains unknown")
+    value = {
+        "schema_version": 1,
+        "state": "query_supervisor_intent",
+        "run_id": run_id,
+        "snapshot_sha256": snapshot_sha256,
+        "protocol": "query-supervisor-intent-v1",
+    }
+    try:
+        helper._save_new(intent, value)
+    except (OSError, ValueError) as exc:
+        raise BootstrapError("query supervisor intent publication failed or unknown") from exc
+    return value
+
+
 @contextmanager
 def _exclusive_query_subreaper():
     """Dedicated process only: no existing children or competing child waiters."""

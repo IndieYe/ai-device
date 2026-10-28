@@ -60,6 +60,9 @@ b._supervise_candidate_queries(sys.argv[1],"candidate",registry=sys.argv[2],sock
   end=time.monotonic()+8
   while not (ready.exists() and grand.exists()) and p.poll() is None and time.monotonic()<end: time.sleep(.02)
   assert ready.exists() and grand.exists(), 'real query did not start test worker tree'
+  # Locks are cooperative and distinct: never infer package exclusion from daemon ownership.
+  with h.package_lease(registry,exclusive=True):
+   print('PACKAGE_EX_CAN_COEXIST_WITH_RUNNING_QUERY_SUPERVISOR',flush=True)
   fds=[os.pidfd_open(int(path.read_text())) for path in (handler,ready,grand)]
   mode=os.environ.get('DEVICE_SUPERVISOR_MODE','unknown-wait')
   assert mode in ('unknown-wait','crash','intermediate-exit')
