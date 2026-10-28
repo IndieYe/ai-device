@@ -2147,3 +2147,10 @@ job/update 定向 164 passed；完整回归 1358 passed / 16 skipped、ruff 通�
 - `native_preparation_lease` 只用 `is_file()` 粗判标记，但 `native_prepare._binding` 随后用 `_trusted_marker` 要求普通文件、root 所有、无组/其他写权限，并校验 schema2 绑定、身份、unit 与 active 摘要，因此不构成绕过。
 
 仍存在的真实缺口：未部署受管标记的旧实例可以正常走旧升级器启停真实 unit，这部分不受新协议约束，只能靠维护窗口人工迁移；旧包本身也不会因新源码而更新。本轮未调用任何真实 systemd unit，未在真实设备验证该拒绝路径，完整回归未因本次文档更正而变化（仍为 1417 passed / 16 skipped）。
+
+
+## 272. 真实 systemd job 终态探测脚本（已编写，未执行）
+
+新增 `scripts/probe-native-job-terminal-states.py`，在一次性 systemd 容器内用当前只读 `observe_job` 覆盖三种此前无证据的终态：`/bin/false` 失败 unit、排队 job 被 `systemctl cancel`、unit 被清理后 `LoadState=not-found`；每种都断言 `retry_allowed=false` 且 `fence_retained=true`。脚本强制 `DEVICE_NATIVE_DISPOSABLE_PROBE=yes`、root、PID1 为 systemd，并在 `/opt/ai-device/instances` 存在时拒绝运行，避免触碰已安装实例。全部 unit 为惰性 fixture，不执行真实包事务。
+
+**本轮未执行**：脚本尚未在容器中运行，任何终态结论都还没有实际证据，不能据此声称 systemd 终态已验证。上一轮已确认可用的镜像 `device-qual-systemd-amd64-ses13838:probe` 默认 `Cmd` 为 `/sbin/init`。接续第一步应为：只读挂载 `packages/device-runtime/src/device_runtime` 到 `/source`，无网络运行该脚本，把 `TERMINAL_STATE_SUMMARY` 与 `PROBE_OK` 作为证据记录，然后才更新第270/271节的未闭环项。若脚本失败，应先修正探测而非修改产品判定。
