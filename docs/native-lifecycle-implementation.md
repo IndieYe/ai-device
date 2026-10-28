@@ -2541,3 +2541,31 @@ worker 在 `main()` 中**先写** `.job-run-start.json`，再做任何 apply 相
 - 单测用 `monkeypatch` 把 `geteuid` 设为 0、`_trusted` 置空，实际以 uid 501 运行。它证明阻塞行为，**不证明真 root 下的权限路径**；后者由容器另行验证。二者不可互相替代。
 - 容器镜像缺 `packaging` 与 `pydantic`，`native_update` 无法导入。我一度想用自写同名函数「复现」，那等于测自己写的代码，已放弃；最终改为验证真实 `_digest` 与权限不对称事实，并如实标注 `_read_regular` 只由单测覆盖。
 - 仍有一处未覆盖：`native_prepare.py` 的 `active.json` 读取要求非 root 且目录属主是自己，风险低但同样没有 `S_ISREG` 前置检查，本轮未改。
+
+
+## 285. 收口：native_prepare 的 active.json / instance.json 读取
+
+### 复现
+第 284 节标注的遗留项。`_binding` 里 `active.json` 是裸 `read_bytes()`，`instance.json` 同样。用既有 fixture 把 `active.json` 换成 FIFO，子进程调用 `_binding`：**阻塞满 5 秒被 SIGKILL**（`20261028-185806`）。
+
+与 284 的差别：这里运行身份是实例属主本人（`_binding` 明确拒绝 root），所以**不构成跨权限边界**。但仍是无限阻塞——FIFO 无写入方时 `read_bytes()` 永不返回，准备流程静默挂住。
+
+### 修复
+`native_prepare.py` 增加 `_read_regular(path, error)`，与 `native_update.py` 同名同形：先 `lstat` 验 `S_ISREG`，再读。`instance.json` 与 `active.json` 两处改用它。
+
+### 同一函数内已核查无需改的位置
+| 读取 | 前置 | 结论 |
+| --- | --- | --- |
+| `marker_path` | `_trusted_marker`（含 `S_ISREG` + root 属主） | 已安全 |
+| `root / "run"` 等 digest | `helper._digest`（283 已要求普通文件） | 已安全 |
+| `instance.json`、`active.json` | 无 | **本次修复** |
+
+### 验证
+- FIFO 从阻塞改为立即 `PreparationError`。
+- 新增 `_read_regular` 正反例、`instance.json` FIFO 用例。
+- 完整回归 **1474 passed, 17 skipped**，ruff 通过（`20261028-185857`）。
+
+### 边界
+- `_binding` 的其余读取（`retire_preparation`、候选回执等）在 `native_prepare.py` 中还有若干裸读，多位于 `native-candidates` 目录、由本进程此前写入，本轮未逐一加检查。
+- 新增两个 fork 测试带来 2 条 `DeprecationWarning`（多线程进程 fork）。测试在子进程内只做纯读取，未继承锁，但这是已知的测试侧风险，不是产品缺陷。
+- 修复只改变「非普通文件」的失败方式，不改变任何合法路径的判断结果。

@@ -1,5 +1,6 @@
 import fcntl
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -320,3 +321,108 @@ def test_retirement_requires_linux_administrator(tmp_path, monkeypatch):
     monkeypatch.setattr(np.os, "geteuid", lambda: 12345)
     with pytest.raises(np.PreparationError, match="administrator"):
         np.retire_preparation(str(tmp_path), "one")
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs POSIX FIFOs")
+def test_binding_refuses_fifo_active_pointer_without_blocking(tmp_path, monkeypatch):
+    """active.json is owner-controlled, so its type must be checked before reading.
+
+    _binding runs as the instance owner, not root, so this is not a privilege
+    boundary crossing. It is still an unbounded read: a FIFO with no writer
+    blocks preparation with no error.
+    """
+    import signal
+    import time
+
+    root = tmp_path / "instance"
+    root.mkdir()
+    for name, value in [
+        ("run", "{}"),
+        ("instance.json", '{"instance_id":"probe"}'),
+        ("config/roles.json", "{}"),
+    ]:
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(value)
+    unit = tmp_path / "client.service"
+    unit.write_text("unit")
+    binding = {
+        "uid": root.stat().st_uid,
+        "root": str(root),
+        "instance_id": "probe",
+        "unit_path": str(unit),
+        "unit_sha256": np.helper._digest(unit),
+    }
+    for name, key in [
+        ("run", "runner_sha256"),
+        ("instance.json", "identity_sha256"),
+        ("config/roles.json", "roles_sha256"),
+    ]:
+        binding[key] = np.helper._digest(root / name)
+    (root / np.MARKER).write_text(json.dumps({"schema_version": 2, "binding": binding}))
+    monkeypatch.setattr(np.sys, "platform", "linux")
+    monkeypatch.setattr(np.helper, "_trusted_marker", lambda _: None)
+    monkeypatch.setattr(np.helper, "_trusted", lambda _: None)
+
+    os.mkfifo(root / "active.json", 0o600)
+
+    pid = os.fork()
+    if pid == 0:  # pragma: no cover - child
+        try:
+            np._binding(root)
+        except np.PreparationError:
+            os._exit(21)
+        except BaseException:  # noqa: BLE001
+            os._exit(22)
+        os._exit(0)
+
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        done, status = os.waitpid(pid, os.WNOHANG)
+        if done:
+            assert os.waitstatus_to_exitcode(status) == 21
+            return
+        time.sleep(0.02)
+    os.kill(pid, signal.SIGKILL)
+    os.waitpid(pid, 0)
+    pytest.fail("_binding blocked on FIFO active.json instead of refusing")
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs POSIX FIFOs")
+def test_read_regular_refuses_fifo_and_device(tmp_path):
+    path = tmp_path / "evidence.json"
+    path.write_bytes(b"{}")
+    assert np._read_regular(path, "must be regular") == b"{}"
+    fifo = tmp_path / "pipe"
+    os.mkfifo(fifo, 0o600)
+    with pytest.raises(np.PreparationError, match="must be regular"):
+        np._read_regular(fifo, "must be regular")
+
+
+def test_binding_refuses_fifo_instance_identity(tmp_path, monkeypatch):
+    """instance.json is read the same way; keep both carriers covered."""
+    root = tmp_path / "instance"
+    root.mkdir()
+    for name, value in [("run", "{}"), ("config/roles.json", "{}")]:
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(value)
+    unit = tmp_path / "client.service"
+    unit.write_text("unit")
+    binding = {
+        "uid": root.stat().st_uid,
+        "root": str(root),
+        "instance_id": "probe",
+        "unit_path": str(unit),
+        "unit_sha256": np.helper._digest(unit),
+    }
+    for name, key in [("run", "runner_sha256"), ("config/roles.json", "roles_sha256")]:
+        binding[key] = np.helper._digest(root / name)
+    binding["identity_sha256"] = "0" * 64
+    (root / np.MARKER).write_text(json.dumps({"schema_version": 2, "binding": binding}))
+    monkeypatch.setattr(np.sys, "platform", "linux")
+    monkeypatch.setattr(np.helper, "_trusted_marker", lambda _: None)
+    os.mkfifo(root / "instance.json", 0o600)
+    # _digest rejects the FIFO before the identity read is reached.
+    with pytest.raises((np.PreparationError, np.helper.HelperError)):
+        np._binding(root)

@@ -8,6 +8,7 @@ import argparse
 import fcntl
 import hashlib
 import os
+import stat
 import sys
 from pathlib import Path
 
@@ -21,6 +22,18 @@ from .protocol import canonical
 
 class PreparationError(ValueError):
     pass
+
+
+def _read_regular(path, error):
+    """Read instance-owned evidence only when it is a regular file.
+
+    These paths sit in the owner's tree, and a FIFO there would block this
+    process with no error. Validate the type before any byte is read.
+    """
+    info = Path(path).lstat()
+    if not stat.S_ISREG(info.st_mode):
+        raise PreparationError(error)
+    return Path(path).read_bytes()
 
 
 def _binding(root):
@@ -43,13 +56,19 @@ def _binding(root):
     ):
         if helper._digest(root / relative) != binding.get(key):
             raise PreparationError("native instance binding changed")
-    identity = candidate._json((root / "instance.json").read_bytes())
+    identity = candidate._json(
+        _read_regular(
+            root / "instance.json", "instance identity must be a regular file"
+        )
+    )
     if identity.get("instance_id") != binding.get("instance_id"):
         raise PreparationError("instance identity differs")
     helper._trusted(Path(binding["unit_path"]))
     if helper._digest(Path(binding["unit_path"])) != binding.get("unit_sha256"):
         raise PreparationError("registered unit changed")
-    active = candidate._json((root / "active.json").read_bytes())
+    active = candidate._json(
+        _read_regular(root / "active.json", "active pointer must be a regular file")
+    )
     if active.get("roles") != ["client"]:
         raise PreparationError("single client instance required")
     return binding, active
