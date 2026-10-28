@@ -61,31 +61,41 @@ b._supervise_candidate_queries(sys.argv[1],"candidate",registry=sys.argv[2],sock
   while not (ready.exists() and grand.exists()) and p.poll() is None and time.monotonic()<end: time.sleep(.02)
   assert ready.exists() and grand.exists(), 'real query did not start test worker tree'
   fds=[os.pidfd_open(int(path.read_text())) for path in (handler,ready,grand)]
-  p.send_signal(signal.SIGTERM)
+  mode=os.environ.get('DEVICE_SUPERVISOR_MODE','unknown-wait')
+  assert mode in ('unknown-wait','crash')
+  p.send_signal(signal.SIGKILL if mode=='crash' else signal.SIGTERM)
   poll=select.poll(); poll.register(fds[0],select.POLLIN); assert poll.poll(5000),'handler still running'
-  end=time.monotonic()+5
-  while not failed.exists() and p.poll() is None and time.monotonic()<end: time.sleep(.02)
-  assert failed.exists(), 'adopted wait error not injected'
+  if mode=='crash':
+   assert p.wait(timeout=5)==-signal.SIGKILL
+  else:
+   end=time.monotonic()+5
+   while not failed.exists() and p.poll() is None and time.monotonic()<end: time.sleep(.02)
+   assert failed.exists(), 'adopted wait error not injected'
   for fd in fds[1:]:
    poll=select.poll(); poll.register(fd,select.POLLIN); assert not poll.poll(0),'worker died prematurely'
-  assert p.poll() is None, 'supervisor exited with live descendants'
-  for lease in (h._daemon_anchor,h._daemon_file_lease):
-   try:
-    with lease(registry): raise AssertionError('lease missing during handler descendants')
-   except h.HelperError as exc: assert 'already active' in str(exc)
+  if mode=='crash':
+   with h._daemon_lease_pair(registry): pass
+   print('SUPERVISOR_SIGKILL_RELEASES_LOCKS_WHILE_QUERY_DESCENDANTS_LIVE')
+  else:
+   assert p.poll() is None, 'supervisor exited with live descendants'
+   for lease in (h._daemon_anchor,h._daemon_file_lease):
+    try:
+     with lease(registry): raise AssertionError('lease missing during handler descendants')
+    except h.HelperError as exc: assert 'already active' in str(exc)
   release.touch()
   for fd in fds[1:]:
    poll=select.poll(); poll.register(fd,select.POLLIN); assert poll.poll(5000),'worker did not exit'
-  assert p.poll() is None, 'unknown adopted wait released leases'
-  for lease in (h._daemon_anchor,h._daemon_file_lease):
-   try:
-    with lease(registry): raise AssertionError('lease released on unknown adopted wait')
-   except h.HelperError as exc: assert 'already active' in str(exc)
-  allow.touch()
-  assert p.wait(timeout=10)!=0, 'unknown wait reported normal stop'
+  if mode=='unknown-wait':
+   assert p.poll() is None, 'unknown adopted wait released leases'
+   for lease in (h._daemon_anchor,h._daemon_file_lease):
+    try:
+     with lease(registry): raise AssertionError('lease released on unknown adopted wait')
+    except h.HelperError as exc: assert 'already active' in str(exc)
+   allow.touch()
+   assert p.wait(timeout=10)!=0, 'unknown wait reported normal stop'
   with h._daemon_lease_pair(registry): pass
   assert not list(registry.glob('op-probe-*.json'))
-  print('REAL_QUERY_HANDLER_MULTIGENERATION_UNKNOWN_WAIT_HOLDS_LEASE_UNTIL_REAPED')
+  if mode=='unknown-wait': print('REAL_QUERY_HANDLER_MULTIGENERATION_UNKNOWN_WAIT_HOLDS_LEASE_UNTIL_REAPED')
  finally:
   release.touch()
   allow.touch()

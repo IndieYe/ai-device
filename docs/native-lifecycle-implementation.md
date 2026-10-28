@@ -1939,3 +1939,10 @@ query-only、未接生产的监督候选在直接子回收结果未知时，不�
 一次性无网络容器中用普通用户完成离线实例安装并真实注册，运行 `_supervise_candidate_queries` 的真实私有 query listener，经 Unix socket 和逐消息凭据发送实际 query，保留 `Helper.handle`、实例绑定与 `Systemd.query` 路径，仅将 systemctl 可执行路径替换为有限寿命两代测试程序。监督停止时 handler 退出，两代替身仍存活，父监督继续持双锁；自然释放后回收并退出，未创建 start intent（`20261028-105020-3cb0ca.log`）。
 
 追加对 `_wait_adopted_query_children` 的测试注入：后代退出前后均持续报告未知，父监督继续持双锁；解除注入后回收并以非零退出，双锁才可重取（`scripts/accept-native-query-handler-tree-source.sh`，`20261028-105126-2744bd.log`）。旧 2cd3c17 DEB 加源码覆盖，专属容器已删除；未启动真实 Device 或 systemd。此实验不证明真实 systemctl 的外部委派、父监督被强杀/宿主崩溃后的持久 unknown、不可中断后代或完整生产 handler 身份，不解除生产门禁。
+
+
+## 246. 查询监督父进程 SIGKILL 的锁与后代反例
+
+在第245节真实注册、实际 query handler 加两代有限寿命 systemctl 替身的隔离场景中，对监督父进程发送 pidfd SIGKILL：handler 父死亡观察线程使 handler 退出，但两代替身仍存活，同时原 daemon 双锁可被重新取得。随后显式释放替身并用 pidfd 确认退出，专属容器已删除（`scripts/accept-native-query-handler-tree-source.sh` 的 `DEVICE_SUPERVISOR_MODE=crash`，`20261028-105304-b78b28.log`）。旧 DEB 加源码覆盖，未执行真实 systemctl 或 Device。
+
+因此第243—245节仅保护存活的监督者，锁空闲、直接 handler 已退出或 subreaper 标志均不能证明树已停止；监督者崩溃时后代收养者变化，必须设计持久未知围栏、所有相关入口一致拒绝及管理员可核验恢复，且考虑 fsync 发布不确定和宿主重启。现有生产 start/job/recovery/包围栏保持关闭；不能自动删除标记或靠杀未知 PID 解锁。此实验不证明实际 systemctl 派生同类后代或发生真实生产故障。
