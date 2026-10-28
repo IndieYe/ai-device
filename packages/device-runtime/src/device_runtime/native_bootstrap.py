@@ -17,6 +17,7 @@ import socket
 import stat
 import struct
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -563,12 +564,34 @@ def _gated_candidate_query_child(control, contents, registry, socket_path, *, gr
         candidate._serve_credential_queries_locked(registry, socket_path, group=group)
 
 
+def _start_parent_exit_watchdog(parent_pidfd):
+    """Exit this query-only child after parent death; not an action fence.
+
+    The caller owns a pidfd for the actual parent obtained before fork. This
+    observes eventual parent death, not atomic authorization, descendant exit,
+    or completion of external work. The child retains the fd until it exits.
+    """
+    if not _handshake_pidfd_alive(parent_pidfd):
+        raise BootstrapError("supervisor already exited")
+
+    def watch():
+        try:
+            poller = select.poll()
+            poller.register(parent_pidfd, select.POLLIN | select.POLLHUP | select.POLLERR)
+            poller.poll()
+        finally:
+            os._exit(1)
+
+    threading.Thread(target=watch, daemon=True, name="parent-pidfd-watchdog").start()
+
+
 def _supervise_candidate_queries(candidates_dir, version, *, registry, socket_path, group, expected_snapshot_sha256):
     """Unwired query-only supervisor candidate; no operation authorization.
 
     Requires a dedicated single-threaded Linux administrator process. The
-    registry stability precondition remains mandatory. Parent SIGKILL, escaped
-    descendants, external jobs and action fencing are NOT handled or proven.
+    registry stability precondition remains mandatory. Parent death is observed
+    asynchronously by the child; escaped descendants, external jobs and action
+    fencing are NOT handled or proven.
     """
     if sys.platform != "linux" or os.geteuid() != 0:
         raise BootstrapError("query supervisor requires Linux administrator identity")
@@ -596,15 +619,18 @@ def _supervise_candidate_queries(candidates_dir, version, *, registry, socket_pa
             parent, child_socket = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
             pid = None
             pidfd = None
+            self_pidfd = None
             try:
                 parent.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
                 if stops & signal.sigpending():
                     raise BootstrapError("query supervisor stopped before fork")
+                self_pidfd = os.pidfd_open(os.getpid())
                 pid = os.fork()
                 if pid == 0:
                     try:
                         parent.close()
                         signal.pthread_sigmask(signal.SIG_SETMASK, oldmask)
+                        _start_parent_exit_watchdog(self_pidfd)
                         _gated_candidate_query_child(
                             child_socket, contents, registry, socket_path, group=group,
                             deadline=time.monotonic() + 5,
@@ -628,6 +654,8 @@ def _supervise_candidate_queries(candidates_dir, version, *, registry, socket_pa
             finally:
                 parent.close()
                 child_socket.close()
+                if self_pidfd is not None:
+                    os.close(self_pidfd)
                 if pid is not None:
                     if pidfd is None:
                         # The child is gated and owns inherited leases; never use

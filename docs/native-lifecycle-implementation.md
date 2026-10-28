@@ -1875,3 +1875,12 @@ CLOEXEC 不阻止 fork 后、exec 前的继承，也不证明非并发代码、�
 首次隔离运行因 Python 默认 SIGINT handler 被误判而拒绝（`20261028-100438-063705.log`），修正为允许 Python 默认 handler 或系统默认，仍拒绝其他 handler。一次性无网络 Linux amd64/Rosetta 容器安装旧 2cd3c17 DEB 并覆盖当前源码，实际验证候选字节、双锁、门闩、start 拒绝、SIGTERM 后直接子进程回收及锁释放；注入校验阶段 SIGTERM，确认未 fork 且无 socket（`scripts/accept-native-query-supervisor-source.sh`、`20261028-100550-13cb66.log`）；容器已删除。完整回归 `1299 passed, 16 skipped`（`20261028-100601-bb4df7.log`），定向 `39 passed`（`20261028-100248-dccfbc.log`），ruff 通过。此为源码覆盖，非准确新包验收。
 
 **不可接生产的剩余风险**：父进程 SIGKILL 或崩溃不会由此候选收口子进程；子进程或后代可继承锁；回收超时后当前函数抛错并离开父侧锁作用域，不证明遗留进程或锁安全；未覆盖 fork→pidfd 窗口全部故障、SIGINT、竞争 waiter、异常后代、systemd invocation 和外部 job。不能凭该候选授权恢复或新动作，生产门禁和包保护不变，P1 未完成。
+
+
+## 238. query-only 子进程观察父进程死亡
+
+第237节未接生产的 query-only 监督候选在 fork 前以 `pidfd_open(getpid())` 固定父进程，子进程门闩前启动内部 pidfd 观察线程；父进程已死亡或观察线程无法启动时不进入候选，观察线程看到父 pidfd 就绪或自身观察异常则以 `_exit(1)` 结束该子进程。父侧正常完成后关闭自身 pidfd；该逻辑不接入生产入口、不授权任何动作。
+
+先以一次性无网络 Linux amd64/Rosetta 容器实际杀死夹具创建的监督父进程，复现查询子进程仍存活（`20261028-101023-e138fb.log`）；修改后相同隔离实验确认直接子进程退出、双锁可重新获取（`scripts/accept-native-supervisor-parent-death-source.sh`、`20261028-101129-ea215c.log`）。正常 SIGTERM 及验证期间终止无 fork 路径回归通过（`20261028-101140-e98856.log`），容器均已删除。完整回归 `1299 passed, 16 skipped`（`20261028-101150-169e10.log`，在新增观察线程前置失败测试之前）；补充定向 `22 passed`（`20261028-101310-4d18dc.log`），ruff 通过。容器使用旧 2cd3c17 DEB 覆盖当前源码，不是准确新包验收。
+
+父死亡观察是异步的，不能证明死亡瞬间没有动作或外部副作用；不覆盖后代、外部 systemd job、解释器挂起/不可中断内核态，也不证明 SIGKILL 后进程回收者及所有 FD 生命周期。第237节回收超时离开父锁作用域等风险仍存在；旧包不自动更新，生产门禁关闭，P1 未完成。
