@@ -146,6 +146,51 @@ def test_credential_frame_closes_remaining_fds_after_close_error(linux_credentia
             os.fstat(fd)
 
 
+def test_query_listener_sets_credentials_before_bind_and_holds_daemon_lease(linux_credentials, monkeypatch, tmp_path):
+    from contextlib import contextmanager
+
+    events = []
+    monkeypatch.setattr(helper.sys, "platform", "linux")
+    monkeypatch.setattr(helper.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(socket, "SO_PASSCRED", getattr(socket, "SO_PASSCRED", 16), raising=False)
+    monkeypatch.setattr(helper, "_trusted", lambda *_a, **_k: None)
+    monkeypatch.setattr(helper, "_path", lambda value: value)
+    monkeypatch.setattr(helper, "Helper", lambda registry: ("service", registry))
+
+    @contextmanager
+    def lease(_registry):
+        events.append("lock")
+        try:
+            yield 42
+        finally:
+            events.append("unlock")
+
+    class Listener:
+        def __enter__(self): return self
+        def __exit__(self, *_args): events.append("close")
+        def setsockopt(self, *_args): events.append("credentials")
+        def bind(self, _path): events.append("bind")
+        def listen(self, _backlog): events.append("listen")
+        def accept(self):
+            events.append("accept")
+            raise RuntimeError("stop test")
+
+    monkeypatch.setattr(helper, "_daemon_lease", lease)
+    monkeypatch.setattr(socket, "socket", lambda *_args: Listener())
+    monkeypatch.setattr(helper.os, "chown", lambda *_args: events.append("chown"))
+    monkeypatch.setattr(helper.os, "chmod", lambda *_args: events.append("chmod"))
+    with pytest.raises(RuntimeError, match="stop test"):
+        helper._serve_credential_queries(tmp_path, tmp_path / "query.sock", group=0)
+    assert events == ["lock", "credentials", "bind", "chown", "chmod", "listen", "accept", "close", "unlock"]
+
+
+def test_query_listener_rejects_unsupported_platform_before_lock(monkeypatch, tmp_path):
+    monkeypatch.setattr(helper.sys, "platform", "darwin")
+    monkeypatch.setattr(helper, "_daemon_lease", lambda *_args: pytest.fail("must not lock"))
+    with pytest.raises(helper.HelperError, match="requires Linux"):
+        helper._serve_credential_queries(tmp_path, tmp_path / "query.sock", group=0)
+
+
 class QueryConnection:
     def __init__(self):
         self.closed = False

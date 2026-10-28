@@ -1189,6 +1189,33 @@ def _serve_credential_query_once(service, connection, *, deadline):
             pass  # A lost response must not cause a second handler call.
 
 
+def _serve_credential_queries(registry, socket_path, *, group):
+    """Internal root-only query listener; not wired into the daemon or supervisor.
+
+    It does not authenticate the executing handler or authorize mutations.
+    The caller must ensure the stable-registry administrative precondition.
+    """
+    if sys.platform != "linux" or os.geteuid() != 0:
+        raise HelperError("query listener requires Linux administrator identity")
+    if not all(hasattr(socket, name) for name in (
+        "SO_PASSCRED", "SCM_CREDENTIALS", "SCM_RIGHTS", "MSG_CMSG_CLOEXEC"
+    )):
+        raise HelperError("per-message credentials unavailable")
+    with _daemon_lease(registry):
+        service = Helper(registry)
+        socket_path = _path(socket_path)
+        _trusted(socket_path.parent, directory=True)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
+            server.bind(str(socket_path))
+            os.chown(socket_path, 0, group)
+            os.chmod(socket_path, 0o600)
+            server.listen(8)
+            while True:
+                connection, _ = server.accept()
+                _serve_credential_query_once(service, connection, deadline=time.monotonic() + 5)
+
+
 @contextmanager
 def _socket_peer_process(connection):
     """Pin a Linux Unix-socket peer for observation, never authorize dispatch.

@@ -1814,3 +1814,12 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 一次性离线 Linux amd64/Rosetta 容器安装旧 bcb6ec5 包并仅在容器内覆盖当前源码，真实 SCM_RIGHTS 接收后、拒绝关闭前观察 FD_CLOEXEC，并启动 close_fds=False 的测试子进程核实 exec 后无法访问该 FD；接收器拒绝并无 FD 净增（`scripts/accept-native-credential-cloexec-source.sh`、`20261028-092252-7e86c0.log`）。测试容器已删除；此为源码覆盖实验，非准确新包验收。
 
 CLOEXEC 不阻止 fork 后、exec 前的继承，也不证明非并发代码、直接子进程、消息处理者、持续锁或动作授权；现有生产 listener 不使用该候选接收器，生产门禁未改变。P1 未完成。
+
+
+## 231. 未接生产的逐消息凭据查询监听器
+
+新增内部 `_serve_credential_queries`：仅 Linux root、受稳定 registry 管理前提约束，持现有 daemon 双锁，在绑定 socket 前启用 SO_PASSCRED，以 0600 权限监听并对每个连接调用既有一次性 root 凭据查询处理器；只允许 query，不接入 CLI、生产 daemon、start、更新或恢复。测试覆盖开锁、设置凭据、bind/listen、异常关闭及释放的次序和平台拒绝。定向 `212 passed, 1 skipped`（`20261028-092734-e8896e.log`），完整 `1278 passed, 16 skipped`（`20261028-092834-c9157b.log`），ruff 通过（`20261028-092737-e8cd45.log`）。
+
+一次性离线 Linux amd64/Rosetta 容器安装旧 bcb6ec5 包并覆盖当前 helper 源码，真实执行新监听循环：缺登记的 query、start 和重复 action 均返回固定拒绝、每次连接关闭，监听期间目录锁与文件锁均冲突，测试进程退出后可重新获取（`scripts/accept-native-query-listener-source.sh`、`20261028-092829-a6c6cf.log`）；容器已删除。该实验未注册实例或运行 systemd，不验证成功查询，也不是准确新包验收。
+
+监听器仍不证明受控监督、处理者代码、当前 invocation 或消息动作授权；旧生产 listener 和所有默认拒绝门禁不变。受控直接子进程创建、锁交接、故障回收和外部 job 终态仍未完成，P1 未完成。
