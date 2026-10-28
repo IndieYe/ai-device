@@ -82,16 +82,28 @@ echo "== payload and instance must survive the refusal =="
 [ -e "$BASE" ] || fail "payload was deleted despite refusal"
 [ -e /home/nativedev/instance/active.json ] || fail "instance data was deleted"
 [ "$(systemctl is-active "$UNIT")" = active ] || fail "running instance was disturbed"
+
+echo "== unregister must refuse while the service is still running =="
+if "$BASE/runtime/bin/python3.13" -I - <<PY >/dev/null 2>&1
+import sys
+sys.path.insert(0, "$SITE")
+from device_runtime import native_helper as nh
+nh.unregister("$REGISTRY", "$UNIT_DIR", instance_id="dev1")
+PY
+then fail "unregister accepted a running instance"; fi
+[ -e "$UNIT_DIR/$UNIT" ] || fail "unit disappeared after refused unregister"
 echo "REFUSE_OK"
 
 echo "== drop the registration record, then erase =="
-# There is no unregister command yet, so the administrator removal path is
-# simulated by deleting the registry record and the unit, which is exactly the
-# state the state-directory guard requires.
 systemctl stop "$UNIT"
-systemctl disable "$UNIT" >/dev/null 2>&1 || true
-rm -f "$UNIT_DIR/$UNIT"
-rm -rf "$REGISTRY"
+"$BASE/runtime/bin/python3.13" -I - <<PY >/dev/null || fail "unregister refused"
+import sys
+sys.path.insert(0, "$SITE")
+from device_runtime import native_helper as nh
+print(nh.unregister("$REGISTRY", "$UNIT_DIR", instance_id="dev1"))
+PY
+[ ! -e "$UNIT_DIR/$UNIT" ] || fail "unit survived unregister"
+[ ! -e "$REGISTRY/dev1.json" ] || fail "registry record survived unregister"
 systemctl daemon-reload
 if [ "$KIND" = deb ]; then
     dpkg --purge ai-device-native-client >/dev/null || fail "purge after registration removal was refused"

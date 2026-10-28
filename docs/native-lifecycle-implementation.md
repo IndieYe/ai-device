@@ -2855,3 +2855,64 @@ Main process exited, code=exited, status=203/EXEC
 - DEB 卸载仍会产生 `directory not empty so not removed` 之外的正常清理；不证明所有运行时产物都被枚举。
 - 未验证：卸载与升级并发、helper 自身 unit 的卸载、实机与真实包管理器策略差异。
 - 不调查恶意 root 场景；守卫目的是一致性与数据保留，不是安全边界。
+
+
+## 292. unregister：守卫的正规解除路径
+
+第 291 节的守卫在实例登记后拒绝卸载，但产品没有解除入口，管理员只能手工删 unit 与 registry 记录。本节补上 `unregister`。
+
+### 实现
+`native_helper.unregister(registry, unit_dir, instance_id)`，按 `register` 的既有约定：
+
+- root 校验；`_identifier` 校验实例名；registry 与 unit_dir 走 `_trusted`。
+- registry 记录必须是普通文件（`_read_regular`），且 `instance_id`/`unit` 与请求一致，否则拒绝。
+- `package_lease(exclusive=True)` + `_assert_no_query_supervisor_intent` + `_assert_no_package_intent`。
+- 实例 `.installation.lock` 必须能取独占锁——**服务运行中即拒绝**。
+- systemd 状态必须是 `inactive`/`failed`；`active` 或观察失败都拒绝（观察不到不等于空闲）。
+- 先删 unit 再删记录，各自 `fsync` 父目录。
+
+**不删除**：实例目录、`active.json`、releases、payload、marker。符合需求"卸载程序默认保留数据"。
+
+CLI：`ai-device-native-helper unregister --registry --unit-dir --instance-id`。
+
+### 两个在真实容器才暴露的问题
+
+1. **`management_lease` 语义不适配**。默认调用在 marker 存在时直接拒绝（"requires the native lifecycle manager"），而 unregister 时 marker 必然存在。改用 `recovery=True` 会连带接受任意基线，过宽。
+   解决：给 `management_lease` 增加 `deregistration` 参数，语义为"marker 必须存在且必须是普通文件"，并取独占锁。这是唯一需要**在 marker 存在时**运行的操作，与 registration 相反。
+   单测曾因 monkeypatch 掉 `management_lease` 而漏掉此问题，已补一条使用真实 lease 的测试。
+
+2. **registry 目录残留使守卫永远关闭**。unregister 删了记录，但 `/var/lib/ai-device/native` 目录仍在（内有 `package-manager.execution.lock`），而守卫检查目录存在就拒绝。
+   解决：两包守卫改为检查 `*.json` 登记记录，而非目录本身。空 registry 目录不再阻止卸载。
+
+### 验收
+`accept-native-uninstall-guard-76c4060.sh` 改用真实 `unregister`，并新增"服务运行中 unregister 必须拒绝"。r9 制品（含全部修复）：
+
+| 场景 | DEB | RPM |
+| --- | --- | --- |
+| 干净主机卸载 / 重装 | 通过 | 通过 |
+| 已登记运行中卸载被拒 | 通过 | 通过 |
+| 拒绝后现场完好 | 通过 | 通过 |
+| 运行中 unregister 被拒 | 通过 | 通过 |
+| 停服后 unregister 成功 | 通过 | 通过 |
+| unregister 后卸载允许 | 通过 | 通过 |
+| 卸载后实例数据保留 | 通过 | 通过 |
+| 卸载后无残留、可再安装 | 通过 | 通过 |
+
+日志：DEB `20261028-212702`、RPM `20261028-212722`。两包本次均由 **registered-unit guard** 命中拒绝，证明记录检查生效。
+
+### 制品
+`build/native-packages-p1-unregister3/`，含 `unregister` 与守卫修复：
+
+| 包 | SHA256 |
+| --- | --- |
+| `.deb` | `1634e5643082d61012db83de0754e10fb313af294f06bbd130abc567cf49d528` |
+| `.rpm` | `7395d3c88d897900591c074403404548ab58013558154f4a0d405942346348da` |
+
+回归：**1498 passed, 17 skipped, 5 warnings**，Ruff 通过。新增 12 项 unregister 测试与 2 项守卫测试。
+
+### 边界
+- unregister 只解除登记，**不停止服务**；必须先停服。这是有意的——停止属于独立动作。
+- unregister 不删 marker，所以同一实例重新登记需走 `recover-registration`，fresh register 会拒绝。测试已锁定该行为。
+- 未做：unregister 与升级/包事务的并发矩阵、多实例共享 registry 时的相互影响、实机策略差异。
+- `%preun` 的 Lua 与 `prerm` 的 shell 两套实现保持等价语义，但未做逐条对照测试。
+- 制品仍为未签名 `development_build=true`，非发布。

@@ -169,14 +169,13 @@ def _deb_prerm(tmp_path):
     return script
 
 
-@pytest.mark.parametrize("marker", ["instances", "manager", "registry"])
+@pytest.mark.parametrize("marker", ["instances", "manager"])
 def test_remove_refuses_when_instance_state_exists(tmp_path, marker):
     """Erasing deletes the payload, so any instance state must block removal."""
     script = _deb_prerm(tmp_path)
     target = {
         "instances": tmp_path / "opt/ai-device/instances",
         "manager": tmp_path / "manager",
-        "registry": tmp_path / "registry",
     }[marker]
     target.mkdir(parents=True)
     result = subprocess.run(["/bin/sh"], input=script, text=True, capture_output=True, check=False)
@@ -194,6 +193,28 @@ def test_remove_refuses_when_a_client_unit_is_registered(tmp_path):
 
 def test_remove_allows_erase_on_a_clean_host(tmp_path):
     script = _deb_prerm(tmp_path)
+    result = subprocess.run(["/bin/sh"], input=script, text=True, capture_output=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+
+def test_remove_refuses_while_a_registration_record_exists(tmp_path):
+    script = _deb_prerm(tmp_path)
+    registry = tmp_path / "registry"
+    registry.mkdir(parents=True)
+    (registry / "dev1.json").write_text("{}")
+    result = subprocess.run(["/bin/sh"], input=script, text=True, capture_output=True, check=False)
+    assert result.returncode != 0
+    assert "unregister it first" in result.stderr
+
+
+def test_remove_allows_an_empty_registry_directory(tmp_path):
+    """The registry directory survives unregister because it holds the lease.
+
+    Blocking on the bare directory would keep the erase guard closed forever
+    after every instance was properly unregistered.
+    """
+    script = _deb_prerm(tmp_path)
+    (tmp_path / "registry").mkdir(parents=True)
     result = subprocess.run(["/bin/sh"], input=script, text=True, capture_output=True, check=False)
     assert result.returncode == 0, result.stderr
 

@@ -565,6 +565,66 @@ def _register(registry, unit_dir, *, instance_id, root, username, environment_fi
     }
 
 
+def unregister(registry, unit_dir, *, instance_id):
+    """Remove one registration so the payload may be erased.
+
+    This is the supported counterpart of the package erase guard: without it an
+    administrator had to delete the unit and registry record by hand. It removes
+    only registration artifacts. Instance data, active release and the payload
+    stay untouched, matching "uninstall keeps data by default".
+    """
+    if os.geteuid() != 0:
+        raise HelperError("unregistration requires administrator privileges")
+    _identifier(instance_id)
+    registry, unit_dir = map(_path, (registry, unit_dir))
+    _trusted(registry, directory=True)
+    _trusted(unit_dir, directory=True)
+    unit_name = f"ai-device-client-{instance_id}.service"
+    unit_path = unit_dir / unit_name
+    record_path = registry / (instance_id + ".json")
+    if not record_path.exists() and not unit_path.exists():
+        raise HelperError("no registration found for this instance")
+    with package_lease(registry, exclusive=True):
+        _assert_no_query_supervisor_intent(registry)
+        record = json.loads(_read_regular(record_path, "registration record must be a regular file"))
+        if record.get("instance_id") != instance_id or record.get("unit") != unit_name:
+            raise HelperError("registration record does not match this instance")
+        root = _path(record.get("root"))
+        # The marker proves this is a native instance; a plain or registration
+        # lease rejects it. Deregistration is the supported way to drop it.
+        with management_lease(root, deregistration=True), (root / ".installation.lock").open("rb") as lease:
+            try:
+                fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise HelperError("instance is running or maintenance is active") from exc
+            _assert_no_package_intent(registry)
+            # Stop only on a positive observation. An unreachable systemd is not
+            # evidence that the unit is idle, so it must not silently skip.
+            adapter = Systemd()
+            observation = adapter.query(unit_name)
+            if observation["ActiveState"] not in {"inactive", "failed"}:
+                raise HelperError("stop the instance service before unregistering")
+            if not unit_path.exists():
+                raise HelperError("registration unit is missing; explicit reconciliation required")
+            _trusted(unit_path)
+            # Remove the unit first: a leftover unit would keep the erase guard
+            # closed, while a leftover record alone is still recoverable.
+            unit_path.unlink()
+            with _directory_fd(unit_dir) as directory_fd:
+                os.fsync(directory_fd)
+            record_path.unlink()
+            with _directory_fd(registry) as directory_fd:
+                os.fsync(directory_fd)
+    return {
+        "instance_id": instance_id,
+        "unit": unit_name,
+        "removed_unit": str(unit_path),
+        "removed_record": str(record_path),
+        "data_preserved": True,
+        "daemon_reload_required": True,
+    }
+
+
 class Systemd:
     def __init__(self, executable="/usr/bin/systemctl"):
         self.executable = executable
@@ -1433,6 +1493,10 @@ def main():
             provision.add_argument("--" + name, type=Path, required=True)
         provision.add_argument("--instance-id", required=True)
         provision.add_argument("--username", required=True)
+    removal = modes.add_parser("unregister")
+    for name in ("registry", "unit-dir"):
+        removal.add_argument("--" + name, type=Path, required=True)
+    removal.add_argument("--instance-id", required=True)
     deploy = modes.add_parser("deploy")
     for name in ("bootstrap-python", "registry", "unit-dir", "runtime-dir"):
         deploy.add_argument("--" + name, type=Path, required=True)
@@ -1457,6 +1521,8 @@ def main():
             print(
                 json.dumps(register(**args, recover=mode == "recover-registration"), sort_keys=True)
             )
+        elif mode == "unregister":
+            print(json.dumps(unregister(**args), sort_keys=True))
         elif mode == "deploy":
             print(json.dumps(deploy_helper(**args), sort_keys=True))
         elif mode == "recover-socket":

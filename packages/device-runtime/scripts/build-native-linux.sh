@@ -91,10 +91,15 @@ EOF
 set -eu
 # Erasing the package deletes the payload and its bundled interpreter, so an
 # existing instance would be left with a run script whose interpreter is gone.
-for path in /opt/ai-device/instances /var/lib/ai-device/manager /var/lib/ai-device/native /etc/systemd/system/ai-device-native-helper.service; do
+for path in /opt/ai-device/instances /var/lib/ai-device/manager /etc/systemd/system/ai-device-native-helper.service; do
  [ ! -e "$path" ] && [ ! -L "$path" ] || { echo 'explicit instance/service uninstall required' >&2; exit 1; }
 done
-# A registered client unit means a device instance still depends on this payload.
+# A registration record is what ties an instance to this payload. The registry
+# directory itself survives unregister (it holds the package lease), so testing
+# only for the directory would keep the guard closed forever.
+for record in /var/lib/ai-device/native/*.json; do
+ [ ! -e "$record" ] || { echo 'registered device instance still uses this payload; unregister it first' >&2; exit 1; }
+done
 for unit in /etc/systemd/system/ai-device-client-*.service; do
  [ ! -e "$unit" ] && [ ! -L "$unit" ] || { echo 'registered device instance still uses this payload; unregister it first' >&2; exit 1; }
 done
@@ -139,11 +144,18 @@ end
 local guards = {
  '/opt/ai-device/instances',
  '/var/lib/ai-device/manager',
- '/var/lib/ai-device/native',
  '/etc/systemd/system/ai-device-native-helper.service'
 }
 for _,path in ipairs(guards) do
  if posix.stat(path) or posix.readlink(path) then error('explicit instance/service uninstall required') end
+end
+-- The registry directory survives unregister (it holds the package lease), so
+-- the presence of a registration record is what keeps the guard closed.
+local records = posix.dir('/var/lib/ai-device/native') or {}
+for _,name in ipairs(records) do
+ if string.match(name, '%.json$') then
+  error('registered device instance still uses this payload; unregister it first')
+ end
 end
 -- Any registered client unit means a device instance still depends on this payload.
 local units = posix.dir('/etc/systemd/system') or {}

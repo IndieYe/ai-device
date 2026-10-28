@@ -10,12 +10,13 @@ MARKER = ".native-management.json"
 
 
 @contextmanager
-def management_lease(root, *, registration=False, recovery=False):
+def management_lease(root, *, registration=False, recovery=False, deregistration=False):
     root = Path(root).resolve()
     path = root / ".management.lock"
     fd = os.open(path, os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW, 0o644)
     try:
-        mode = fcntl.LOCK_EX if registration else fcntl.LOCK_SH
+        # Deregistration mutates ownership state, so it needs the exclusive lock.
+        mode = fcntl.LOCK_EX if (registration or deregistration) else fcntl.LOCK_SH
         try:
             fcntl.flock(fd, mode | fcntl.LOCK_NB)
         except BlockingIOError as exc:
@@ -23,7 +24,13 @@ def management_lease(root, *, registration=False, recovery=False):
                 "instance management registration or legacy maintenance is active"
             ) from exc
         marker = root / MARKER
-        if not (registration and recovery) and (marker.exists() or marker.is_symlink()):
+        # Registration may only pass on a first install or an approved recovery.
+        # Deregistration is the one operation that must run *with* the marker
+        # present, because that marker is what proves the instance is native.
+        if deregistration:
+            if not marker.is_file() or marker.is_symlink():
+                raise ValueError("deregistration requires a registered native instance")
+        elif not (registration and recovery) and (marker.exists() or marker.is_symlink()):
             raise ValueError("native-managed instance requires the native lifecycle manager")
         yield
     finally:
