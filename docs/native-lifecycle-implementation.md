@@ -2916,3 +2916,33 @@ CLI：`ai-device-native-helper unregister --registry --unit-dir --instance-id`�
 - 未做：unregister 与升级/包事务的并发矩阵、多实例共享 registry 时的相互影响、实机策略差异。
 - `%preun` 的 Lua 与 `prerm` 的 shell 两套实现保持等价语义，但未做逐条对照测试。
 - 制品仍为未签名 `development_build=true`，非发布。
+
+## 293. 实例自带解释器运行时
+
+### 缺陷
+`venv/bin/python` 与 `run` 的 shebang 原本都指向 `/opt/ai-device/packages/0.2.2-native1/runtime/bin/python3.13`。真实容器复现：卸包后 shebang 悬空、venv 断链，实例完全不可用（291 节 `203/EXEC` 的深层原因）。
+
+### 修复
+安装时把 payload 的 `runtime` 复制为 `releases/<release>/runtime`，venv 由该副本创建，shebang 指向该副本。空间下界把副本计入。
+
+`register` 的解释器校验按实际信任模型拆分：
+- helper 的 root bootstrap 保持 `_trusted`（root helper 以 root 运行，是提权边界）。
+- client 解释器新增 `_trusted_instance_interpreter`：以实例账户运行，不是提权边界，改为要求非符号链接、普通文件、属主为实例账户、世界不可写、其他组不可写（实例自身组允许）。
+
+### 验收（含全部修复的 selfcontained3 制品）
+真实容器：装包 → 建实例 → 登记 → systemd `active` → unregister → `dpkg --purge` 删包 → **systemd 再次启动成功**（`active`，MainPID 243，`User=12345`，`Result=success`）；`venv/bin/python` 在包删除后仍可用（`venv ok 3.13.17`）。
+
+| 检查 | 结果 |
+| --- | --- |
+| shebang 指向实例内 runtime | 是 |
+| venv 解释器非包路径 | 是 |
+| 卸包后 venv 可用 | 是 |
+| 卸包后 systemd 启动 | active / uid 12345 |
+
+回归：**1500 passed, 17 skipped**，Ruff 通过。
+
+### 边界
+- 未验证 RPM 侧同一链路；未做包升级到新版本目录的切换。
+- 未实现多版本共存与激活协议；包守卫仍拒绝已有其他版本目录。
+- 解释器副本使每实例多占一份 runtime（用户已确认接受）。
+- 制品未签名，`development_build=true`。
