@@ -563,6 +563,92 @@ def _gated_candidate_query_child(control, contents, registry, socket_path, *, gr
         candidate._serve_credential_queries_locked(registry, socket_path, group=group)
 
 
+def _supervise_candidate_queries(candidates_dir, version, *, registry, socket_path, group, expected_snapshot_sha256):
+    """Unwired query-only supervisor candidate; no operation authorization.
+
+    Requires a dedicated single-threaded Linux administrator process. The
+    registry stability precondition remains mandatory. Parent SIGKILL, escaped
+    descendants, external jobs and action fencing are NOT handled or proven.
+    """
+    if sys.platform != "linux" or os.geteuid() != 0:
+        raise BootstrapError("query supervisor requires Linux administrator identity")
+    if not isinstance(expected_snapshot_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_snapshot_sha256):
+        raise BootstrapError("fixed candidate snapshot digest required")
+    if not all(hasattr(os, name) for name in ("fork", "pidfd_open", "P_PIDFD", "WNOWAIT")) or not all(
+        hasattr(signal, name) for name in ("pthread_sigmask", "sigtimedwait", "pidfd_send_signal")
+    ):
+        raise BootstrapError("query supervision unavailable")
+    if len(list(Path("/proc/self/task").iterdir())) != 1:
+        raise BootstrapError("query supervisor requires one thread")
+    if (
+        signal.getsignal(signal.SIGCHLD) != signal.SIG_DFL
+        or signal.getsignal(signal.SIGTERM) != signal.SIG_DFL
+        or signal.getsignal(signal.SIGINT) not in (signal.SIG_DFL, signal.default_int_handler)
+    ):
+        raise BootstrapError("query supervisor requires default signal handlers")
+    stops = {signal.SIGTERM, signal.SIGINT}
+    oldmask = signal.pthread_sigmask(signal.SIG_BLOCK, stops)
+    try:
+        if stops & oldmask or stops & signal.sigpending():
+            raise BootstrapError("query supervisor stop signal already pending or blocked")
+        contents = _verified_helper_bytes(candidates_dir, version, expected_snapshot_sha256)
+        with helper._daemon_lease_pair(registry):
+            parent, child_socket = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+            pid = None
+            pidfd = None
+            try:
+                parent.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
+                if stops & signal.sigpending():
+                    raise BootstrapError("query supervisor stopped before fork")
+                pid = os.fork()
+                if pid == 0:
+                    try:
+                        parent.close()
+                        signal.pthread_sigmask(signal.SIG_SETMASK, oldmask)
+                        _gated_candidate_query_child(
+                            child_socket, contents, registry, socket_path, group=group,
+                            deadline=time.monotonic() + 5,
+                        )
+                    except BaseException:  # noqa: BLE001 - child must never return into parent control flow
+                        os._exit(1)
+                    os._exit(0)
+                child_socket.close()
+                pidfd = os.pidfd_open(pid)
+                challenge = os.urandom(32)
+                parent.sendall(challenge)
+                _observe_child_handshake(parent, pidfd, pid, challenge, deadline=time.monotonic() + 5)
+                if stops & signal.sigpending():
+                    raise BootstrapError("query supervisor stopped before release")
+                parent.sendall(b"GO")
+                parent.close()
+                while _handshake_pidfd_alive(pidfd):
+                    if signal.sigtimedwait(stops, 0.1) is not None:
+                        return "query_supervisor_stopped_not_authorized"
+                raise BootstrapError("query child exited unexpectedly")
+            finally:
+                parent.close()
+                child_socket.close()
+                if pid is not None:
+                    if pidfd is None:
+                        # The child is gated and owns inherited leases; never use
+                        # a numeric PID for signaling or claim successful cleanup.
+                        end = time.monotonic() + 5
+                        while True:
+                            waited, _ = os.waitpid(pid, os.WNOHANG)
+                            if waited == pid:
+                                break
+                            if time.monotonic() >= end:
+                                raise BootstrapError("gated child cleanup unknown")
+                            time.sleep(0.01)
+                    else:
+                        try:
+                            _reap_direct_child_pidfd(pidfd, deadline=time.monotonic() + 5)
+                        finally:
+                            os.close(pidfd)
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, oldmask)
+
+
 def main():
     """Explicit experimental candidate daemon entry; no activation or dispatch."""
     import argparse

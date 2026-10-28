@@ -1866,3 +1866,12 @@ CLOEXEC 不阻止 fork 后、exec 前的继承，也不证明非并发代码、�
 新增无效挑战、关闭/错误/超长 GO、deadline 和正确路径测试，验证失败不加载候选；握手、回收和门闩定向 `37 passed`（`20261028-095640-c310f0.log`），完整 `1297 passed, 16 skipped`（`20261028-095715-fa692f.log`），ruff 通过。原隔离门闩夹具改为调用实际新函数，在一次性无网络 Linux amd64/Rosetta 容器以旧 2cd3c17 包覆盖当前源码，验证放行后 query-only 和 start 拒绝、关闭门闩后无 socket、pidfd 回收及双锁释放（`20261028-095707-41f080.log`）；容器已删除，非准确新包验收。
 
 父进程 fork、信号处理、异常回收和运行期监督仍由夹具实现；父死亡、后代、外部 job、invocation 与动作绑定未验证，不能把子进程侧门闩作为认证或授权。生产入口和默认拒绝不变，P1 未完成。
+
+
+## 237. 未接生产的 query-only 父进程监督候选
+
+新增内部 `_supervise_candidate_queries`：要求 Linux root、固定候选摘要、单线程及兼容信号状态；在候选校验前屏蔽 SIGTERM/SIGINT，持 daemon 双锁，检查 pending stop 后 fork，子进程执行内部 query 门闩；父进程获取子 pidfd、发随机挑战并验证逐记录凭据与存活，再检查 pending stop 后放行。运行中同步等待终止信号或观察子进程退出，finally 在锁作用域内以 pidfd 回收直接子进程。pidfd 获取失败则关闭门闩并有界等待，不向裸 PID 发信号；该实现无生产调用点，不授权动作。
+
+首次隔离运行因 Python 默认 SIGINT handler 被误判而拒绝（`20261028-100438-063705.log`），修正为允许 Python 默认 handler 或系统默认，仍拒绝其他 handler。一次性无网络 Linux amd64/Rosetta 容器安装旧 2cd3c17 DEB 并覆盖当前源码，实际验证候选字节、双锁、门闩、start 拒绝、SIGTERM 后直接子进程回收及锁释放；注入校验阶段 SIGTERM，确认未 fork 且无 socket（`scripts/accept-native-query-supervisor-source.sh`、`20261028-100550-13cb66.log`）；容器已删除。完整回归 `1299 passed, 16 skipped`（`20261028-100601-bb4df7.log`），定向 `39 passed`（`20261028-100248-dccfbc.log`），ruff 通过。此为源码覆盖，非准确新包验收。
+
+**不可接生产的剩余风险**：父进程 SIGKILL 或崩溃不会由此候选收口子进程；子进程或后代可继承锁；回收超时后当前函数抛错并离开父侧锁作用域，不证明遗留进程或锁安全；未覆盖 fork→pidfd 窗口全部故障、SIGINT、竞争 waiter、异常后代、systemd invocation 和外部 job。不能凭该候选授权恢复或新动作，生产门禁和包保护不变，P1 未完成。
