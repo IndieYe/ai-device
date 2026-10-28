@@ -1923,3 +1923,12 @@ query-only、未接生产的监督候选在直接子回收结果未知时，不�
 隔离 Linux 测试用真实 `_supervise_candidate_queries`，但覆写 query loop 以调用真实 `Systemd.query` 和有限寿命替身：停止 handler 后替身仍存活时两锁拒绝竞争，释放替身并收养回收后监督退出、双锁可重取；独立验证既有子进程拒绝且没有误回收（`scripts/accept-native-query-supervisor-descendant-source.sh`，`20261028-104137-df088b.log`）。旧 2cd3c17 DEB 加源码覆盖；两条直接子未知回收故障（`20261028-103922-14dce9.log`）及 fork/pidfd 窗口（`20261028-104243-f769a0.log`）回归通过。完整测试 1308 passed / 16 skipped，ruff 通过（`20261028-104147-0b9b99.log`）；测试容器已删除。
 
 以上只覆盖单一受控查询替身自然结束，不证明实际完整 handler、并发多代、其他 waiter、不可中断进程、监督父 SIGKILL、宿主故障或 systemd 外部委派；没有持久 unknown/管理员恢复契约，无法授权生产 start、job、recovery 或包更新。不得把 ECHILD、pidfd 或双锁空闲单独当作整体动作收口。准确新包、独立评审和 P1 验收均尚未完成。
+
+
+## 244. 将候选验证纳入监督收养与持锁范围
+
+第243节候选先调用 `_verified_helper_bytes`，其自检实际通过独立 Python 解释器导入候选模块，若导入派生后代并退出，原顺序可能在设置 subreaper 前产生逃逸。现在先获取双锁、检查专用进程并启用 subreaper，再执行验证；无论验证成功还是抛错，都先在锁内回收已收养后代，成功路径在后代全部回收后才启动 handler。验证遗留进程不退出或回收未知时可能无限占锁；默认拒绝不变。
+
+隔离源码覆盖测试在验证包装中启动有限寿命子进程后，分别完成实际验证与注入验证失败：子进程存活时双锁拒绝竞争，handler 未启动；显式释放后仅成功路径启动 handler，失败路径非零退出且无 listener（`scripts/accept-native-query-supervisor-descendant-source.sh`，`20261028-104619-790ab3.log`）。首次运行夹具嵌套代码换行错误导致子进程未就绪，修正后通过（`20261028-104501-44523e.log`）。验证期 SIGTERM、fork/pidfd 窗口通过（`20261028-104737-8c0e43.log`）；完整回归 1308 passed / 16 skipped，ruff 通过（`20261028-104642-be96f2.log`）。专属容器已删除。
+
+这是受控进程与源码覆盖实验，未证明候选导入主动外部委派、任意多代或监督父崩溃后的持久恢复；生产门禁仍关闭，不代表准确新包、真实 handler 或完整 P1 验收。

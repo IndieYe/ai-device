@@ -35,6 +35,57 @@ finally:
 '''
     subprocess.run([sys.executable,'-I','-B','-c',preflight],check=True,timeout=10)
     print('SUPERVISOR_REJECTS_PREEXISTING_CHILD_WITHOUT_REAPING')
+    vready=root/'validation-worker-pid'; vrelease=root/'validation-release'; vdone=root/'validation-returned'; vendpoint=root/'validation.sock'
+    validation_code='''import os,pathlib,subprocess,sys,time
+from device_runtime import native_bootstrap as b
+real=b._verified_helper_bytes
+def verify(*args):
+ code="import os,pathlib,time; p=pathlib.Path("+repr(sys.argv[5])+"); r=pathlib.Path("+repr(sys.argv[6])+"); p.write_text(str(os.getpid())); end=time.monotonic()+20\\nwhile not r.exists() and time.monotonic()<end: time.sleep(.05)"
+ subprocess.Popen([sys.executable,"-I","-B","-c",code],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+ result=real(*args)
+ pathlib.Path(sys.argv[7]).write_text("verified")
+ if sys.argv[8]=='fail': raise b.BootstrapError('injected validation failure')
+ return result
+b._verified_helper_bytes=verify
+b._supervise_candidate_queries(sys.argv[1],"candidate",registry=sys.argv[2],socket_path=sys.argv[3],group=0,expected_snapshot_sha256=sys.argv[4])
+'''
+    verror=(root/'validation-stderr').open('w+')
+    vmode=os.environ.get('DEVICE_VALIDATION_MODE','success')
+    assert vmode in ('success','fail')
+    vp=subprocess.Popen([sys.executable,'-I','-B','-c',validation_code,str(registry/'bootstrap-candidates'),str(registry),str(vendpoint),evidence['snapshot_sha256'],str(vready),str(vrelease),str(vdone),vmode],stdout=subprocess.DEVNULL,stderr=verror)
+    vfd=None
+    try:
+        end=time.monotonic()+12
+        while not (vready.exists() and vdone.exists()) and vp.poll() is None and time.monotonic()<end: time.sleep(.02)
+        verror.flush(); verror.seek(0)
+        assert vready.exists() and vdone.exists() and vp.poll() is None, ('validation worker not ready',verror.read())
+        vfd=os.pidfd_open(int(vready.read_text()))
+        assert not vendpoint.exists(), 'handler released before verification descendant reaped'
+        for lease in (h._daemon_anchor,h._daemon_file_lease):
+            try:
+                with lease(registry): raise AssertionError('lease released while validation worker alive')
+            except h.HelperError as exc: assert 'already active' in str(exc)
+        vrelease.touch()
+        poll=select.poll(); poll.register(vfd,select.POLLIN); assert poll.poll(5000)
+        if vmode=='success':
+            end=time.monotonic()+8
+            while not vendpoint.exists() and vp.poll() is None and time.monotonic()<end: time.sleep(.02)
+            assert vendpoint.exists() and vp.poll() is None, 'handler not released after validation worker'
+            vp.send_signal(signal.SIGTERM); assert vp.wait(timeout=10)==0
+        else:
+            assert vp.wait(timeout=10)!=0 and not vendpoint.exists(), 'failed validation started handler'
+        with h._daemon_lease_pair(registry): pass
+        print('VALIDATION_DESCENDANT_REAPED_BEFORE_HANDLER_RELEASE',vmode)
+    finally:
+        vrelease.touch()
+        if vp.poll() is None:
+            try: vp.wait(timeout=8)
+            except subprocess.TimeoutExpired: vp.kill(); vp.wait(timeout=5)
+        if vfd is not None:
+            poll=select.poll(); poll.register(vfd,select.POLLIN)
+            if not poll.poll(5000): signal.pidfd_send_signal(vfd,signal.SIGKILL); assert poll.poll(5000)
+            os.close(vfd)
+        verror.close()
     code='''import contextlib,os,pathlib,sys
 from device_runtime import native_bootstrap as b
 real_fork=os.fork

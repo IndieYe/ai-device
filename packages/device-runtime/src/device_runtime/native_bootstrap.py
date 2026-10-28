@@ -694,8 +694,13 @@ def _supervise_candidate_queries(candidates_dir, version, *, registry, socket_pa
     try:
         if stops & oldmask or stops & signal.sigpending():
             raise BootstrapError("query supervisor stop signal already pending or blocked")
-        contents = _verified_helper_bytes(candidates_dir, version, expected_snapshot_sha256)
         with helper._daemon_lease_pair(registry), _exclusive_query_subreaper():
+            try:
+                contents = _verified_helper_bytes(candidates_dir, version, expected_snapshot_sha256)
+            finally:
+                # Candidate import runs in a subprocess and can itself leave
+                # descendants. They must be reaped before any handler fork.
+                _hold_until_direct_child_reaped(_wait_adopted_query_children)
             parent, child_socket = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
             pid = None
             pidfd = None
