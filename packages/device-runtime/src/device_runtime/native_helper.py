@@ -53,6 +53,12 @@ def _path(value):
 
 
 def _digest(path):
+    # Every digest target is an evidence or artifact file. Opening a FIFO, socket
+    # or device here would block or read without bound, and several callers reach
+    # this before any fenced work starts, so refuse non-regular files up front.
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode):
+        raise HelperError("digest requires a regular file")
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 

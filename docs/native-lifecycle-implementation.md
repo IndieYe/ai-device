@@ -2478,3 +2478,33 @@ worker 在 `main()` 中**先写** `.job-run-start.json`，再做任何 apply 相
 
 ### 修正记录
 首次测试写法把 `_unit(NOT_FOUND)`（本身返回 runner）又包了一层 lambda，导致 runner 收到函数对象而非 stdout，报 `AttributeError`。已改为直接传 `_unit(NOT_FOUND)`。
+
+
+## 283. 修复：FIFO 证据导致 worker 启动无限阻塞
+
+### 复现
+`_record_run_start` 在 worker 启动前检查 `helper._trusted(intent)`，但 `_trusted` 只拒绝符号链接、非 root 属主和组可写，**不拒绝 FIFO**；随后 `_digest` 直接 `read_bytes()`。root 属主的 FIFO 若无人写入，读取便永久阻塞。
+
+容器实测（`20261028-175621`）：
+
+| 输入 | 结果 |
+| --- | --- |
+| 普通文件、摘要不符 | 立即 `JobError`（子进程 exit 21） |
+| root 属主 FIFO | **阻塞满 5 秒**，被 SIGKILL（exit null） |
+
+这段代码在 `main()` 里位于 `from .native_update import Updates` 之前，所以阻塞发生在任何包动作之前，但也不会留下 run-start 证据——整个 job 就这么静默挂住。
+
+### 修复
+`helper._digest` 增加 `S_ISREG` 检查，非普通文件抛 `HelperError`。这个函数被 91 处调用，全部目标都是证据或制品文件，在入口统一拦一次比逐点加检查更可靠。`_record_run_start` 随后把 `HelperError` 转成 `JobError`，与模块的异常契约一致。
+
+### 验证
+- 容器复验：FIFO 从阻塞改为立即 `JobError`（`20261028-175922`）；`_digest` 对普通文件正常、对 FIFO 拒绝。
+- 完整回归 **1468 passed, 17 skipped**，ruff 通过（`20261028-175926`）。
+
+### 边界
+- 只覆盖 `_digest` 这条读路径。`native_update.py` 里仍有多处直接 `read_text()` / `read_bytes()`，其中 job 证据文件先经 `_trusted` + `_read_job_evidence` 的普通文件检查，但其它路径（如 `.recovery.json`、`active.json`）未逐一验证是否都有前置普通文件检查，本轮未全部审计。
+- 属主与权限检查不变；这里只堵「非普通文件」，不改变可信管理员模型。
+- 容器测试需 root，本地非 root 环境该用例跳过，行为由容器验证兜底。
+
+### 测试自伤记录
+新增的 fork 测试最初在非 root 下跑，`_trusted` 先以「administrator-owned non-writable path」拒绝，暴露的是权限门禁而非 FIFO 缺陷。已加 `os.geteuid() == 0` 跳过条件，并在容器中以 root 复验真实路径。

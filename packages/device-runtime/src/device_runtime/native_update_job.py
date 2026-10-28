@@ -742,8 +742,14 @@ def _record_run_start(registry, instance_id, operation_id, intent_sha256):
     # any package state can be touched.
     if not os.path.lexists(intent):
         raise JobError("job intent evidence missing before worker start")
-    helper._trusted(intent)
-    if helper._digest(intent) != intent_sha256:
+    try:
+        helper._trusted(intent)
+        changed = helper._digest(intent) != intent_sha256
+    except helper.HelperError as exc:
+        # Unreadable or non-regular intent evidence cannot attribute this start.
+        # Keep the refusal in JobError, the type this module's callers handle.
+        raise JobError("job intent evidence is not trusted") from exc
+    if changed:
         raise JobError("job intent changed before worker start")
     value = {
         "schema_version": 1,

@@ -1,4 +1,7 @@
 import json
+import os
+import sys
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -1600,3 +1603,54 @@ def test_completion_requires_unit_absence(transaction, monkeypatch, runner, expe
         assert report["completion_basis"] == "unit_not_found_after_run_start"
     else:
         assert "completion_basis" not in report
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "mkfifo") or os.geteuid() != 0,
+    reason="needs POSIX FIFOs in a root-owned registry",
+)
+def test_fifo_intent_is_refused_without_blocking(tmp_path):
+    """A FIFO at the intent path must fail fast, not hang the worker.
+
+    _trusted() rejects symlinks but not FIFOs, and _digest() used to read_bytes()
+    unconditionally. The worker calls this before any package work, so a hang
+    here stalls the whole job with no error. Root is required because _trusted
+    demands root-owned paths; the container probe confirmed the same behaviour.
+    """
+    import signal
+
+    registry = tmp_path / "manager"
+    updates = registry / "updates"
+    updates.mkdir(parents=True)
+    os.mkfifo(updates / "5-probe--one.job-intent.json", 0o644)
+
+    pid = os.fork()
+    if pid == 0:  # pragma: no cover - child
+        try:
+            job._record_run_start(str(registry), "probe", "one", "a" * 64)
+        except job.JobError:
+            os._exit(21)
+        except BaseException as exc:  # noqa: BLE001
+            sys.stderr.write("OTHER:" + type(exc).__name__ + ":" + str(exc) + "\n")
+            os._exit(22)
+        os._exit(0)
+
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        done, status = os.waitpid(pid, os.WNOHANG)
+        if done:
+            assert os.waitstatus_to_exitcode(status) == 21
+            return
+        time.sleep(0.02)
+    os.kill(pid, signal.SIGKILL)
+    os.waitpid(pid, 0)
+    pytest.fail("_record_run_start blocked on FIFO instead of refusing")
+
+
+def test_digest_refuses_non_regular_file(tmp_path):
+    path = tmp_path / "evidence.json"
+    path.write_text("{}")
+    assert job.helper._digest(path)
+    os.mkfifo(tmp_path / "pipe")
+    with pytest.raises(job.helper.HelperError, match="regular file"):
+        job.helper._digest(tmp_path / "pipe")
