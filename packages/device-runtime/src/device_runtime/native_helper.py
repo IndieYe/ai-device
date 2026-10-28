@@ -62,6 +62,18 @@ def _digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _read_regular(path, error):
+    """Read instance-owned evidence only when it is a regular file.
+
+    Registration runs as root but reads identity files from the owner's tree.
+    A FIFO there would block that read with no error, so check the type first.
+    """
+    info = Path(path).lstat()
+    if not stat.S_ISREG(info.st_mode):
+        raise HelperError(error)
+    return Path(path).read_bytes()
+
+
 def _trusted(path, *, directory=False):
     # Root-owned files in non-writable root-owned ancestors; not an OS sandbox.
     path = Path(path)
@@ -459,12 +471,19 @@ def _register(registry, unit_dir, *, instance_id, root, username, environment_fi
         raise HelperError("instance must belong to the selected non-root account")
     if (root / "upgrades").exists():
         raise HelperError("existing upgrade records require an explicit adoption review")
-    identity = json.loads((root / "instance.json").read_text())
-    active = json.loads((root / "active.json").read_text())
+    identity = json.loads(
+        _read_regular(root / "instance.json", "instance identity must be a regular file")
+    )
+    active = json.loads(
+        _read_regular(root / "active.json", "active pointer must be a regular file")
+    )
     if identity.get("instance_id") != instance_id or active.get("roles") != ["client"]:
         raise HelperError("only the matching single-client instance may be registered")
     runner = root / "run"
     if runner.is_symlink() or not os.access(runner, os.X_OK):
+        raise HelperError("stable runner must be a regular executable")
+    # X_OK alone does not exclude a FIFO: any file can carry the execute bit.
+    if not stat.S_ISREG(runner.lstat().st_mode):
         raise HelperError("stable runner must be a regular executable")
     first = runner.read_text().splitlines()[0]
     if not first.startswith("#!/") or first.startswith("#!/usr/bin/env"):

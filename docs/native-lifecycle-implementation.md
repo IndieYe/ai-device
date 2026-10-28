@@ -2569,3 +2569,39 @@ worker 在 `main()` 中**先写** `.job-run-start.json`，再做任何 apply 相
 - `_binding` 的其余读取（`retire_preparation`、候选回执等）在 `native_prepare.py` 中还有若干裸读，多位于 `native-candidates` 目录、由本进程此前写入，本轮未逐一加检查。
 - 新增两个 fork 测试带来 2 条 `DeprecationWarning`（多线程进程 fork）。测试在子进程内只做纯读取，未继承锁，但这是已知的测试侧风险，不是产品缺陷。
 - 修复只改变「非普通文件」的失败方式，不改变任何合法路径的判断结果。
+
+
+## 286. 修复：登记身份校验读取普通用户可控证据
+
+用户指定开始 P1 的「干净安装与身份绑定」。审计该项时先查现有实现：`_register` 已完成账户解析、属主匹配、标记发布与工件不覆盖，本轮不在其上加新协议，只修其中已复现的缺陷。
+
+### 复现
+`_register` 以 root 运行，却从实例属主（普通用户）目录读取三个文件：
+
+| 读取 | 前置检查 | 是否拦 FIFO |
+| --- | --- | --- |
+| `instance.json` | 无 | 否 |
+| `active.json` | 无 | 否 |
+| `run`（runner） | `is_symlink` + `os.access(X_OK)` | **否** |
+
+前两个是裸 `read_text()`。第三个尤其隐蔽：**FIFO 可以被 chmod +x，`X_OK` 会通过**，于是「可执行文件」的判断放行了一个永远不会返回的读取。
+
+容器实测（`20261028-191942`）：root 对 uid 1000 的 FIFO `access_x_ok=true` 而 `is_regular=false`。
+
+单测复现（`20261028-191656`）：`instance.json` 与 `active.json` 各换 FIFO，`_register` 均**阻塞满 5 秒被 SIGKILL**。
+
+### 修复
+- 新增 `helper._read_regular(path, error)`：先 `lstat` 验 `S_ISREG`，再读。`instance.json`、`active.json` 改用它。
+- runner 增加 `stat.S_ISREG(runner.lstat().st_mode)` 检查，与既有的 `is_symlink`、`X_OK` 并列。
+
+三个函数（`native_helper`、`native_update`、`native_prepare`）现在各有一份同形 `_read_regular`。**没有抽成公共函数**：分属不同模块、错误类型不同（`HelperError` / `UpdateError` / `PreparationError`），强行共享会把错误语义搅在一起，收益不抵成本。
+
+### 验证
+- 单测：三个载体换 FIFO 后均立即 `HelperError`。
+- 容器真 root：FIFO 被拒，同时证实 `X_OK` 不排除 FIFO。
+- 完整回归 **1477 passed, 17 skipped**，ruff 通过（`20261028-191959`）。
+
+### 边界
+- 本轮只修「读取阻塞与类型混淆」，**不表示 P1 的身份绑定已验收通过**。需求文档该条还要求运行用户、权限、实例与服务绑定的端到端准确，以及真实包安装后的实际身份；这些未在本轮验证。
+- `_register` 其余读取（`marker_path` 经 `_trusted_marker`、`unit_path` 经 `_trusted`）已核查具备普通文件校验。
+- 容器镜像缺 `pydantic`/`packaging`，验证脚本只导入 `native_helper`，不覆盖 `Updates` 相关路径。

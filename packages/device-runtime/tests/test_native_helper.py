@@ -2268,3 +2268,134 @@ def test_deploy_helper_existing_checks_reject_nonregular_bootstrap(deployment, k
         nh.deploy_helper(**deployment)
     assert not deployment["registry"].exists()
     assert list(deployment["unit_dir"].iterdir()) == []
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs POSIX FIFOs")
+@pytest.mark.parametrize("carrier", ["instance.json", "active.json"])
+def test_registration_refuses_fifo_identity_evidence(tmp_path, monkeypatch, carrier):
+    """_register runs as root and reads identity files from the owner's tree.
+
+    A FIFO there would block registration with no error, and these two files are
+    exactly what decides whether the instance identity matches.
+    """
+    import pwd
+    import signal
+    import time
+
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    root = tmp_path / "instance"
+    (root / "config").mkdir(parents=True)
+    (root / ".installation.lock").touch()
+    for relative, data in [
+        ("run", "#!/opt/python/bin/python3.13\n"),
+        ("instance.json", '{"instance_id":"probe"}'),
+        ("active.json", '{"roles":["client"]}'),
+        ("config/roles.json", "{}"),
+    ]:
+        (root / relative).write_text(data)
+    environment = tmp_path / "token.env"
+    environment.write_text("PRIVATE=1\n")
+    environment.chmod(0o600)
+    unit_dir = tmp_path / "units"
+    unit_dir.mkdir()
+
+    account = pwd.getpwuid(root.stat().st_uid)
+    monkeypatch.setattr(nh.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(nh, "_trusted", lambda *a, **kw: None)
+    monkeypatch.setattr(nh, "_trusted_marker", lambda _: None)
+    monkeypatch.setattr(nh, "_identifier", lambda _: None)
+
+    target = root / carrier
+    target.unlink()
+    os.mkfifo(target, 0o600)
+
+    pid = os.fork()
+    if pid == 0:  # pragma: no cover - child
+        try:
+            nh._register(
+                registry,
+                unit_dir,
+                instance_id="probe",
+                root=root,
+                username=account.pw_name,
+                environment_file=environment,
+            )
+        except nh.HelperError:
+            os._exit(21)
+        except BaseException:  # noqa: BLE001
+            os._exit(22)
+        os._exit(0)
+
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        done, status = os.waitpid(pid, os.WNOHANG)
+        if done:
+            assert os.waitstatus_to_exitcode(status) == 21
+            return
+        time.sleep(0.02)
+    os.kill(pid, signal.SIGKILL)
+    os.waitpid(pid, 0)
+    pytest.fail(f"_register blocked on FIFO {carrier} instead of refusing")
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs POSIX FIFOs")
+def test_registration_refuses_fifo_runner(tmp_path, monkeypatch):
+    """The runner is readable by root; X_OK does not exclude a FIFO."""
+    import pwd
+    import signal
+    import time
+
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    root = tmp_path / "instance"
+    (root / "config").mkdir(parents=True)
+    (root / ".installation.lock").touch()
+    for relative, data in [
+        ("instance.json", '{"instance_id":"probe"}'),
+        ("active.json", '{"roles":["client"]}'),
+        ("config/roles.json", "{}"),
+    ]:
+        (root / relative).write_text(data)
+    environment = tmp_path / "token.env"
+    environment.write_text("PRIVATE=1\n")
+    environment.chmod(0o600)
+    unit_dir = tmp_path / "units"
+    unit_dir.mkdir()
+    account = pwd.getpwuid(root.stat().st_uid)
+
+    monkeypatch.setattr(nh.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(nh, "_trusted", lambda *a, **kw: None)
+    monkeypatch.setattr(nh, "_trusted_marker", lambda _: None)
+    monkeypatch.setattr(nh, "_identifier", lambda _: None)
+
+    runner = root / "run"
+    os.mkfifo(runner, 0o755)
+
+    pid = os.fork()
+    if pid == 0:  # pragma: no cover - child
+        try:
+            nh._register(
+                registry,
+                unit_dir,
+                instance_id="probe",
+                root=root,
+                username=account.pw_name,
+                environment_file=environment,
+            )
+        except nh.HelperError:
+            os._exit(21)
+        except BaseException:  # noqa: BLE001
+            os._exit(22)
+        os._exit(0)
+
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        done, status = os.waitpid(pid, os.WNOHANG)
+        if done:
+            assert os.waitstatus_to_exitcode(status) == 21
+            return
+        time.sleep(0.02)
+    os.kill(pid, signal.SIGKILL)
+    os.waitpid(pid, 0)
+    pytest.fail("_register blocked on FIFO runner instead of refusing")
