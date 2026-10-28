@@ -5,6 +5,7 @@ never cleaned or repaired here. An incomplete directory remains blocked.
 """
 
 import array
+import ctypes
 import hashlib
 import json
 import math
@@ -512,6 +513,46 @@ def _reap_gated_child_waitpid(pid, *, deadline):
         time.sleep(0.01)
 
 
+@contextmanager
+def _exclusive_query_subreaper():
+    """Dedicated process only: no existing children or competing child waiters."""
+    try:
+        os.waitid(os.P_ALL, 0, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+    except ChildProcessError:
+        pass
+    else:
+        raise BootstrapError("query supervisor requires no existing children")
+    libc = ctypes.CDLL(None, use_errno=True)
+    prior = ctypes.c_int()
+    if libc.prctl(37, ctypes.byref(prior), 0, 0, 0) != 0 or prior.value != 0:
+        raise BootstrapError("query supervisor requires inactive subreaper")
+    if libc.prctl(36, 1, 0, 0, 0) != 0:
+        raise BootstrapError("query subreaper unavailable")
+    try:
+        enabled = ctypes.c_int()
+        if libc.prctl(37, ctypes.byref(enabled), 0, 0, 0) != 0 or enabled.value != 1:
+            raise BootstrapError("query subreaper verification failed")
+        yield
+    finally:
+        if libc.prctl(36, 0, 0, 0, 0) != 0:
+            raise BootstrapError("query subreaper reset failed")
+
+
+def _wait_adopted_query_children():
+    """Reap adopted children until ECHILD; never signal a reusable PID.
+
+    Only a dedicated single-threaded subreaper with exclusive wait ownership
+    may interpret ECHILD. This cannot observe external delegated work.
+    """
+    while True:
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return
+        if pid == 0:
+            time.sleep(0.1)
+
+
 def _observe_child_handshake(connection, pidfd, child_pid, challenge, *, deadline):
     """Observe a direct child record on a caller-owned private SEQPACKET channel.
 
@@ -654,7 +695,7 @@ def _supervise_candidate_queries(candidates_dir, version, *, registry, socket_pa
         if stops & oldmask or stops & signal.sigpending():
             raise BootstrapError("query supervisor stop signal already pending or blocked")
         contents = _verified_helper_bytes(candidates_dir, version, expected_snapshot_sha256)
-        with helper._daemon_lease_pair(registry):
+        with helper._daemon_lease_pair(registry), _exclusive_query_subreaper():
             parent, child_socket = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
             pid = None
             pidfd = None
@@ -701,18 +742,23 @@ def _supervise_candidate_queries(candidates_dir, version, *, registry, socket_pa
                         if self_pidfd is not None:
                             os.close(self_pidfd)
                     finally:
-                        if pid is not None and pidfd is None:
-                            # Never signal a numeric PID or claim unknown cleanup.
-                            _hold_until_direct_child_reaped(
-                                lambda: _reap_gated_child_waitpid(pid, deadline=time.monotonic() + 5)
-                            )
-                        elif pid is not None:
+                        if pid is not None:
                             try:
-                                _hold_until_direct_child_reaped(
-                                    lambda: _reap_direct_child_pidfd(pidfd, deadline=time.monotonic() + 5)
-                                )
+                                if pidfd is None:
+                                    _hold_until_direct_child_reaped(
+                                        lambda: _reap_gated_child_waitpid(pid, deadline=time.monotonic() + 5)
+                                    )
+                                else:
+                                    try:
+                                        _hold_until_direct_child_reaped(
+                                            lambda: _reap_direct_child_pidfd(pidfd, deadline=time.monotonic() + 5)
+                                        )
+                                    finally:
+                                        os.close(pidfd)
                             finally:
-                                os.close(pidfd)
+                                _hold_until_direct_child_reaped(
+                                    _wait_adopted_query_children
+                                )
     finally:
         signal.pthread_sigmask(signal.SIG_SETMASK, oldmask)
 

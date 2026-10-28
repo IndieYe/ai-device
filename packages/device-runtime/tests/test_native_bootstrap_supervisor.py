@@ -84,3 +84,40 @@ def test_gated_reap_timeout_is_unknown(monkeypatch):
     monkeypatch.setattr(b.os, 'waitpid', lambda *_args: (0, 0))
     with pytest.raises(b.BootstrapError, match='cleanup unknown'):
         b._reap_gated_child_waitpid(42, deadline=b.time.monotonic() - 1)
+
+
+def test_query_subreaper_refuses_existing_child_without_reaping(monkeypatch):
+    calls = []
+
+    def waitid(*args):
+        calls.append(args)  # Existing child is alive.
+
+    monkeypatch.setattr(b.os, 'waitid', waitid)
+    with pytest.raises(b.BootstrapError, match='existing children'), b._exclusive_query_subreaper():
+        pytest.fail('must not enter')
+    assert calls[0][2] & b.os.WNOWAIT
+
+
+def test_adopted_children_waits_and_reaps_until_echild(monkeypatch):
+    events = iter([(0, 0), (42, 0), ChildProcessError()])
+    sleeps = []
+
+    def waitpid(*_args):
+        value = next(events)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    monkeypatch.setattr(b.os, 'waitpid', waitpid)
+    monkeypatch.setattr(b.time, 'sleep', sleeps.append)
+    b._wait_adopted_query_children()
+    assert sleeps == [0.1]
+
+
+def test_adopted_children_unknown_does_not_become_echild(monkeypatch):
+    def fail(*_args):
+        raise OSError('unknown wait error')
+
+    monkeypatch.setattr(b.os, 'waitpid', fail)
+    with pytest.raises(OSError, match='unknown wait error'):
+        b._wait_adopted_query_children()

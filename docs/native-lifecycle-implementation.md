@@ -1914,3 +1914,12 @@ query-only、未接生产的监督候选在直接子回收结果未知时，不�
 一次性 Linux 容器中先设置并读取 Linux child subreaper 标志，独立监督 fixture 持有 daemon 双锁，启动调用真实 `Systemd.query` 的 handler，测试替身启动后通过 pidfd 结束 handler。`waitpid(-1,WNOHANG)` 表明被收养子仍存活，竞争进程不能取得双锁；显式让替身自然退出后由监督 fixture 实际回收该 PID，再观察 ECHILD 并退出锁作用域，之后双锁可重取。旧 2cd3c17 DEB 加源码覆盖，`scripts/accept-native-query-subreaper-source.sh`，日志 `20261028-103601-1a0f00.log`，测试容器已删除。
 
 此为单受控替身、非完整 `_supervise_candidate_queries` 的可行性实验，不证明多代并发、fork 竞态、稳定身份强制终止、回收故障、监督者自身崩溃、外部 job 或持久状态；未接入生产，不授权启动和恢复。候选及其必要限制见 `docs/native-helper-dispatch-handoff-design.md` 的“查询监督的后代收口候选”。
+
+
+## 243. 未接生产查询监督候选的收养后代持锁
+
+私有 `_supervise_candidate_queries` 在已持 daemon 双锁、fork handler 前检查调用进程无既有可等待子进程，拒绝已有子进程及已启用 subreaper；设置 Linux child subreaper 并核验，完成后恢复。依赖既有单线程、默认 SIGCHLD 和独占 waiter 的专用进程前提。直接 handler 先经原有 pidfd / 门闩回收路径，随后在同一锁作用域等待收养的后代自然退出并逐个回收，直到 ECHILD；等待错误不能作为完成证明，沿用未知时持锁重试。未知、不可中断或不退出的后代可能无限持锁；不得向裸 PID 发信号。
+
+隔离 Linux 测试用真实 `_supervise_candidate_queries`，但覆写 query loop 以调用真实 `Systemd.query` 和有限寿命替身：停止 handler 后替身仍存活时两锁拒绝竞争，释放替身并收养回收后监督退出、双锁可重取；独立验证既有子进程拒绝且没有误回收（`scripts/accept-native-query-supervisor-descendant-source.sh`，`20261028-104137-df088b.log`）。旧 2cd3c17 DEB 加源码覆盖；两条直接子未知回收故障（`20261028-103922-14dce9.log`）及 fork/pidfd 窗口（`20261028-104243-f769a0.log`）回归通过。完整测试 1308 passed / 16 skipped，ruff 通过（`20261028-104147-0b9b99.log`）；测试容器已删除。
+
+以上只覆盖单一受控查询替身自然结束，不证明实际完整 handler、并发多代、其他 waiter、不可中断进程、监督父 SIGKILL、宿主故障或 systemd 外部委派；没有持久 unknown/管理员恢复契约，无法授权生产 start、job、recovery 或包更新。不得把 ECHILD、pidfd 或双锁空闲单独当作整体动作收口。准确新包、独立评审和 P1 验收均尚未完成。
