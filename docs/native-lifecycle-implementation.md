@@ -1714,3 +1714,12 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 测试验证真实 helper 实例锁持有期间普通事务和锁内初始化返回相同绑定及无歧义 stem，锁不会重入；非法 ID 和 registry fsync 注入失败拒绝，不写 job intent。另一项测试在真实实例锁下串联 `_transaction_locked` 与 `_prepare_dispatch_locked`，并在 intent 保存时用独立 open 验证实例及包锁均冲突；绑定、准备、snapshot 和生产门禁使用替身，仅证明受测文件锁及流程。更新/job 定向 154 通过（`20261028-082658-c9d687.log`，串联调整前）；完整 1224 通过、16 跳过（`20261028-082724-16f6bf.log`），ruff 与 diff 检查通过。
 
 未证明跨进程运行身份、消息/handler 绑定、外部 job 终态或崩溃恢复；生产默认拒绝不变。新代码准确包尚未构建，旧包与冻结 snapshot 不自动更新，P1 未完成。
+
+
+## 219. 规范锁内事务的准确 DEB 隔离验收
+
+从干净源码检查点 `e3ecbb65ccfd6760bb0d6243e852d4a00d218971` 离线构建未签名 DEB `build/native-packages-p1-e3ecbb6/ai-device-native-client_0.2.2-1_amd64.deb`，105245718 字节，SHA256 `93043dfd7ed26ac38ba22f52f8320d5041e882daeada149fd81ef2240376fddd`；Device wheel SHA256 `8951d8b93c77fec5f3730395ce91500b654200d00eab7141518506bff59e56f5`，34 个 Python 模块与提交逐字节一致（`20261028-083038-b1390f.log`）。
+
+无网络隔离 systemd 容器安装惰性旧包夹具并解包准确 DEB，普通用户创建实例并登记；包内 update、job、helper 与 wheel 一致。真实 `_transaction` 持实例租约下，`_transaction_locked` 返回相同绑定与 stem，独立重取实例锁被拒绝；正常准备批准后，新生产 dispatch 默认拒绝且不创建 intent，人工匹配 intent 同 ID 只观察不重派；真实 systemd 启动 snapshot worker 被默认拒绝且无 apply/sender/outcome（`20261028-083105-6d8131.log`，`scripts/accept-native-worker-default-deny-e3ecbb6.sh`）。构建和验收容器已删除（`20261028-083131-3456bc.log`）。
+
+这是惰性旧包加新包解包的隔离夹具，不是干净安装或实际升级；同进程实例锁竞争不证明受控 handler、消息来源、生产 invocation、跨进程锁交接、外部进程树或崩溃恢复。门禁与覆盖保护不变，P1 未完成。
