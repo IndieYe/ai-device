@@ -276,6 +276,41 @@ def test_apply_and_same_id_no_replay(update):
     assert packages.calls == 1 and (helper.root / "active.json").read_bytes() == old
 
 
+def test_reconcile_missing_directory_does_not_initialize(update, tmp_path, monkeypatch):
+    manager, packages, helper, _ = update
+    registry = tmp_path / "empty-registry"
+    registry.mkdir()
+    observer = nu.Updates(registry, packages=packages, helper=helper)
+
+    def trusted(path, *, directory=False):
+        if directory and not path.exists():
+            raise FileNotFoundError(path)
+
+    monkeypatch.setattr(nh, "_trusted", trusted)
+    monkeypatch.setattr(packages, "metadata", lambda *_: pytest.fail("metadata called"))
+    monkeypatch.setattr(packages, "installed", lambda *_: pytest.fail("installed called"))
+    monkeypatch.setattr(nu.os, "fsync", lambda *_: pytest.fail("unexpected fsync"))
+    with pytest.raises(nu.UpdateError, match="update transaction directory missing"):
+        observer.reconcile("probe", "one")
+    assert list(registry.iterdir()) == []
+    assert manager.registry != registry
+
+
+def test_reconcile_existing_transaction_does_not_initialize(update, monkeypatch):
+    manager, packages, _, _ = update
+    directory = manager.registry / "updates"
+    before = {path.name: path.read_bytes() for path in directory.iterdir()}
+    seen = []
+    metadata, installed = packages.metadata, packages.installed
+    monkeypatch.setattr(packages, "metadata", lambda path: (seen.append("metadata"), metadata(path))[1])
+    monkeypatch.setattr(packages, "installed", lambda name: (seen.append("installed"), installed(name))[1])
+    monkeypatch.setattr(nu.os, "fsync", lambda *_: pytest.fail("unexpected fsync"))
+    result = manager.reconcile("probe", "one")
+    assert result["apply_intent"] is None and result["activated"] is False
+    assert seen == ["metadata", "installed"]
+    assert {path.name: path.read_bytes() for path in directory.iterdir()} == before
+
+
 @pytest.mark.parametrize(
     "mode,state",
     [

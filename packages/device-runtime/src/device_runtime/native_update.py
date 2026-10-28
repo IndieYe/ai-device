@@ -623,7 +623,16 @@ class Updates:
         }
 
     def reconcile(self, instance_id, operation_id):
-        with self._transaction(instance_id, operation_id) as (binding, stem):
+        nh._identifier(instance_id)
+        nh._identifier(operation_id)
+        with self.helper._lease(instance_id):
+            binding = self.helper._binding(instance_id)
+            directory = self.registry / "updates"
+            try:
+                nh._trusted(directory, directory=True)
+            except FileNotFoundError as exc:
+                raise UpdateError("update transaction directory missing") from exc
+            stem = directory / f"{len(instance_id)}-{instance_id}--{operation_id}"
             return self._observation(stem, self._prepared(binding, stem))
 
     def recover(self, instance_id, operation_id, *, job_intent_sha256=None):
