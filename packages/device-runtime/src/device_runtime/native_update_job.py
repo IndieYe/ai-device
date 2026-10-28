@@ -449,6 +449,24 @@ def retire_closed_job(manager, instance_id, operation_id):
         return receipt
 
 
+def _prepared_field(prepared, key):
+    """Read one package field from prepared evidence, without changing its value.
+
+    Prepared evidence is disk content: valid JSON does not mean valid shape.
+    Raise JobError so callers that deliberately catch only this type do not see
+    a raw KeyError/TypeError escape. The field value itself is returned as-is;
+    shape checking here must not start rejecting values the old code accepted.
+    """
+    if not isinstance(prepared, dict):
+        raise JobError("prepared evidence is not an object")
+    metadata = prepared.get("metadata")
+    if not isinstance(metadata, dict):
+        raise JobError("prepared evidence lacks a metadata object")
+    if key not in metadata:
+        raise JobError(f"prepared evidence lacks {key}")
+    return metadata[key]
+
+
 def _read_run_start(path, intent_sha256):
     """Read start evidence and bind it to this dispatch's intent.
 
@@ -584,9 +602,9 @@ def observe_job(manager, instance_id, operation_id, *, runner=None):
             "prepared_sha256": prepared_digest,
             "runtime_snapshot_sha256": intent.get("runtime_snapshot_sha256"),
             "target_package": {
-                "name": prepared["metadata"]["Package"],
-                "version": prepared["metadata"]["Version"],
-                "architecture": prepared["metadata"]["Architecture"],
+                "name": _prepared_field(prepared, "Package"),
+                "version": _prepared_field(prepared, "Version"),
+                "architecture": _prepared_field(prepared, "Architecture"),
             },
         }
         if not helper._same_json(apply_intent, expected_apply):
@@ -603,8 +621,8 @@ def observe_job(manager, instance_id, operation_id, *, runner=None):
                 raise JobError("job outcome evidence differs")
             expected_package = {
                 "status": "install ok installed",
-                "version": prepared["metadata"]["Version"],
-                "architecture": prepared["metadata"]["Architecture"],
+                "version": _prepared_field(prepared, "Version"),
+                "architecture": _prepared_field(prepared, "Architecture"),
             }
             if outcome["state"] == "package_applied_pending_activation" and (
                 sender["returncode"] != 0

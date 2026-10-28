@@ -2383,3 +2383,32 @@ worker 在 `main()` 中**先写** `.job-run-start.json`，再做任何 apply 相
 
 ### 影响面
 只影响已有的 job 证据读取路径，不新增状态、字段或门禁。所有生产永拒保持原样。
+
+
+## 280. 修复：畸形 prepared 证据抛出裸 KeyError/TypeError
+
+### 复现
+`observe_job` 在 apply-intent 存在时直接索引 `prepared["metadata"]["Package"]`，但 prepared 只经过「是普通文件 + 摘要匹配」校验，没有结构校验。用合法 JSON、错误结构构造五种输入，全部抛出非 `JobError` 异常（`20261028-171625`）：
+
+| prepared 内容 | 原异常 |
+| --- | --- |
+| `{"foo":1}` | `KeyError: 'metadata'` |
+| `{"metadata":"string"}` | `TypeError: string indices must be integers` |
+| `{"metadata":null}` | `TypeError: 'NoneType' object is not subscriptable` |
+| `{"metadata":{"Package":"f"}}` | `KeyError: 'Version'` |
+| `[1,2,3]` | `TypeError: list indices must be integers` |
+
+影响：`recover_job` 只捕获 `JobError`，这些异常会以原始堆栈穿透到调用方，而不是被当作证据问题拒绝。
+
+### 修复
+新增 `_prepared_field(prepared, key)`：校验 prepared 是对象、`metadata` 是对象、键存在，否则抛 `JobError`。两处索引点改用它。
+
+### 修正过程中的一次自伤
+首版还加了 `isinstance(value, str)` 校验，导致 4 个既有测试失败——它们的 prepared 里 `Version` 是整数 `2`，而原代码接受任意 JSON 值。**这属于改变既有语义**，已改回：`_prepared_field` 只收敛异常类型，不改值域，并补 `test_prepared_field_values_pass_through_unchanged` 锁住这一点。
+
+### 验证
+- 容器复验：五种输入全部变为 `JobError`（`20261028-172000`）。
+- 完整回归 **1460 passed, 16 skipped**，ruff 通过。
+
+### 边界
+这只保证异常类型一致，不改变任何判定结果：prepared 结构正常时行为与之前完全相同，畸形时仍被拒绝，且拒绝发生在任何包动作之前。

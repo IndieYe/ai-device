@@ -1481,3 +1481,50 @@ def test_missing_evidence_still_reads_as_none(transaction):
     missing = transaction.with_suffix(".sender.json")
     assert not missing.exists()
     assert job._read_job_evidence(missing) is None
+
+
+@pytest.mark.parametrize(
+    "prepared_value,expected",
+    [
+        ({"foo": 1}, "lacks a metadata object"),
+        ({"metadata": "string"}, "lacks a metadata object"),
+        ({"metadata": None}, "lacks a metadata object"),
+        ({"metadata": {"Package": "f"}}, "lacks Version"),
+        ([1, 2, 3], "not an object"),
+    ],
+)
+def test_malformed_prepared_raises_job_error(transaction, monkeypatch, prepared_value, expected):
+    """Valid JSON with the wrong shape must not escape as KeyError/TypeError.
+
+    recover_job catches JobError only; a raw KeyError would surface as a crash.
+    """
+    monkeypatch.setattr(job, "_boot_id", lambda: BOOT)
+    _job_intent_for(transaction)
+    prepared = transaction.with_suffix(".prepared.json")
+    prepared.write_text(json.dumps(prepared_value))
+    digest = job.helper._digest(prepared)
+    intent_path = transaction.with_suffix(".job-intent.json")
+    intent = json.loads(intent_path.read_text())
+    intent["prepared_sha256"] = digest
+    intent_path.write_text(json.dumps(intent))
+    transaction.with_suffix(".approved.json").write_text(
+        json.dumps({"prepared_sha256": digest, "approved_by_uid": 0})
+    )
+    with pytest.raises(job.JobError, match=expected):
+        job.observe_job(
+            SimpleNamespace(registry=transaction.parent.parent),
+            "probe",
+            "one",
+            runner=_unit(LOADED_FAILED),
+        )
+
+
+def test_prepared_field_values_pass_through_unchanged(transaction, monkeypatch):
+    """Shape checks must not start rejecting values the old code accepted.
+
+    Real prepared evidence stores Version as an int in some fixtures; comparing
+    it must keep working rather than raising a type error.
+    """
+    monkeypatch.setattr(job, "_boot_id", lambda: BOOT)
+    assert job._prepared_field({"metadata": {"Version": 2}}, "Version") == 2
+    assert job._prepared_field({"metadata": {"Version": "2"}}, "Version") == "2"
