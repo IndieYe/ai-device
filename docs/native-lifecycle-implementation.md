@@ -1841,3 +1841,12 @@ CLOEXEC 不阻止 fork 后、exec 前的继承，也不证明非并发代码、�
 一次性离线 Linux amd64/Rosetta 容器安装旧 2cd3c17 DEB，容器内覆盖当前 helper 源码；测试父进程持两锁 fork 子进程后退出自身租约作用域，子进程继承双锁并运行新私有查询循环；观察两个锁各自冲突、start 请求拒绝，测试子进程退出回收后两锁可重新获取（`scripts/accept-native-query-inherited-lock-source.sh`、`20261028-094056-f01145.log`），容器已删除。这是源码覆盖实验，不是准确新包、成功实例查询或系统级监督验收。
 
 该接口不证明 FD 仍持锁，不阻止后代继承或共享 OFD 显式解锁，也未完成 pidfd 门闩、父子死亡处理、消息处理者和 invocation 绑定；生产门禁不变，P1 未完成。
+
+
+## 234. 直接子进程 pidfd 失败回收原语
+
+新增未接生产的 `_reap_direct_child_pidfd`：Linux 下先以 `waitid(P_PIDFD, WEXITED|WNOHANG|WNOWAIT)` 验证 pidfd 对应尚未回收的直接子进程；若仍运行，以 `pidfd_send_signal(SIGKILL)` 定向该进程，再以非阻塞 `waitid` 在绝对期限内回收。已退出与信号前退出竞态均继续回收；非子进程、能力缺失、非法参数、信号错误及超时拒绝，不向裸 PID 或进程组发信号。调用方必须排除其他 waiter、持有 pidfd 并持续持有必要锁直至回收成功；该函数不负责获取或释放锁。
+
+修改前测试因入口/依赖尚缺失败（`20261028-094552-499682.log`）；握手及回收定向 `30 passed`（`20261028-094842-ca15a1.log`），完整回归在追加三个定向失败用例之前为 `1287 passed, 16 skipped`（`20261028-094720-70d853.log`），ruff 通过。一次性无网络 Linux amd64/Rosetta 容器安装旧 2cd3c17 DEB 并覆盖当前 bootstrap 源码，真实验证非子进程拒绝、存活和已退出直接子进程 pidfd 回收，父进程持双锁直到回收完成且作用域结束后可重新取得（`scripts/accept-native-child-reap-source.sh`、`20261028-094716-d2993f.log`）；容器已删除，非准确新包验收。
+
+此原语不创建子进程，不处理父进程死亡、后代、外部 systemd job、不可中断内核态或锁漂移，也不授权启动/恢复；超时意味着未知而非成功。生产门禁保持关闭，P1 未完成。

@@ -7,10 +7,12 @@ never cleaned or repaired here. An incomplete directory remains blocked.
 import array
 import hashlib
 import json
+import math
 import os
 import re
 import select
 import shutil
+import signal
 import socket
 import stat
 import struct
@@ -434,6 +436,40 @@ def _handshake_pidfd_alive(pidfd):
     poller = select.poll()
     poller.register(pidfd, select.POLLIN | select.POLLHUP | select.POLLERR)
     return not poller.poll(0)
+
+
+def _reap_direct_child_pidfd(pidfd, *, deadline):
+    """Kill and reap one direct child, without signaling a reusable numeric PID.
+
+    Caller owns the pidfd, prevents other waiters from reaping this child, and
+    holds required leases until this succeeds. This cannot reap descendants,
+    prove a process tree quiescent, or authorize recovery or a new action.
+    """
+    if type(pidfd) is not int or pidfd < 0 or not isinstance(deadline, (int, float)) or not math.isfinite(deadline):
+        raise BootstrapError("invalid child reap inputs")
+    if sys.platform != "linux" or not all(hasattr(os, name) for name in ("P_PIDFD", "WNOWAIT", "waitid")) or not hasattr(signal, "pidfd_send_signal"):
+        raise BootstrapError("direct child pidfd reap unavailable")
+    try:
+        if time.monotonic() >= deadline:
+            raise BootstrapError("child reap deadline exceeded")
+        observed = os.waitid(os.P_PIDFD, pidfd, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        if observed is None:
+            try:
+                signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+            except ProcessLookupError:
+                pass  # The direct child may have exited between observation and signal.
+        while True:
+            result = os.waitid(os.P_PIDFD, pidfd, os.WEXITED | os.WNOHANG)
+            if result is not None:
+                return result.si_pid, result.si_code, result.si_status
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise BootstrapError("child reap deadline exceeded")
+            time.sleep(min(remaining, 0.01))
+    except ChildProcessError as exc:
+        raise BootstrapError("pidfd is not an unreaped direct child") from exc
+    except OSError as exc:
+        raise BootstrapError("direct child pidfd reap failed") from exc
 
 
 def _observe_child_handshake(connection, pidfd, child_pid, challenge, *, deadline):
