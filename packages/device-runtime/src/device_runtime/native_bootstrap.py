@@ -284,6 +284,11 @@ def read_helper_candidate(candidates_dir, version):
     return evidence
 
 
+def _require_proven_candidate_launch_fence():
+    """Frozen code execution lacks a proven persistent process-tree fence."""
+    raise BootstrapError("candidate launch process-tree fence not proven; action refused")
+
+
 def run_verified_helper_candidate(candidates_dir, version, *, registry, socket_path, group, expected_snapshot_sha256=None):
     """Execute verified candidate helper bytes in the independent bootstrap.
 
@@ -293,6 +298,7 @@ def run_verified_helper_candidate(candidates_dir, version, *, registry, socket_p
     writes disabled. Modules are compiled from the exact bytes just checked,
     not imported again from mutable paths.
     """
+    _require_proven_candidate_launch_fence()
     contents = _verified_helper_bytes(candidates_dir, version, expected_snapshot_sha256)
     with _verified_helper_modules(contents) as candidate:
         candidate.serve(registry, socket_path, group=group)
@@ -387,6 +393,11 @@ def _verified_helper_bytes(candidates_dir, version, expected_snapshot_sha256):
     return contents
 
 
+def _require_proven_candidate_publication_fence():
+    """No proven persistent fence covers candidate self-check descendants."""
+    raise BootstrapError("candidate publication process-tree fence not proven; action refused")
+
+
 def publish_managed_helper_candidate(registry, source, version):
     """Publish under the fixed manager directory while holding the package lease."""
     if sys.platform != "linux" or os.geteuid() != 0:
@@ -398,6 +409,7 @@ def publish_managed_helper_candidate(registry, source, version):
     helper._trusted(candidates, directory=True)
     with helper.package_lease(registry, exclusive=True):
         helper._assert_no_query_supervisor_intent(registry)
+        _require_proven_candidate_publication_fence()
         result = publish_helper_candidate(source, candidates, version)
         if read_helper_candidate(candidates, version) != result:
             raise BootstrapError("candidate publication verification differs")
@@ -743,8 +755,9 @@ def _supervise_candidate_queries(candidates_dir, version, *, registry, socket_pa
             try:
                 contents = _verified_helper_bytes(candidates_dir, version, expected_snapshot_sha256)
             finally:
-                # Candidate import runs in a subprocess and can itself leave
-                # descendants. They must be reaped before any handler fork.
+                # Defensively reap any children before starting the handler.
+                # Current byte verification only reads files; candidate module
+                # execution occurs later in the forked handler.
                 _hold_until_direct_child_reaped(_wait_adopted_query_children)
             parent, child_socket = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
             pid = None

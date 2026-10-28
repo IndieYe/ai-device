@@ -361,6 +361,8 @@ def test_publish_refuses_invalid_or_incomplete_version(runtime, monkeypatch):
 def test_managed_candidate_publishes_under_lock_and_read_rejects_drift(runtime, monkeypatch):
     from contextlib import contextmanager
 
+    # Exercise historical internals only; production publication remains denied.
+    monkeypatch.setattr(bootstrap, "_require_proven_candidate_publication_fence", lambda: None)
     source, destination = runtime
     module = source / "lib/python3.13/site-packages/device_runtime/native_helper.py"
     module.parent.mkdir(parents=True)
@@ -414,6 +416,19 @@ def test_managed_candidate_refuses_busy_lock(runtime):
     assert not (registry / "bootstrap-candidates/v1").exists()
 
 
+def test_managed_candidate_default_denies_before_snapshot_or_selfcheck(runtime, monkeypatch):
+    source, destination = runtime
+    registry = destination.parent
+    candidates = registry / "bootstrap-candidates"
+    candidates.mkdir()
+    calls = []
+    monkeypatch.setattr(bootstrap, "publish_helper_candidate", lambda *args: calls.append(args))
+    with pytest.raises(bootstrap.BootstrapError, match="process-tree fence not proven"):
+        bootstrap.publish_managed_helper_candidate(registry, source, "v1")
+    assert calls == [] and list(candidates.iterdir()) == []
+    assert not (registry / "query-supervisor.intent.json").exists()
+
+
 @pytest.mark.parametrize("marker_kind", ["file", "dangling_symlink"])
 def test_managed_candidate_refuses_unknown_supervisor_before_publication(runtime, marker_kind, monkeypatch):
     source, destination = runtime
@@ -433,11 +448,21 @@ def test_managed_candidate_refuses_unknown_supervisor_before_publication(runtime
     assert os.path.lexists(marker)
 
 
+def test_verified_helper_candidate_launch_default_denies_before_read_or_execution(monkeypatch):
+    calls = []
+    monkeypatch.setattr(bootstrap, "_verified_helper_bytes", lambda *args: calls.append(args))
+    with pytest.raises(bootstrap.BootstrapError, match="launch process-tree fence not proven"):
+        bootstrap.run_verified_helper_candidate("candidates", "v1", registry="r", socket_path="s", group=0)
+    assert not calls
+
+
 def test_verified_helper_candidate_executes_checked_bytes(runtime, monkeypatch):
     import hashlib
     import sys
     from types import SimpleNamespace
 
+    # Exercise historical byte execution only; production launch stays denied.
+    monkeypatch.setattr(bootstrap, "_require_proven_candidate_launch_fence", lambda: None)
     source, destination = runtime
     site = source / "lib/python3.13/site-packages/device_runtime"
     site.mkdir(parents=True)
@@ -535,6 +560,7 @@ def test_verified_helper_candidate_refuses_untrusted_launch(runtime, monkeypatch
     import sys
     from types import SimpleNamespace
 
+    monkeypatch.setattr(bootstrap, "_require_proven_candidate_launch_fence", lambda: None)
     source, destination = runtime
     site = source / "lib/python3.13/site-packages/device_runtime"
     site.mkdir(parents=True)

@@ -809,9 +809,31 @@ def test_deploy_helper_holds_package_lease_through_unit_publication(deployment, 
     assert observed == [True]
 
 
+def test_deploy_candidate_default_denied_before_unit_or_runtime(deployment, monkeypatch):
+    from device_runtime import native_bootstrap as bootstrap
+
+    fixed = deployment["bootstrap_python"].parent / "bootstrap"
+    python = fixed / "bin/python3.13"
+    python.parent.mkdir(parents=True)
+    python.write_text("fixture")
+    python.chmod(0o755)
+    monkeypatch.setattr(bootstrap, "TRUSTED_HELPER_BOOTSTRAP", fixed)
+    registry = deployment["registry"]
+    registry.mkdir()
+    (registry / "package-manager.execution.lock").touch(mode=0o600)
+    calls = []
+    monkeypatch.setattr(bootstrap, "read_helper_candidate", lambda *args: calls.append(args))
+    with pytest.raises(bootstrap.BootstrapError, match="launch process-tree fence not proven"):
+        nh.deploy_helper(**{**deployment, "bootstrap_python": python, "candidate_version": "release-1"})
+    assert not calls and not list(deployment["unit_dir"].iterdir())
+    assert not deployment["runtime_dir"].exists()
+
+
 def test_deploy_candidate_unit_requires_fixed_bootstrap_and_verified_candidate(deployment, monkeypatch):
     from device_runtime import native_bootstrap as bootstrap
 
+    # Historical rendering/verification only; actual candidate deployment is denied.
+    monkeypatch.setattr(bootstrap, "_require_proven_candidate_launch_fence", lambda: None)
     fixed = deployment["bootstrap_python"].parent / "bootstrap"
     python = fixed / "bin/python3.13"
     python.parent.mkdir(parents=True)
@@ -845,6 +867,7 @@ def test_deploy_candidate_unit_requires_fixed_bootstrap_and_verified_candidate(d
 def test_deploy_candidate_refuses_before_unit_write(deployment, monkeypatch, reason):
     from device_runtime import native_bootstrap as bootstrap
 
+    monkeypatch.setattr(bootstrap, "_require_proven_candidate_launch_fence", lambda: None)
     fixed = deployment["bootstrap_python"].parent / "bootstrap"
     python = fixed / "bin/python3.13"
     python.parent.mkdir(parents=True)

@@ -327,6 +327,7 @@ def deploy_helper(*, bootstrap_python, registry, unit_dir, runtime_dir, group, c
         _assert_no_query_supervisor_intent(registry)
         candidate_sha256 = None
         if candidate_version is not None:
+            native_bootstrap._require_proven_candidate_launch_fence()
             evidence = native_bootstrap.read_helper_candidate(registry / "bootstrap-candidates", candidate_version)
             candidate_sha256 = evidence["snapshot_sha256"]
         return _deploy_helper_locked(python, registry, unit_dir, runtime_dir, group, candidate_version, candidate_sha256)
