@@ -1739,3 +1739,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 无网络一次性 Linux amd64/Rosetta 容器干净安装准确 DEB，包内 uv 检查 17 项依赖，`native_helper.py` 与 wheel 一致；对包内 `_receive_root_credential_frame` 使用真实 Unix listener/socketpair：listener 在 connect 前启用 `SO_PASSCRED`，接收 accept 前排队的 root 消息及正确内核 PID/UID/GID；子进程两段之间降权的混合帧拒绝；真实 `SCM_RIGHTS` 单 FD 和 80 FD 截断均拒绝且 `/proc/self/fd` 数量无净增；部分帧按有限 deadline 拒绝（`20261028-084040-b545d9.log`，`scripts/accept-native-credential-frame-4a2542c.sh`）。构建及验收容器均已删除（`20261028-084053-a08f58.log`）。
 
 这是独立接收组件测试，未接入生产 listener/handler，不证明当前服务逐消息认证、受控监督或 invocation 身份，也不证明业务动作及持久事务绑定。生产 job/worker/恢复门禁不变，旧包和运行中 helper 不自动更新，P1 未完成。
+
+
+## 222. 未接入生产的逐凭据只读 query 接线
+
+新增私有 `_serve_credential_query_once`，复用逐段 root 凭据接收，仅解析三个严格字段且 action 必须为 `query`、ID 合法，拒绝 JSON 重复字段、其他动作及额外字段。合法请求调用现有 `Helper.handle` 查询，一次响应后关闭连接；失败只返回固定拒绝，响应丢失不重调 handler。该入口未接入生产 `_serve`、不允许 start/job/recovery，不能把来源 root 解释为监督器、执行者或 invocation 身份；listener 须在消息排队前启用 `SO_PASSCRED`。
+
+测试覆盖合法 query、重复字段、start、错误 ID、额外字段、格式错误、凭据失败、响应丢失和连接关闭；定向 206 通过、1 跳过（`20261028-084411-8c6b41.log`，响应丢失测试前），完整 1250 通过、16 跳过（`20261028-084440-c73ae3.log`），ruff 与 diff 检查通过。测试为 handler 替身；真实包、socket 与实际 systemd query 验证另待记录。生产协议和所有门禁不变，P1 未完成。

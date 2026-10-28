@@ -127,3 +127,92 @@ def test_credential_frame_closes_remaining_fds_after_close_error(linux_credentia
     for fd in (first, second):
         with pytest.raises(OSError):
             os.fstat(fd)
+
+
+class QueryConnection:
+    def __init__(self):
+        self.closed = False
+        self.sent = []
+        self.timeout = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        self.closed = True
+
+    def settimeout(self, value):
+        self.timeout = value
+
+    def sendall(self, data):
+        self.sent.append(data)
+
+
+def test_credential_query_returns_one_response_and_closes(monkeypatch):
+    import json
+
+    conn = QueryConnection()
+    request = {"action": "query", "instance_id": "probe", "operation_id": "one"}
+    monkeypatch.setattr(helper, "_receive_root_credential_frame", lambda *_a, **_k: (
+        b'{"action":"query","instance_id":"probe","operation_id":"one"}\n', (123, 0, 0)
+    ))
+    class Service:
+        def handle(self, value, *, peer_uid):
+            assert not conn.closed
+            assert value == request and peer_uid == 0
+            return {"result": "observed"}
+    helper._serve_credential_query_once(Service(), conn, deadline=10)
+    assert conn.closed and conn.timeout == 5 and len(conn.sent) == 1
+    assert json.loads(conn.sent[0]) == {"ok": True, "result": {"result": "observed"}}
+
+
+@pytest.mark.parametrize("frame", [
+    b'{"action":"start","instance_id":"probe","operation_id":"one"}\n',
+    b'{"action":"query","action":"start","instance_id":"probe","operation_id":"one"}\n',
+    b'{"action":"query","instance_id":"../probe","operation_id":"one"}\n',
+    b'{"action":"query","instance_id":"probe","operation_id":"one","uid":0}\n',
+    b'[]\n', b'{broken}\n', b'{"action":NaN}\n',
+])
+def test_credential_query_invalid_request_never_calls_handler(monkeypatch, frame):
+    import json
+
+    conn = QueryConnection()
+    monkeypatch.setattr(helper, "_receive_root_credential_frame", lambda *_a, **_k: (frame, (123, 0, 0)))
+    class Service:
+        def handle(self, *_a, **_kw):
+            pytest.fail("invalid request reached handler")
+    helper._serve_credential_query_once(Service(), conn, deadline=10)
+    assert conn.closed and len(conn.sent) == 1
+    assert json.loads(conn.sent[0]) == {"ok": False, "error": "helper_request_refused"}
+
+
+def test_credential_query_receive_failure_never_calls_handler(monkeypatch):
+    import json
+
+    conn = QueryConnection()
+    def fail(*_a, **_kw):
+        raise helper.HelperError("sensitive failure")
+    monkeypatch.setattr(helper, "_receive_root_credential_frame", fail)
+    class Service:
+        def handle(self, *_a, **_kw):
+            pytest.fail("invalid request reached handler")
+    helper._serve_credential_query_once(Service(), conn, deadline=10)
+    assert conn.closed and json.loads(conn.sent[0]) == {"ok": False, "error": "helper_request_refused"}
+
+
+def test_credential_query_lost_response_does_not_repeat_handler(monkeypatch):
+    class LostConnection(QueryConnection):
+        def sendall(self, _data):
+            raise OSError("lost response")
+
+    conn = LostConnection()
+    calls = []
+    monkeypatch.setattr(helper, "_receive_root_credential_frame", lambda *_a, **_k: (
+        b'{"action":"query","instance_id":"probe","operation_id":"one"}\n', (123, 0, 0)
+    ))
+    class Service:
+        def handle(self, value, *, peer_uid):
+            calls.append((value, peer_uid))
+            return {"observed": True}
+    helper._serve_credential_query_once(Service(), conn, deadline=10)
+    assert conn.closed and len(calls) == 1

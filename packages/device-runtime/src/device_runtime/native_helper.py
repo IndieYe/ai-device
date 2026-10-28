@@ -1139,6 +1139,43 @@ def _receive_root_credential_frame(connection, *, deadline):
         raise HelperError("credential frame receive failed") from exc
 
 
+def _serve_credential_query_once(service, connection, *, deadline):
+    """Unwired one-frame root query fixture; not supervisor or dispatch authorization.
+
+    Caller must enable SO_PASSCRED on the listener before any bytes are queued.
+    This owns and closes the accepted connection after exactly one response.
+    Only query is permitted; an observed sender is not a trusted handler identity.
+    """
+    def pairs_no_duplicates(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise HelperError("duplicate request field")
+            result[key] = value
+        return result
+
+    with connection:
+        try:
+            frame, sender = _receive_root_credential_frame(connection, deadline=deadline)
+            if sender[1] != 0:
+                raise HelperError("root sender required")
+            request = json.loads(frame, object_pairs_hook=pairs_no_duplicates)
+            if not isinstance(request, dict) or set(request) != {
+                "action", "instance_id", "operation_id"
+            } or request["action"] != "query":
+                raise HelperError("only query is permitted")
+            _identifier(request["instance_id"])
+            _identifier(request["operation_id"])
+            response = {"ok": True, "result": service.handle(request, peer_uid=sender[1])}
+        except (HelperError, ValueError, KeyError, OSError, subprocess.SubprocessError):
+            response = {"ok": False, "error": "helper_request_refused"}
+        try:
+            connection.settimeout(5)
+            connection.sendall(json.dumps(response).encode() + b"\n")
+        except OSError:
+            pass  # A lost response must not cause a second handler call.
+
+
 @contextmanager
 def _socket_peer_process(connection):
     """Pin a Linux Unix-socket peer for observation, never authorize dispatch.
