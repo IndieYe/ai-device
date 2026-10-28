@@ -1857,3 +1857,12 @@ CLOEXEC 不阻止 fork 后、exec 前的继承，也不证明非并发代码、�
 一次性无网络 Linux amd64/Rosetta 容器安装旧 2cd3c17 DEB，仅在容器内覆盖当前 bootstrap 和 helper 源码。夹具发布实际候选，父进程执行 `_verified_helper_bytes` 获取已验证内存字节，持 daemon 双锁创建私有 SEQPACKET 和直接子进程；获取子进程 pidfd，以随机挑战及内核凭据通过 `_observe_child_handshake`，并断言收到 GO 前 socket 不存在。发送 GO 后，子进程从继承字节进入 `_verified_helper_modules` 并运行 `_serve_credential_queries_locked`；两把锁均冲突，start 请求拒绝，父进程通过 `_reap_direct_child_pidfd` 回收直接子进程，锁作用域结束后可重取。第二个子进程在握手后遇父端关闭而未收到 GO，正常退出并由 pidfd 回收，未创建 socket（`scripts/accept-native-gated-candidate-source.sh`、`20261028-095313-3c2e13.log`）；容器已删除。首次运行因夹具 PID 条件错误在安装前退出（`20261028-095204-d3bd7c.log`），修正后通过。
 
 这是源码覆盖的测试夹具，fork、门闩和清理均由夹具自行实现，不是生产监督器或准确新包验收；未覆盖父进程死亡、信号窗口、额外后代、监听器存活期约束、实际 handler 与 invocation 绑定或 systemd 外部 job。握手仅为观察，生产门禁与既有包保护不变，P1 未完成。
+
+
+## 236. 受控候选查询子进程侧门闩
+
+将第235节夹具中的子进程侧门闩逻辑提取到内部 `_gated_candidate_query_child`：按绝对 deadline 接收 32 字节挑战、回复 READY、等待准确 GO；失败或通道异常关闭控制 socket，成功关闭控制 socket 后才将调用方提供的已验证字节载入 `_verified_helper_modules` 并调用 `_serve_credential_queries_locked`。只提供 query-only 路径，无 CLI 或生产调用点；调用方必须保证直接子进程、已验证字节及双锁，函数本身不证明这些前提或父身份。
+
+新增无效挑战、关闭/错误/超长 GO、deadline 和正确路径测试，验证失败不加载候选；握手、回收和门闩定向 `37 passed`（`20261028-095640-c310f0.log`），完整 `1297 passed, 16 skipped`（`20261028-095715-fa692f.log`），ruff 通过。原隔离门闩夹具改为调用实际新函数，在一次性无网络 Linux amd64/Rosetta 容器以旧 2cd3c17 包覆盖当前源码，验证放行后 query-only 和 start 拒绝、关闭门闩后无 socket、pidfd 回收及双锁释放（`20261028-095707-41f080.log`）；容器已删除，非准确新包验收。
+
+父进程 fork、信号处理、异常回收和运行期监督仍由夹具实现；父死亡、后代、外部 job、invocation 与动作绑定未验证，不能把子进程侧门闩作为认证或授权。生产入口和默认拒绝不变，P1 未完成。

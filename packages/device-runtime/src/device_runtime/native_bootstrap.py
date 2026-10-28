@@ -532,6 +532,37 @@ def _observe_child_handshake(connection, pidfd, child_pid, challenge, *, deadlin
         raise BootstrapError("child handshake failed") from exc
 
 
+def _gated_candidate_query_child(control, contents, registry, socket_path, *, group, deadline):
+    """Run query-only candidate after a private gate; not a production entry.
+
+    Caller must be a controlled direct child inheriting already validated bytes
+    and both daemon leases. This does not verify parent identity or continued
+    supervision, and must not be used to authorize any operation.
+    """
+    def set_remaining():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise BootstrapError("child gate deadline exceeded")
+        control.settimeout(remaining)
+
+    try:
+        set_remaining()
+        token = control.recv(33)
+        if len(token) != 32:
+            raise BootstrapError("invalid child gate challenge")
+        set_remaining()
+        control.sendall(b"READY:" + token)
+        set_remaining()
+        if control.recv(3) != b"GO" or time.monotonic() >= deadline:
+            raise BootstrapError("child gate not released")
+    except OSError as exc:
+        raise BootstrapError("child gate communication failed") from exc
+    finally:
+        control.close()
+    with _verified_helper_modules(contents) as candidate:
+        candidate._serve_credential_queries_locked(registry, socket_path, group=group)
+
+
 def main():
     """Explicit experimental candidate daemon entry; no activation or dispatch."""
     import argparse

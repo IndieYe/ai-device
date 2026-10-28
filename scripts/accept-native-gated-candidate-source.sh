@@ -27,14 +27,8 @@ with tempfile.TemporaryDirectory(prefix='device-gated-', dir='/root') as root:
         child=os.fork()
         if child==0:
             try:
-                parent.close(); child_sock.settimeout(8)
-                token=child_sock.recv(32)
-                if len(token)!=32: os._exit(2)
-                child_sock.sendall(b'READY:'+token)
-                if child_sock.recv(2)!=b'GO': os._exit(3)
-                child_sock.close()
-                with b._verified_helper_modules(contents) as candidate:
-                    candidate._serve_credential_queries_locked(registry,endpoint,group=0)
+                parent.close()
+                b._gated_candidate_query_child(child_sock,contents,registry,endpoint,group=0,deadline=time.monotonic()+8)
             except BaseException:
                 os._exit(4)
             os._exit(5)
@@ -77,13 +71,10 @@ with tempfile.TemporaryDirectory(prefix='device-gated-', dir='/root') as root:
         child=os.fork()
         if child==0:
             try:
-                parent.close(); child_sock.settimeout(5)
-                token=child_sock.recv(32)
-                if len(token)!=32: os._exit(2)
-                child_sock.sendall(b'READY:'+token)
-                if child_sock.recv(2)!=b'GO': os._exit(0)
-                with b._verified_helper_modules(contents) as candidate:
-                    candidate._serve_credential_queries_locked(registry,denied_endpoint,group=0)
+                parent.close()
+                b._gated_candidate_query_child(child_sock,contents,registry,denied_endpoint,group=0,deadline=time.monotonic()+5)
+            except b.BootstrapError:
+                os._exit(0)
             except BaseException:
                 os._exit(4)
             os._exit(5)
