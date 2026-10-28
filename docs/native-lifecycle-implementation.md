@@ -1932,3 +1932,10 @@ query-only、未接生产的监督候选在直接子回收结果未知时，不�
 隔离源码覆盖测试在验证包装中启动有限寿命子进程后，分别完成实际验证与注入验证失败：子进程存活时双锁拒绝竞争，handler 未启动；显式释放后仅成功路径启动 handler，失败路径非零退出且无 listener（`scripts/accept-native-query-supervisor-descendant-source.sh`，`20261028-104619-790ab3.log`）。首次运行夹具嵌套代码换行错误导致子进程未就绪，修正后通过（`20261028-104501-44523e.log`）。验证期 SIGTERM、fork/pidfd 窗口通过（`20261028-104737-8c0e43.log`）；完整回归 1308 passed / 16 skipped，ruff 通过（`20261028-104642-be96f2.log`）。专属容器已删除。
 
 这是受控进程与源码覆盖实验，未证明候选导入主动外部委派、任意多代或监督父崩溃后的持久恢复；生产门禁仍关闭，不代表准确新包、真实 handler 或完整 P1 验收。
+
+
+## 245. 真实查询 handler 与两代替身的监督故障
+
+一次性无网络容器中用普通用户完成离线实例安装并真实注册，运行 `_supervise_candidate_queries` 的真实私有 query listener，经 Unix socket 和逐消息凭据发送实际 query，保留 `Helper.handle`、实例绑定与 `Systemd.query` 路径，仅将 systemctl 可执行路径替换为有限寿命两代测试程序。监督停止时 handler 退出，两代替身仍存活，父监督继续持双锁；自然释放后回收并退出，未创建 start intent（`20261028-105020-3cb0ca.log`）。
+
+追加对 `_wait_adopted_query_children` 的测试注入：后代退出前后均持续报告未知，父监督继续持双锁；解除注入后回收并以非零退出，双锁才可重取（`scripts/accept-native-query-handler-tree-source.sh`，`20261028-105126-2744bd.log`）。旧 2cd3c17 DEB 加源码覆盖，专属容器已删除；未启动真实 Device 或 systemd。此实验不证明真实 systemctl 的外部委派、父监督被强杀/宿主崩溃后的持久 unknown、不可中断后代或完整生产 handler 身份，不解除生产门禁。
