@@ -656,3 +656,28 @@ def test_transition_observation_is_read_only_and_refuses_drift(runtime, monkeypa
     with pytest.raises(bootstrap.BootstrapError, match="evidence differs"):
         bootstrap.inspect_helper_transition(registry, unit_dir, "v1")
     assert unit.read_bytes() == before
+
+
+@pytest.mark.parametrize("kind", ["fifo", "directory"])
+def test_candidate_evidence_must_be_regular_file(runtime, monkeypatch, kind):
+    import os
+
+    source, destination = runtime
+    module = source / "lib/python3.13/site-packages/device_runtime/native_helper.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("# fixture")
+    candidates = destination.parent / "bootstrap-candidates"
+    candidate = candidates / "v1"
+    candidate.mkdir(parents=True)
+    (candidate / "snapshot.json").write_text("{}")
+    monkeypatch.setattr(bootstrap, "validate_snapshot", lambda directory: {"source": "fixture"})
+    monkeypatch.setattr(bootstrap, "_reject_helper_bytecode", lambda snapshot: None)
+    monkeypatch.setattr(bootstrap.helper, "_trusted", lambda *a, **kw: None)
+    path = candidate / "candidate.json"
+    if kind == "fifo":
+        os.mkfifo(path)
+    else:
+        path.mkdir()
+    with pytest.raises(bootstrap.BootstrapError, match="candidate evidence"):
+        bootstrap.read_helper_candidate(candidates, "v1")
+    assert os.path.lexists(path)

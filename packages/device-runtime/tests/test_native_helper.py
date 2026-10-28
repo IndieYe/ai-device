@@ -2246,3 +2246,25 @@ def test_query_supervisor_unknown_blocks_registration_before_management_file(tmp
     assert not (root / '.management.lock').exists()
     assert not (root / nh.MARKER).exists()
     assert marker.read_bytes() == b'unknown'
+
+
+
+@pytest.mark.parametrize("kind", ["symlink", "directory", "missing"])
+def test_deploy_helper_existing_checks_reject_nonregular_bootstrap(deployment, kind):
+    """Existing _trusted/is_file guards already cover this; keep the proof.
+
+    This test documents that the pre-existing guard rejects every non-regular
+    bootstrap before registry or unit writes. It is not new fencing.
+    """
+    python = deployment["bootstrap_python"]
+    python.unlink()
+    if kind == "symlink":
+        target = python.parent / "real-python"
+        target.write_text("fixture")
+        python.symlink_to(target)
+    elif kind == "directory":
+        python.mkdir()
+    with pytest.raises((nh.HelperError, FileNotFoundError)):
+        nh.deploy_helper(**deployment)
+    assert not deployment["registry"].exists()
+    assert list(deployment["unit_dir"].iterdir()) == []

@@ -43,6 +43,22 @@ def test_staged_job_is_deterministic_non_dispatching(transaction):
     assert not transaction.with_suffix(".job").exists()
 
 
+@pytest.mark.parametrize("suffix", [".prepared.json", ".approved.json", ".apply-intent.json"])
+@pytest.mark.parametrize("kind", ["fifo", "directory"])
+def test_describe_job_rejects_nonregular_evidence(transaction, suffix, kind):
+    import os
+
+    path = transaction.with_suffix(suffix)
+    path.unlink()
+    if kind == "fifo":
+        os.mkfifo(path)
+    else:
+        path.mkdir()
+    with pytest.raises(job.JobError, match="job evidence"):
+        job.describe_job(transaction)
+    assert os.path.lexists(path)
+
+
 def test_describe_job_rejects_nested_target_type_drift(transaction):
     prepared_path = transaction.with_suffix(".prepared.json")
     approval_path = transaction.with_suffix(".approved.json")

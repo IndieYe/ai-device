@@ -267,6 +267,8 @@ def read_helper_candidate(candidates_dir, version):
     _reject_helper_bytecode(snapshot)
     path = candidate / "candidate.json"
     helper._trusted(path)
+    if not stat.S_ISREG(path.lstat().st_mode):
+        raise BootstrapError("candidate evidence must be a regular file")
     value = json.loads(path.read_bytes())
     expected = candidate / "runtime/lib/python3.13/site-packages/device_runtime/native_helper.py"
     helper._trusted(expected)

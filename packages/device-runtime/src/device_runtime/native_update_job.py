@@ -34,11 +34,11 @@ def describe_job(stem):
     prepared_path = stem.with_suffix(".prepared.json")
     approved_path = stem.with_suffix(".approved.json")
     intent_path = stem.with_suffix(".apply-intent.json")
-    for path in (prepared_path, approved_path, intent_path):
-        helper._trusted(path)
-    prepared = json.loads(prepared_path.read_bytes())
-    approved = json.loads(approved_path.read_bytes())
-    intent = json.loads(intent_path.read_bytes())
+    prepared = _read_job_evidence(prepared_path)
+    approved = _read_job_evidence(approved_path)
+    intent = _read_job_evidence(intent_path)
+    if prepared is None or approved is None or intent is None:
+        raise JobError("job description evidence missing")
     digest = helper._digest(prepared_path)
     if not helper._valid_admin_approval(approved, digest):
         raise JobError("exact administrator approval required")
@@ -300,8 +300,9 @@ def close_before_apply(manager, instance_id, operation_id):
         manager._apply_lease(manager.registry / "package-manager", existing=True),
     ):
         path = stem.with_suffix(".job-intent.json")
-        helper._trusted(path)
-        intent = json.loads(path.read_bytes())
+        intent = _read_job_evidence(path)
+        if intent is None:
+            raise JobError("job intent evidence missing")
         unit = "ai-device-package-" + hashlib.sha256(str(stem).encode()).hexdigest() + ".service"
         prepared = stem.with_suffix(".prepared.json")
         approved = stem.with_suffix(".approved.json")
@@ -449,12 +450,13 @@ def observe_job(manager, instance_id, operation_id, *, runner=None):
         raise JobError("job observation identity differs")
     prepared_path = stem.with_suffix(".prepared.json")
     approved_path = stem.with_suffix(".approved.json")
-    for evidence in (prepared_path, approved_path):
-        helper._trusted(evidence)
-    prepared = json.loads(prepared_path.read_bytes())
+    prepared = _read_job_evidence(prepared_path)
+    approved = _read_job_evidence(approved_path)
+    if prepared is None or approved is None:
+        raise JobError("job observation evidence missing")
     prepared_digest = helper._digest(prepared_path)
     if intent.get("prepared_sha256") != prepared_digest or not helper._valid_admin_approval(
-        json.loads(approved_path.read_bytes()), prepared_digest
+        approved, prepared_digest
     ):
         raise JobError("job approval evidence differs")
     report = {

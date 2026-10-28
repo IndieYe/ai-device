@@ -2125,3 +2125,14 @@ job/update 定向 164 passed；完整回归 1358 passed / 16 skipped、ruff 通�
 `native_update_job` 增加统一证据读取：job intent、关闭回执、apply intent、outcome、sender 与 job recovery 回执均以 `lexists` 区分缺失，已有条目须可信且为普通文件，断链/链接/目录/FIFO 保留并拒绝。`observe_job` 在执行 systemd 状态查询前完成这些校验；outcome 存在但 sender 缺失时明确拒绝，不再把它当作未执行。job intent 缺失现返回明确错误而非底层 `FileNotFoundError`。该顺序只覆盖本入口的读取，不把状态查询当作执行收口，也不放行重试、退休或恢复。
 
 定向 212 项通过；完整 1406 passed / 16 skipped、ruff 通过（`20261028-125942-00a8f8.log`）。隔离 Linux 验证断链 outcome 与目录 sender 在 unit 查询前拒绝（`20261028-125927-5c1111.log`）；隔离中首次夹具身份字段不全、后代写入未显式关闭文件分别导致断言失败（`20261028-125703-c29a98`、`20261028-125902-a295c1`），已修正夹具并重跑，不据此声称产品行为已验证。真实 systemd 外部 job、旧快照和持久终态恢复仍未闭环，生产门禁不变。
+
+
+## 270. 外部 job 与旧快照入口覆盖审计
+
+外部 job 链：`dispatch_job` 由 `_require_proven_job_fence` 默认拒绝，拒绝发生在 `_prepare_dispatch_locked` 的元数据查询与 `updates` 目录初始化之前；`describe_job` 只产出不可派发的 unit 候选，`ConditionPathExists` 门禁文件从不创建；`observe_job` 先校验证据再做 unit 查询；`recover_job` 与 `retire_closed_job` 仍分别由 recovery/retirement 默认拒绝阻挡。系统命令共四处：`dispatch_job` 的 `systemd-run`、`observe_job` 的 `systemctl show`、`Updates.Systemd.query/cancel_job` 与向 `upgrade_supervisor` 的 `systemctl` 调用；后两者属旧升级器，不受新 job 围栏约束。
+
+旧快照链：`run_verified_helper_candidate` 首行即调用 `_require_proven_candidate_launch_fence`（永抛），字节校验与 `exec(compile(...))` 均在其后不可达；`publish_managed_helper_candidate` 同样先默认拒绝；`deploy_helper` 候选路径另有固定 bootstrap 检查；普通部署的 bootstrap 已由既有 `_trusted` 与 `is_file` 覆盖符号链接、目录与不可信路径，本轮测试确认该既有行为，未新增围栏（早先添加的重复检查已撤回）。
+
+本轮实际收紧仅两处：`read_helper_candidate` 的 `candidate.json` 要求可信普通文件，避免 FIFO 阻塞；`describe_job`、close 前置检查与 `observe_job` 的 prepared/approved 统一改用 `_read_job_evidence`。定向 bootstrap 47 项、job 74 项通过；完整 1417 passed / 16 skipped、ruff 通过（`20261028-133859-936ff6.log`）。
+
+未闭环：`upgrade_supervisor` 旧路径仍可直接调用 `systemctl` 启动/停止真实 unit，无新意图检查；旧 helper、旧 bootstrap、冻结 snapshot 与在途进程不自动更新；外部 systemd job 的完成、取消与宿主重启后终态无持久证据；`standard` 单元部署后的实际运行身份绑定仍未验证。生产、恢复、退休门禁不变。
