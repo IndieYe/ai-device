@@ -2242,3 +2242,35 @@ job/update 定向 164 passed；完整回归 1358 passed / 16 skipped、ruff 通�
 - 「accepted」依旧只表示 systemd 接受了作业，不表示包事务成功，也不表示 unit 已观察。`package_execution_confirmed` 保持 false。
 - 派发成功后 unit 立刻崩溃、或 systemd 在接受后重启，本轮未覆盖，仍依赖后续 `observe`。
 - 修复不改变「派发失去响应即 durable unknown 且不自动重投」的既有契约。
+
+
+## 276. systemd 探测镜像的构建配方已入库
+
+### 原因
+原镜像 `device-qual-systemd-amd64-ses13838:probe`（及 `device-qual-systemd-ses13838:probe`）已被用户误删。此前仓库只记录了镜像名，没有构建配方，导致无法复现，只能临时手搓等价镜像。
+
+### 现在可复现
+新增 `scripts/containers/systemd-probe/Containerfile`，配方固定为 `ubuntu:24.04` + `systemd 255.4` + `python3` + `dbus`，并预 mask 容器内无意义的 unit。构建与运行方式写在文件头注释里。
+
+```
+container build --platform linux/amd64 \
+  -t device-qual-systemd-amd64:probe \
+  -f scripts/containers/systemd-probe/Containerfile \
+  scripts/containers/systemd-probe
+```
+
+产物：`device-qual-systemd-amd64:probe`，manifest list `sha256:7b5d57b39d1f93e2b4d7e2fa4cbffb11e2205db953477eee935ea63090819213`，amd64 层 digest `7b5d57b39d1f`。
+
+### 验证
+在一次性容器中确认：`PID1=systemd`、`systemd 255 (255.4-1ubuntu8.18)`、`is-system-running=degraded`、`/sbin/init` 存在。随后实跑两个既有探测脚本：
+- `probe-dispatch-no-block-fix.py` → `PROBE_OK`（8 秒 ExecStart 派发 0.04s 返回）
+- `probe-native-job-terminal-states.py` → `PROBE_OK`，六类终态与第 273 节结论完全一致
+
+容器已 `stop`+`delete` 并复核不存在。
+
+### 两个操作要点（曾踩坑）
+1. **不要把命令直接传给 `container run`**：那会替换 PID1 为 `/bin/sh`，systemd 根本不启动。必须 `--detach` 后用 `container exec` 进入。
+2. **必须 `--cap-add ALL`**：默认能力集下 systemd 启动即退出。
+
+### 关系说明
+`device-qual-systemd-amd64-probe:rebuild`（第 274 节临时重建）与本次的 `device-qual-systemd-amd64:probe` 均为不复现原镜像的重建品，但功能等价已由上述探测脚本验证。原镜像未被恢复，其历史证据（第 273 节及更早）仍指向已不存在的制品。
