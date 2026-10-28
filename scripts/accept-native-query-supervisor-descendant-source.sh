@@ -20,6 +20,7 @@ with tempfile.TemporaryDirectory(prefix='device-query-supervisor-tree-',dir='/ro
     fake.write_text('#!'+sys.executable+'\nimport os,time,pathlib\np=pathlib.Path('+repr(str(root))+')\n(p/"worker-pid").write_text(str(os.getpid()))\ndeadline=time.monotonic()+20\nwhile not (p/"release").exists() and time.monotonic()<deadline: time.sleep(.05)\n')
     fake.chmod(0o700)
     evidence=b.publish_managed_helper_candidate(registry,Path('/opt/ai-device/bootstrap/0.2.2-native1/runtime'),'candidate')
+    candidates=registry/'bootstrap-candidates'
     preflight='''import subprocess,sys
 from device_runtime import native_bootstrap as b
 p=subprocess.Popen([sys.executable,"-c","import time; time.sleep(10)"])
@@ -48,6 +49,33 @@ b._supervise_candidate_queries(sys.argv[1],"candidate",registry=sys.argv[2],sock
         assert not blocked_marker.exists() and not blocked_endpoint.exists()
     with h._daemon_lease_pair(registry): pass
     print('PACKAGE_EX_BLOCKS_SUPERVISOR_BEFORE_VERIFICATION')
+    for failure in ('file','directory'):
+        failed_registry=root/('registry-fsync-'+failure); failed_registry.mkdir(mode=0o700)
+        failed_marker=root/('failed-validation-'+failure); failed_socket=root/('failed-'+failure+'.sock')
+        failed_code='''import os,pathlib,stat,sys
+from device_runtime import native_bootstrap as b
+real=os.fsync
+def fsync(fd):
+ is_dir=stat.S_ISDIR(os.fstat(fd).st_mode)
+ if is_dir==(sys.argv[6]=="directory"): raise OSError("injected fsync failure")
+ return real(fd)
+def verify(*args): pathlib.Path(sys.argv[5]).write_text("unexpected"); raise AssertionError("verification ran")
+os.fsync=fsync; b._verified_helper_bytes=verify
+b._supervise_candidate_queries(sys.argv[1],"candidate",registry=sys.argv[2],socket_path=sys.argv[3],group=0,expected_snapshot_sha256=sys.argv[4])
+'''
+        failed=subprocess.run([sys.executable,'-I','-B','-c',failed_code,str(candidates),str(failed_registry),str(failed_socket),evidence['snapshot_sha256'],str(failed_marker),failure],capture_output=True,timeout=10)
+        assert failed.returncode!=0 and b'intent publication failed or unknown' in failed.stderr
+        assert not failed_marker.exists() and not failed_socket.exists()
+        intent=failed_registry/'query-supervisor.intent.json'
+        assert intent.exists()==(failure=='directory')
+        if intent.exists():
+            before=intent.read_bytes()
+            retry=subprocess.run([sys.executable,'-I','-B','-c',blocked_code,str(candidates),str(failed_registry),str(failed_socket),evidence['snapshot_sha256'],str(failed_marker)],capture_output=True,timeout=10)
+            assert retry.returncode!=0 and b'intent already exists' in retry.stderr
+            assert intent.read_bytes()==before and not failed_marker.exists()
+        with h._daemon_lease_pair(failed_registry): pass
+        with h.package_lease(failed_registry,exclusive=True): pass
+        print('INTENT_FSYNC_FAILURE_BLOCKS_VALIDATION',failure)
     vready=root/'validation-worker-pid'; vrelease=root/'validation-release'; vdone=root/'validation-returned'; vendpoint=root/'validation.sock'
     validation_code='''import os,pathlib,subprocess,sys,time
 from device_runtime import native_bootstrap as b
@@ -99,6 +127,7 @@ b._supervise_candidate_queries(sys.argv[1],"candidate",registry=sys.argv[2],sock
             if not poll.poll(5000): signal.pidfd_send_signal(vfd,signal.SIGKILL); assert poll.poll(5000)
             os.close(vfd)
         verror.close()
+    registry=root/'registry-query'; registry.mkdir(mode=0o700)
     code='''import contextlib,os,pathlib,sys
 from device_runtime import native_bootstrap as b
 real_fork=os.fork
@@ -117,7 +146,7 @@ os.fork=fork
 b._verified_helper_modules=modules
 b._supervise_candidate_queries(sys.argv[1],"candidate",registry=sys.argv[2],socket_path=sys.argv[3],group=0,expected_snapshot_sha256=sys.argv[4])
 '''
-    p=subprocess.Popen([sys.executable,'-I','-B','-c',code,str(registry/'bootstrap-candidates'),str(registry),str(endpoint),evidence['snapshot_sha256'],str(fake),str(child)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    p=subprocess.Popen([sys.executable,'-I','-B','-c',code,str(candidates),str(registry),str(endpoint),evidence['snapshot_sha256'],str(fake),str(child)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     worker_fd=None; handler_fd=None
     try:
         end=time.monotonic()+10

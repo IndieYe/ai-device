@@ -19,6 +19,7 @@ with tempfile.TemporaryDirectory(prefix='device-supervisor-',dir='/root') as roo
     endpoint=Path(root)/'query.sock'
     source=Path('/opt/ai-device/bootstrap/0.2.2-native1/runtime')
     evidence=b.publish_managed_helper_candidate(registry,source,'candidate')
+    candidates=registry/'bootstrap-candidates'
     code='from device_runtime import native_bootstrap as b; import sys; print(b._supervise_candidate_queries(sys.argv[1],"candidate",registry=sys.argv[2],socket_path=sys.argv[3],group=0,expected_snapshot_sha256=sys.argv[4]),flush=True)'
     p=subprocess.Popen([sys.executable,'-I','-B','-c',code,str(registry/'bootstrap-candidates'),str(registry),str(endpoint),evidence['snapshot_sha256']],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     try:
@@ -40,6 +41,12 @@ with tempfile.TemporaryDirectory(prefix='device-supervisor-',dir='/root') as roo
         assert p.returncode==0,(p.returncode,stderr)
         assert b'query_supervisor_stopped_not_authorized' in stdout
         with h._daemon_lease_pair(registry): pass
+        intent=registry/'query-supervisor.intent.json'; frozen=intent.read_bytes()
+        no_restart=subprocess.run([sys.executable,'-I','-B','-c',code,str(candidates),str(registry),str(Path(root)/'retry.sock'),evidence['snapshot_sha256']],capture_output=True,timeout=10)
+        assert no_restart.returncode!=0 and b'intent already exists' in no_restart.stderr
+        assert intent.read_bytes()==frozen and not (Path(root)/'retry.sock').exists()
+        print('NORMAL_STOP_DOES_NOT_RETIRE_INTENT',flush=True)
+        registry=Path(root)/'registry-early'; registry.mkdir(mode=0o700)
         early=Path(root)/'early.sock'; marker=Path(root)/'fork-called'
         early_code='''from device_runtime import native_bootstrap as b
 import os,signal,sys
@@ -56,12 +63,13 @@ b._verified_helper_bytes=verify
 os.fork=guarded_fork
 b._supervise_candidate_queries(sys.argv[1],"candidate",registry=sys.argv[2],socket_path=sys.argv[3],group=0,expected_snapshot_sha256=sys.argv[4])
 '''
-        early_run=subprocess.run([sys.executable,'-I','-B','-c',early_code,str(registry/'bootstrap-candidates'),str(registry),str(early),evidence['snapshot_sha256'],str(marker)],capture_output=True,timeout=20)
+        early_run=subprocess.run([sys.executable,'-I','-B','-c',early_code,str(candidates),str(registry),str(early),evidence['snapshot_sha256'],str(marker)],capture_output=True,timeout=20)
         assert early_run.returncode == -signal.SIGTERM,(early_run.returncode,early_run.stderr)
         assert not early.exists() and not marker.exists()
         with h._daemon_lease_pair(registry): pass
         print('STOP_DURING_VALIDATION_PREVENTS_FORK',flush=True)
         for mode in ('signal-after-fork', 'child-pidfd-failure'):
+            registry=Path(root)/('registry-'+mode); registry.mkdir(mode=0o700)
             endpoint2=Path(root)/(mode+'.sock'); receipt=Path(root)/(mode+'.receipt')
             fault_code='''from device_runtime import native_bootstrap as b
 import os,signal,sys
@@ -99,7 +107,7 @@ except b.BootstrapError:
         except ChildProcessError: open(sys.argv[5],"w").write(str(child[0]))
     raise
 '''
-            result=subprocess.run([sys.executable,'-I','-B','-c',fault_code,str(registry/'bootstrap-candidates'),str(registry),str(endpoint2),evidence['snapshot_sha256'],str(receipt),mode],capture_output=True,timeout=20)
+            result=subprocess.run([sys.executable,'-I','-B','-c',fault_code,str(candidates),str(registry),str(endpoint2),evidence['snapshot_sha256'],str(receipt),mode],capture_output=True,timeout=20)
             assert result.returncode != 0,(mode,result.stdout,result.stderr)
             assert receipt.exists() and int(receipt.read_text())>0,(mode,result.returncode,result.stderr)
             assert not endpoint2.exists(),mode

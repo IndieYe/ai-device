@@ -1967,3 +1967,12 @@ query-only、未接生产的监督候选在直接子回收结果未知时，不�
 仅未接生产的 query-only 监督候选在 daemon 双锁之后尝试取得共享 package lease，持有至候选验证、handler 和收养后代回收结束；包锁为非阻塞竞争，已有 package EX 时拒绝启动，不运行验证或 fork。真实 query handler 源码覆盖旧包的隔离测试确认：监督运行期间 package EX 拒绝，中间后代退出但孙进程存活期间仍保持，完整收口后可重取；包 EX 先持有时验证前拒绝（`20261028-110716-5b9172.log`、`20261028-110812-3128c1.log`）。pidfd 与无 pidfd 两条直接子回收未知路径期间也均保持包共享锁（`20261028-111003-688123.log`）。完整回归 1316 passed / 16 skipped，ruff 通过（`20261028-110832-b443d9.log`），专属容器已删除。
 
 这只证明参与同一 registry/package lock 的协作进程在监督者存活时互斥；SIGKILL 父监督后 handler 退出、后代仍存活时 daemon 锁及 package EX 均可重取（同 `20261028-110716-5b9172.log`）。锁描述符在 fork 阶段仍会被继承，exec/CLOEXEC 不证明整个 FD 生命周期；未证明旧 helper、冻结 snapshot 或原生包钩子参与同一协议。持久意图原语仍未接入，未知恢复/终态未实现，不能解除任何生产门禁。
+
+
+## 250. 私有查询监督候选启动前发布持久意图
+
+未接生产的 `_supervise_candidate_queries` 取得 daemon 双锁及共享 package lease、检查专用 subreaper 条件后，在候选字节验证和任何 handler fork 前，使用第248节原语发布固定名称、绑定随机 run ID 和 snapshot digest 的 no-replace 意图。发布失败或未知时不运行验证/handler。候选**任何退出均不自动退休意图**；正常停止也会阻止同一 registry 再次启动此候选。没有人工恢复入口；不能删除意图绕过。
+
+隔离真实 query handler + 两代替身：监督父 SIGKILL 后后代仍存活、daemon 与 package 锁可重取，但意图保留，同候选在验证前拒绝重启（`20261028-111205-b67ac8.log`）。实际监督入口注入文件 fsync、目录 fsync 故障时均不验证或启动，目录 fsync 失败留下的可见意图阻止重启（`20261028-111508-5f7fb8.log`）；正常停止不退休，fork 窗口回归通过（`20261028-111546-c12541.log`）。测试场景改为各自独立 registry，不删除意图复用状态；完整 1316 passed / 16 skipped，ruff 通过（`20261028-111559-9f4c61.log`），专属容器已删除。注入和进程 SIGKILL 均不证明真实掉电后目录持久性。
+
+此意图仅由私有候选自身消费；现有生产 daemon、安装/更新、包钩子和旧冻结 snapshot 未受该意图保护。发布后无持久终态和恢复契约，且旧代码可绕过，故不能声称跨入口围栏或恢复完成，既有生产 start/job/recovery/包保护保持关闭。下一步须在共同 package 锁及管理员维护前提下逐入口设计和验证守卫，审计旧快照，另行设计 durable 终态和管理员处置。

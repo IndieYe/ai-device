@@ -82,6 +82,20 @@ b._supervise_candidate_queries(sys.argv[1],"candidate",registry=sys.argv[2],sock
   if mode=='crash':
    with h._daemon_lease_pair(registry): pass
    with h.package_lease(registry,exclusive=True): pass
+   intent=registry/'query-supervisor.intent.json'; before=intent.read_bytes()
+   marker=root/'retry-validation'; retry_socket=root/'retry.sock'
+   retry_code='''import pathlib,sys
+from device_runtime import native_bootstrap as b
+def verify(*args): pathlib.Path(sys.argv[5]).write_text("unexpected"); raise AssertionError("validation ran")
+b._verified_helper_bytes=verify
+b._supervise_candidate_queries(sys.argv[1],"candidate",registry=sys.argv[2],socket_path=sys.argv[3],group=0,expected_snapshot_sha256=sys.argv[4])
+'''
+   retry=subprocess.run([sys.executable,'-I','-B','-c',retry_code,str(registry/'bootstrap-candidates'),str(registry),str(retry_socket),evidence['snapshot_sha256'],str(marker)],capture_output=True,timeout=10)
+   assert retry.returncode!=0 and b'intent already exists' in retry.stderr
+   assert not marker.exists() and not retry_socket.exists() and intent.read_bytes()==before
+   for fd in fds[1:]:
+    still=select.poll(); still.register(fd,select.POLLIN); assert not still.poll(0),'descendant exited before retry'
+   print('CRASH_INTENT_BLOCKS_SAME_CANDIDATE_RESTART_BEFORE_VALIDATION')
    print('SUPERVISOR_SIGKILL_RELEASES_LOCKS_WHILE_QUERY_DESCENDANTS_LIVE')
   else:
    assert p.poll() is None, 'supervisor exited with live descendants'
