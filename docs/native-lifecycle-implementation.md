@@ -1780,3 +1780,12 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 一次性无网络 Linux amd64/Rosetta 容器使用 e1ffb44 DEB 并在容器内覆盖当前 `native_helper.py`，在 root 私有目录验证真实源码的双锁 fork 持有及释放（`20261028-090826-ee9c7e.log`）；这是源码覆盖实验而非准确新包验收，容器已删除。首次在 `/tmp` 因可信祖先检查正确拒绝，未进入 fork 阶段（`20261028-090805-6c551c.log`）。
 
 该接口并非监督器；持有 FD 或 inode 匹配不证明锁仍持有，任一共享 OFD 的 `LOCK_UN` 会影响其他持有者，后代继承也会拖延释放。调用方不得手动关闭/解锁，须控制所有 fork 继承，并依赖已确认的稳定 registry 管理前提。未接入受控启动、消息授权或任何新生产动作，P1 未完成。
+
+
+## 227. 双锁准确 DEB 隔离验收
+
+以干净检查点 `dbd1a200e0c44e8acb2719b083180b9a3a80964c` 离线构建 wheels 和 payload（`20261028-091157-e30c64.log`），Device wheel SHA256 `8f4c66ef643804a47bf1705ec3f8d8f8fac9026abe4be3fdb570cc2976d051e0`；34 个 Python 模块与该提交逐字节一致（`20261028-091316-413ef2.log`）。无网络构建未签名 DEB `build/native-packages-p1-dbd1a20/ai-device-native-client_0.2.2-1_amd64.deb`，105245404 字节，SHA256 `b700bcf4289ec853804db6d46c8d8ab3d0dff7964195adaba2fddb82abfdbd0f`（`20261028-091207-3400d6.log`）。
+
+一次性离线 Linux amd64/Rosetta 容器干净安装该包，包内 uv 检查 17 项依赖，独立 bootstrap 的 helper 源码与准确 wheel 一致；真实 fork 验证父作用域退出后子进程继续持有目录锁与文件锁，子进程退出后重新获取（`scripts/accept-native-daemon-pair-dbd1a20.sh`，`20261028-091312-f72912.log`）。构建及验收容器均已删除。
+
+该有限夹具不执行生产监督、启动、消息授权或异常后代治理；共享 FD 不证明锁仍持有，不改变稳定 registry 维护前提，生产派发和恢复门禁不变。旧包和冻结 snapshot 不自动更新，P1 未完成。
