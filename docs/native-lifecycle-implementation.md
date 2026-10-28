@@ -1746,3 +1746,12 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 新增私有 `_serve_credential_query_once`，复用逐段 root 凭据接收，仅解析三个严格字段且 action 必须为 `query`、ID 合法，拒绝 JSON 重复字段、其他动作及额外字段。合法请求调用现有 `Helper.handle` 查询，一次响应后关闭连接；失败只返回固定拒绝，响应丢失不重调 handler。该入口未接入生产 `_serve`、不允许 start/job/recovery，不能把来源 root 解释为监督器、执行者或 invocation 身份；listener 须在消息排队前启用 `SO_PASSCRED`。
 
 测试覆盖合法 query、重复字段、start、错误 ID、额外字段、格式错误、凭据失败、响应丢失和连接关闭；定向 206 通过、1 跳过（`20261028-084411-8c6b41.log`，响应丢失测试前），完整 1250 通过、16 跳过（`20261028-084440-c73ae3.log`），ruff 与 diff 检查通过。测试为 handler 替身；真实包、socket 与实际 systemd query 验证另待记录。生产协议和所有门禁不变，P1 未完成。
+
+
+## 223. 凭据只读 query 的准确 DEB 隔离 systemd 验收
+
+从干净源码检查点 `55dca56afac866688d32fb0047a559eb517b78c8` 离线构建未签名 DEB `build/native-packages-p1-55dca56/ai-device-native-client_0.2.2-1_amd64.deb`，105240936 字节，SHA256 `fad5a3ccfdf05478918a42f75cf3e2b22877e62aff23f416c0539a8df9d73b00`；Device wheel SHA256 `a2bc777dc9839cd3fb6e924be263fc1baaba38ef9f6d486ee4f69cc242d00a08`，34 个 Python 模块与提交逐字节一致（`20261028-084754-244a53.log`）。
+
+无网络隔离 systemd 容器干净安装准确 DEB，包内 uv 检查 17 项依赖，普通用户创建实例并登记；独立 bootstrap helper 与 wheel 字节相同。手动创建启用 SO_PASSCRED 的真实 Unix listener，以 root 消息触发私有 `_serve_credential_query_once`，实际调用 `Helper.handle` 和 systemd 查询，返回 inactive；start 和重复 action 字段被 handler 前拒绝、无 start intent，Device 仍 inactive/MainPID 0（`20261028-084846-52d399.log`，`scripts/accept-native-credential-query-55dca56.sh`）。构建及验收容器均已删除（`20261028-084903-241e80.log`）。
+
+该 listener/入口由验收脚本直接调用，并非生产 `_serve`；未证明 supervisor、处理者身份、invocation、状态变更动作或外部 job 终态与恢复。生产 job/worker/恢复门禁和包保护不变，旧环境不自动更新，P1 未完成。
