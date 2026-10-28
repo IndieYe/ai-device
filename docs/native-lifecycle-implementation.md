@@ -1730,3 +1730,12 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 新增私有 `native_helper._receive_root_credential_frame`：要求 Linux 和已启用的 `SO_PASSCRED`，逐段 `recvmsg` 检查唯一完整内核凭据、同一 root PID/UID/GID、有界单行帧及单调时钟整帧 deadline；缺失、混合、截断、未知控制数据、超长、多帧或异常拒绝。拒绝附带 `SCM_RIGHTS` 时关闭已交付 FD，某次关闭失败仍尝试余下 FD 并拒绝。调用者负责在所有结果后关闭连接；当前开关检查不能证明数据排队前已启用，后续 listener 必须显式保证。
 
 模拟测试覆盖分段、混合凭据、非 root、无/重复/畸形凭据、截断、大小、deadline、关闭失败和 FD 清理；定向 194 通过、1 跳过（`20261028-083538-3fb2e3.log`，最后三个补充用例前）；完整 1240 通过、16 跳过（`20261028-083650-a9805e.log`），ruff 与 diff 检查通过。新组件尚未接入 `_serve`，不解析动作、不调用 handler、不验证代码或 invocation、不授予派发权限；实际 Linux socket 和准确包验证另待记录。旧 helper/snapshot 不自动更新，生产门禁不变。
+
+
+## 221. 逐消息凭据组件的准确 DEB Linux 验收
+
+从干净源码检查点 `4a2542c8f836e41e15d658c76b84edb82e0bf739` 离线构建未签名 DEB `build/native-packages-p1-4a2542c/ai-device-native-client_0.2.2-1_amd64.deb`，105258734 字节，SHA256 `935787550b08eb79bd1c328557eae0b2f30340a64d838fa2444bcccaafe44a91`；Device wheel SHA256 `b6ee26507368edf382dc2c3ae55ea19854ddb2b02b27609d1dd3592c743efc6b`，34 个 Python 模块与提交逐字节一致（`20261028-083952-2b3674.log`）。
+
+无网络一次性 Linux amd64/Rosetta 容器干净安装准确 DEB，包内 uv 检查 17 项依赖，`native_helper.py` 与 wheel 一致；对包内 `_receive_root_credential_frame` 使用真实 Unix listener/socketpair：listener 在 connect 前启用 `SO_PASSCRED`，接收 accept 前排队的 root 消息及正确内核 PID/UID/GID；子进程两段之间降权的混合帧拒绝；真实 `SCM_RIGHTS` 单 FD 和 80 FD 截断均拒绝且 `/proc/self/fd` 数量无净增；部分帧按有限 deadline 拒绝（`20261028-084040-b545d9.log`，`scripts/accept-native-credential-frame-4a2542c.sh`）。构建及验收容器均已删除（`20261028-084053-a08f58.log`）。
+
+这是独立接收组件测试，未接入生产 listener/handler，不证明当前服务逐消息认证、受控监督或 invocation 身份，也不证明业务动作及持久事务绑定。生产 job/worker/恢复门禁不变，旧包和运行中 helper 不自动更新，P1 未完成。
