@@ -78,12 +78,16 @@ b._supervise_candidate_queries(sys.argv[1],"candidate",registry=sys.argv[2],sock
             try:
                 with lease(registry): raise AssertionError('lease released on unknown reap')
             except h.HelperError as exc: assert 'already active' in str(exc)
+        try:
+            with h.package_lease(registry,exclusive=True): raise AssertionError('package lease released on unknown reap')
+        except h.HelperError as exc: assert 'package or start sender still executing' in str(exc)
         release.write_text('allow')
         assert p.wait(timeout=10) != 0, 'unknown cleanup must not report normal stop'
         assert receipt.exists() and int(receipt.read_text()) > 0, 'no direct-child reap receipt'
         if mode=='gated': assert not endpoint.exists(), 'gated child created listener'
         with h._daemon_lease_pair(registry): pass
-        print('REAP_FAILURE_RETAINS_LOCKS_UNTIL_REAP_CONFIRMED',mode,flush=True)
+        with h.package_lease(registry,exclusive=True): pass
+        print('REAP_FAILURE_RETAINS_DAEMON_AND_PACKAGE_LOCKS_UNTIL_REAP_CONFIRMED',mode,flush=True)
     finally:
         release.touch()
         if p.poll() is None:

@@ -35,6 +35,19 @@ finally:
 '''
     subprocess.run([sys.executable,'-I','-B','-c',preflight],check=True,timeout=10)
     print('SUPERVISOR_REJECTS_PREEXISTING_CHILD_WITHOUT_REAPING')
+    blocked_marker=root/'blocked-validation'; blocked_endpoint=root/'blocked.sock'
+    blocked_code='''import pathlib,sys
+from device_runtime import native_bootstrap as b
+def verify(*args): pathlib.Path(sys.argv[5]).write_text("unexpected"); raise AssertionError("verification ran")
+b._verified_helper_bytes=verify
+b._supervise_candidate_queries(sys.argv[1],"candidate",registry=sys.argv[2],socket_path=sys.argv[3],group=0,expected_snapshot_sha256=sys.argv[4])
+'''
+    with h.package_lease(registry,exclusive=True):
+        blocked=subprocess.run([sys.executable,'-I','-B','-c',blocked_code,str(registry/'bootstrap-candidates'),str(registry),str(blocked_endpoint),evidence['snapshot_sha256'],str(blocked_marker)],capture_output=True,timeout=10)
+        assert blocked.returncode!=0 and b'package or start sender still executing' in blocked.stderr
+        assert not blocked_marker.exists() and not blocked_endpoint.exists()
+    with h._daemon_lease_pair(registry): pass
+    print('PACKAGE_EX_BLOCKS_SUPERVISOR_BEFORE_VERIFICATION')
     vready=root/'validation-worker-pid'; vrelease=root/'validation-release'; vdone=root/'validation-returned'; vendpoint=root/'validation.sock'
     validation_code='''import os,pathlib,subprocess,sys,time
 from device_runtime import native_bootstrap as b

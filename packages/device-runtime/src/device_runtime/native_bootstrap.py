@@ -724,7 +724,9 @@ def _supervise_candidate_queries(candidates_dir, version, *, registry, socket_pa
     try:
         if stops & oldmask or stops & signal.sigpending():
             raise BootstrapError("query supervisor stop signal already pending or blocked")
-        with helper._daemon_lease_pair(registry), _exclusive_query_subreaper():
+        # The package lease is nonblocking and held for the entire local tree.
+        # It is not a durable crash fence or proof that old code participates.
+        with helper._daemon_lease_pair(registry), helper.package_lease(registry), _exclusive_query_subreaper():
             try:
                 contents = _verified_helper_bytes(candidates_dir, version, expected_snapshot_sha256)
             finally:

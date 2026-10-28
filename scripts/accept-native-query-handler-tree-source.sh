@@ -60,9 +60,11 @@ b._supervise_candidate_queries(sys.argv[1],"candidate",registry=sys.argv[2],sock
   end=time.monotonic()+8
   while not (ready.exists() and grand.exists()) and p.poll() is None and time.monotonic()<end: time.sleep(.02)
   assert ready.exists() and grand.exists(), 'real query did not start test worker tree'
-  # Locks are cooperative and distinct: never infer package exclusion from daemon ownership.
-  with h.package_lease(registry,exclusive=True):
-   print('PACKAGE_EX_CAN_COEXIST_WITH_RUNNING_QUERY_SUPERVISOR',flush=True)
+  # A running candidate shares the package lock; exclusive maintenance must fail.
+  try:
+   with h.package_lease(registry,exclusive=True): raise AssertionError('package EX acquired during query')
+  except h.HelperError as exc: assert 'package or start sender still executing' in str(exc)
+  print('PACKAGE_EX_REFUSED_DURING_QUERY_SUPERVISION',flush=True)
   fds=[os.pidfd_open(int(path.read_text())) for path in (handler,ready,grand)]
   mode=os.environ.get('DEVICE_SUPERVISOR_MODE','unknown-wait')
   assert mode in ('unknown-wait','crash','intermediate-exit')
@@ -79,6 +81,7 @@ b._supervise_candidate_queries(sys.argv[1],"candidate",registry=sys.argv[2],sock
    poll=select.poll(); poll.register(fd,select.POLLIN); assert not poll.poll(0),'worker died prematurely'
   if mode=='crash':
    with h._daemon_lease_pair(registry): pass
+   with h.package_lease(registry,exclusive=True): pass
    print('SUPERVISOR_SIGKILL_RELEASES_LOCKS_WHILE_QUERY_DESCENDANTS_LIVE')
   else:
    assert p.poll() is None, 'supervisor exited with live descendants'
@@ -116,6 +119,7 @@ b._supervise_candidate_queries(sys.argv[1],"candidate",registry=sys.argv[2],sock
   elif mode=='intermediate-exit':
    assert p.wait(timeout=10)==0, 'supervisor did not reap surviving grandchild'
   with h._daemon_lease_pair(registry): pass
+  with h.package_lease(registry,exclusive=True): pass
   assert not list(registry.glob('op-probe-*.json'))
   if mode=='unknown-wait': print('REAL_QUERY_HANDLER_MULTIGENERATION_UNKNOWN_WAIT_HOLDS_LEASE_UNTIL_REAPED')
   if mode=='intermediate-exit': print('INTERMEDIATE_EXIT_GRANDCHILD_REPARENTED_LOCK_HELD')
