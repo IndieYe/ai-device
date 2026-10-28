@@ -600,11 +600,19 @@ def observe_job(manager, instance_id, operation_id, *, runner=None):
                     report["state"] = "job_failed_requires_review"
     except (OSError, subprocess.SubprocessError):
         pass
-    if run_start is not None and report["state"] == "dispatch_unknown":
-        # The dispatch is attributable: it demonstrably started. A vanished unit
-        # is therefore explainable instead of being an indistinguishable unknown.
-        # Still no retry, and the fence stays.
+    if (
+        run_start is not None
+        and report["state"] == "dispatch_unknown"
+        and report["unit_observation"] is not None
+        and report["unit_observation"]["LoadState"] == "not-found"
+    ):
+        # The dispatch is attributable AND the unit is gone: that combination is
+        # explainable instead of being an indistinguishable unknown. Still no
+        # retry, and the fence stays. Any other unknown (systemctl unusable,
+        # output unparseable, unit still loaded but inactive) is not evidence of
+        # absence, so it must keep saying unknown rather than claim completion.
         report["state"] = "job_completed_no_unit_evidence"
+        report["completion_basis"] = "unit_not_found_after_run_start"
     if apply_intent is not None:
         expected_apply = {
             "prepared_sha256": prepared_digest,

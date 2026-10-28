@@ -1311,6 +1311,10 @@ NOT_FOUND = (
     "LoadState=not-found\nActiveState=inactive\nSubState=dead\n"
     "Result=success\nMainPID=0\nJob=\n"
 )
+LOADED_INACTIVE = (
+    "LoadState=loaded\nActiveState=inactive\nSubState=dead\n"
+    "Result=success\nMainPID=0\nJob=\n"
+)
 
 
 def test_without_run_start_keeps_existing_behaviour(transaction, monkeypatch):
@@ -1564,3 +1568,35 @@ def test_malformed_non_object_evidence_raises_job_error(transaction, monkeypatch
             "one",
             runner=_unit(LOADED_FAILED),
         )
+
+
+@pytest.mark.parametrize(
+    "runner,expected",
+    [
+        # Not evidence of absence: must stay unknown.
+        (lambda *a, **k: (_ for _ in ()).throw(OSError("no systemctl")), "dispatch_unknown"),
+        (lambda *a, **k: SimpleNamespace(stdout="garbage\n"), "dispatch_unknown"),
+        (lambda *a, **k: _unit(LOADED_INACTIVE)(), "dispatch_unknown"),
+        # Actual absence after an attributable start.
+        (_unit(NOT_FOUND), "job_completed_no_unit_evidence"),
+    ],
+)
+def test_completion_requires_unit_absence(transaction, monkeypatch, runner, expected):
+    """run_start alone must not claim completion.
+
+    "Could not query the unit" and "the unit is gone" are different facts. Only
+    the second is attributable to a finished dispatch; collapsing them made a
+    broken systemctl look like a completed package transaction.
+    """
+    monkeypatch.setattr(job, "_boot_id", lambda: BOOT)
+    registry = _registry_with_job(transaction)
+    report = job.observe_job(
+        SimpleNamespace(registry=registry), "probe", "one", runner=runner
+    )
+    assert report["state"] == expected
+    assert report["retry_allowed"] is False
+    assert report["fence_retained"] is True
+    if expected == "job_completed_no_unit_evidence":
+        assert report["completion_basis"] == "unit_not_found_after_run_start"
+    else:
+        assert "completion_basis" not in report

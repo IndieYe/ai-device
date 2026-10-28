@@ -2444,3 +2444,37 @@ worker 在 `main()` 中**先写** `.job-run-start.json`，再做任何 apply 相
 
 ### 边界
 未做全局 schema 校验，也未验证字段级类型（如 `unit` 为 int 时仍会走到「identity differs」而非类型错误）。本轮只保证「非对象」不再逃出 `JobError` 契约。
+
+
+## 282. 修复：run-start 把「查不到」误报为「已完成」
+
+### 复现
+`observe_job` 里只要有 run-start 证据，就把 `dispatch_unknown` 一律改写为 `job_completed_no_unit_evidence`。但 `dispatch_unknown` 混着两类完全不同的情况：**unit 确实消失了**，和**根本没查成功**。
+
+容器实测五种输入，全部坍缩成同一状态（`20261028-174339`）：
+
+| 情形 | 有 run-start | 无 run-start |
+| --- | --- | --- |
+| systemctl 不存在（`OSError`） | `job_completed_no_unit_evidence` | `dispatch_unknown` |
+| systemctl 超时 | 同上 | `dispatch_unknown` |
+| 输出无法解析 | 同上 | `dispatch_unknown` |
+| unit 仍 loaded 但 inactive | 同上 | `dispatch_unknown` |
+| unit 确实 not-found | 同上 | `dispatch_unknown` |
+
+只有最后一行是真正的可归因完成。前四行是「查询失败」，却被报告成「已完成」——**把观测不到说成了观测结果**。
+
+### 修复
+改写条件增加 unit 证据必须是 `LoadState == "not-found"`，并在改写时写入 `completion_basis: "unit_not_found_after_run_start"`，让「凭什么说完成」可核对，而不是只看状态名猜。
+
+### 验证
+- 容器复验：仅 `unit_not_found` 改写，其余四项维持 `dispatch_unknown`（`20261028-175258`）。
+- 新增参数化测试覆盖四种对照。
+- 完整回归 **1467 passed, 16 skipped**，ruff 通过（`20261028-175336`）。
+
+### 边界
+- 这条改写仍然**不授予 retry**，fence 保留；它只影响状态描述，不改变任何重放许可。
+- `not-found` 只说明「现在查不到该 unit」，不证明包事务成功、不证明 unit 曾属于这次 dispatch、也不证明 cgroup 后代已收口。`completion_basis` 的命名刻意限定在「unit 不在了」这一事实，而非「事务完成」。
+- 未区分「从未创建」与「创建后卸载」——两者都表现为 not-found，本轮不做进一步收敛。
+
+### 修正记录
+首次测试写法把 `_unit(NOT_FOUND)`（本身返回 runner）又包了一层 lambda，导致 runner 收到函数对象而非 stdout，报 `AttributeError`。已改为直接传 `_unit(NOT_FOUND)`。
