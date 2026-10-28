@@ -85,6 +85,46 @@ def _trusted(path, *, directory=False):
         raise HelperError("registry must be a directory")
 
 
+def _trusted_instance_interpreter(path, uid, gid):
+    """Validate the client interpreter the instance itself will execute.
+
+    Unlike the root helper bootstrap this is not a privilege boundary: the unit
+    runs as ``uid`` in both cases, so replacing the file cannot escalate. It must
+    still be a regular file with no group/world write, owned by the instance
+    account, and reached through ancestors that are not writable by anyone else.
+    Otherwise any other local account could swap the code after approval.
+    """
+    path = Path(path)
+    if path.is_symlink():
+        raise HelperError("instance interpreter must not be a symlink")
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode):
+        raise HelperError("instance interpreter must be a regular file")
+    if info.st_mode & 0o022:
+        raise HelperError("instance interpreter must not be group/world writable")
+    if info.st_uid != uid:
+        raise HelperError("instance interpreter must belong to the instance account")
+    if not os.access(path, os.X_OK):
+        raise HelperError("instance interpreter must be executable")
+    # Walk up only while the ancestor belongs to this instance: that is the part
+    # of the path the account itself controls. Shared parents above it (such as
+    # the home directory policy or /tmp) are not ours to judge here.
+    for item in path.parents:
+        parent = item.lstat()
+        if stat.S_ISLNK(parent.st_mode):
+            raise HelperError("instance interpreter path must not contain symlinks")
+        if parent.st_uid != uid:
+            break
+        # Group write is acceptable only when that group is the instance's own
+        # group; any other writer could swap the interpreter after approval.
+        if parent.st_mode & 0o002:
+            raise HelperError("instance interpreter directory must not be world writable")
+        if parent.st_mode & 0o020 and parent.st_gid != gid:
+            raise HelperError(
+                "instance interpreter directory must not be writable by another group"
+            )
+
+
 @contextmanager
 def package_lease(registry, *, exclusive=False, existing=False):
     """Shared by start senders; exclusive for package mutation/recovery.
@@ -489,7 +529,11 @@ def _register(registry, unit_dir, *, instance_id, root, username, environment_fi
     if not first.startswith("#!/") or first.startswith("#!/usr/bin/env"):
         raise HelperError("native runner requires an absolute packaged interpreter")
     interpreter = _path(first[2:])
-    _trusted(interpreter)
+    # The client unit runs as the instance account, so this interpreter is not a
+    # privilege boundary: swapping it cannot escalate. It still must be a real
+    # regular executable that the account cannot rewrite after registration, so
+    # the release it belongs to stays the code the administrator approved.
+    _trusted_instance_interpreter(interpreter, account.pw_uid, account.pw_gid)
     unit_name = f"ai-device-client-{instance_id}.service"
     unit_path = unit_dir / unit_name
     record_path = registry / (instance_id + ".json")

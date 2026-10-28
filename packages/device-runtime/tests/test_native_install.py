@@ -73,7 +73,9 @@ def test_native_install_rejects_unavailable_disk_space_without_creating_root(tmp
 
 
 def test_native_install_space_lower_bound_allows_equal_space(tmp_path, monkeypatch, payload):
-    monkeypatch.setattr(shutil, "disk_usage", lambda _: SimpleNamespace(free=50))
+    # The bundle is 50 bytes and the private runtime copy adds the 7-byte
+    # interpreter, so an exact lower bound of 57 must still be accepted.
+    monkeypatch.setattr(shutil, "disk_usage", lambda _: SimpleNamespace(free=57))
     monkeypatch.setattr(native, "install_instance", lambda *a, **k: {"release": "fixture"})
     result = native.install_payload(
         payload, root=tmp_path / "instance", instance_id="fixture", server_url="https://example.invalid"
@@ -181,3 +183,33 @@ def test_native_client_rejects_root(tmp_path, monkeypatch):
             server_url="https://example.invalid",
         )
     assert not (tmp_path / "instance").exists()
+
+
+def test_runner_must_be_absolute_without_private_runtime(tmp_path, monkeypatch):
+    """Without a private runtime the caller's interpreter must already exist."""
+    with pytest.raises(InstallationError, match="executable absolute shebang path"):
+        native.install_instance(
+            tmp_path / "bundle",
+            instance_id="fixture",
+            roles=["client"],
+            root=tmp_path / "instance",
+            server_url="https://example.invalid",
+            runner_python=tmp_path / "missing-python",
+        )
+
+
+def test_runtime_source_must_be_a_plain_directory(tmp_path):
+    """A symlinked runtime would reintroduce the dependency we are removing."""
+    target = tmp_path / "real-runtime"
+    target.mkdir()
+    link = tmp_path / "runtime-link"
+    link.symlink_to(target)
+    with pytest.raises(InstallationError, match="plain directory"):
+        native.install_instance(
+            tmp_path / "bundle",
+            instance_id="fixture",
+            roles=["client"],
+            root=tmp_path / "instance",
+            server_url="https://example.invalid",
+            runtime_source=link,
+        )

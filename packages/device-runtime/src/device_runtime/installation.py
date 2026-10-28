@@ -303,7 +303,16 @@ def _check_target(manifest, roles):
         raise InstallationError("installed roles are not supported by this bundle target")
 
 
-def _prepare(root, bundle, manifest, roles, *, required_output_map_format=None, uv_executable=None):
+def _prepare(
+    root,
+    bundle,
+    manifest,
+    roles,
+    *,
+    required_output_map_format=None,
+    uv_executable=None,
+    runtime_source=None,
+):
     _check_target(manifest, roles)
     if required_output_map_format is None:
         required_output_map_format = _required_output_map_format(root)
@@ -327,6 +336,17 @@ def _prepare(root, bundle, manifest, roles, *, required_output_map_format=None, 
     release = manifest["release_version"] + "-" + uuid.uuid4().hex
     directory = root / "releases" / release
     directory.mkdir(parents=True)
+    if runtime_source is not None:
+        # Copy the interpreter into this release so the instance owns everything
+        # it needs to start. A package erase or a newer package version then
+        # leaves the release intact instead of breaking its shebang. The venv is
+        # built from this copy, so venv/bin/python is not a link into the package.
+        private_runtime = directory / "runtime"
+        shutil.copytree(runtime_source, private_runtime, symlinks=True)
+        private_python = private_runtime / "bin" / "python3.13"
+        if not private_python.is_file() or not os.access(private_python, os.X_OK):
+            raise InstallationError("private runtime has no executable interpreter")
+        interpreter = private_python
     snapshot = directory / "bundle"
     shutil.copytree(bundle, snapshot)
     if _fingerprint(inspect_bundle(snapshot)) != _fingerprint(manifest):
@@ -406,20 +426,42 @@ def _prepare(root, bundle, manifest, roles, *, required_output_map_format=None, 
 
 @with_dependencies
 def install_instance(
-    bundle, *, instance_id, roles, root=None, server_url=None, port=8765, runner_python=None
+    bundle,
+    *,
+    instance_id,
+    roles,
+    root=None,
+    server_url=None,
+    port=8765,
+    runner_python=None,
+    runtime_source=None,
 ):
     _supported_host()
     runner_content = RUNNER
+    if runtime_source is not None:
+        # The instance gets its own copy of the interpreter runtime so a package
+        # upgrade or removal cannot pull the interpreter out from under a live
+        # service. runner_python is then resolved inside this copy, after the
+        # release directory exists, so the shebang never names a package path.
+        runtime_source = Path(runtime_source)
+        if not runtime_source.is_dir() or runtime_source.is_symlink():
+            raise InstallationError("runtime source must be a plain directory")
     if runner_python is not None:
         runner_python = Path(runner_python)
         if (
             not runner_python.is_absolute()
-            or not runner_python.is_file()
-            or not os.access(runner_python, os.X_OK)
             or any(char.isspace() for char in str(runner_python))
             or len(str(runner_python).encode()) > 120
         ):
             raise InstallationError("runner Python must be an executable absolute shebang path")
+        # Without a private runtime the caller must already point at a real
+        # executable; with one, the copy is checked once it exists.
+        if runtime_source is None and (
+            not runner_python.is_file() or not os.access(runner_python, os.X_OK)
+        ):
+            raise InstallationError(
+                "runner Python must be an executable absolute shebang path"
+            )
         runner_content = f"#!{runner_python}\n" + RUNNER.split("\n", 1)[1]
     instance_id = _identity(instance_id)
     roles = sorted(set(roles))
@@ -453,7 +495,16 @@ def install_instance(
         raise InstallationError(f"cannot create instance directory (errno {exc.errno})") from exc
     try:
         with _lock(root):
-            active = _prepare(root, bundle, manifest, roles)
+            active = _prepare(root, bundle, manifest, roles, runtime_source=runtime_source)
+            if runtime_source is not None:
+                # Point the stable entry at this release's own interpreter, not
+                # at the package path, so the instance survives package removal.
+                private_python = (
+                    root / "releases" / active["release"] / "runtime" / "bin" / "python3.13"
+                )
+                if not private_python.is_file() or not os.access(private_python, os.X_OK):
+                    raise InstallationError("private runtime has no executable interpreter")
+                runner_content = f"#!{private_python}\n" + RUNNER.split("\n", 1)[1]
             (root / "config").mkdir()
             for role in roles:
                 (root / "state" / role).mkdir(parents=True)

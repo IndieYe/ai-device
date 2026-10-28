@@ -16,7 +16,7 @@ from .bundle import inspect_bundle
 from .installation import InstallationError, install_instance
 
 
-def _check_bundle_copy_space(bundle, manifest, destination):
+def _check_bundle_copy_space(bundle, manifest, destination, runtime=None):
     """Reject only when the verified bundle's copied files cannot fit.
 
     This is a lower bound, not a reservation or an estimate of the venv,
@@ -32,6 +32,12 @@ def _check_bundle_copy_space(bundle, manifest, destination):
         bundle / "dependencies" / entry["path"]
         for entry in manifest["dependencies"]["manifest"]["wheels"]
     )
+    if runtime is not None:
+        # The instance also gets its own interpreter copy; count it here so a
+        # tight filesystem is rejected before anything is written.
+        for item in Path(runtime).rglob("*"):
+            if item.is_file() and not item.is_symlink():
+                files.append(item)
     try:
         required = sum(path.stat().st_size for path in files)
         parent = destination.parent
@@ -72,7 +78,7 @@ def install_payload(payload, *, root, instance_id, server_url):
         raise InstallationError("native install refuses existing instances; adoption is explicit")
     if "\n" in str(python) or " " in str(python) or len(str(python).encode()) > 120:
         raise InstallationError("packaged interpreter path cannot be used as a stable shebang")
-    _check_bundle_copy_space(payload / "bundle", manifest, root)
+    _check_bundle_copy_space(payload / "bundle", manifest, root, payload / "runtime")
     # Child processes inherit only the packaged tool PATH. Restore caller state.
     previous = os.environ.get("PATH")
     os.environ["PATH"] = str(payload / "tools") + ":/usr/bin:/bin"
@@ -84,6 +90,7 @@ def install_payload(payload, *, root, instance_id, server_url):
             roles=["client"],
             server_url=server_url,
             runner_python=python,
+            runtime_source=payload / "runtime",
         )
         return {**result, "service_started": False, "paired": False, "bootstrap": str(python)}
     finally:

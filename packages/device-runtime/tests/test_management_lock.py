@@ -102,6 +102,10 @@ def test_registration_fence_published_before_unit_and_record(tmp_path, monkeypat
     monkeypatch.setattr(native_helper.os, "geteuid", lambda: 0)
     monkeypatch.setattr(native_helper.pwd, "getpwnam", lambda name: account)
     monkeypatch.setattr(native_helper, "_trusted", lambda *a, **kw: None)
+    # This fixture only exercises the publication order, not interpreter trust.
+    monkeypatch.setattr(
+        native_helper, "_trusted_instance_interpreter", lambda *a, **kw: None
+    )
     # On a root runner the fixture instance owner must still be non-root.
     if os.getuid() == 0:
         os.chown(root, account.pw_uid, account.pw_gid)
