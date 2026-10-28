@@ -131,6 +131,18 @@ with tempfile.TemporaryDirectory(prefix='device-prep-fence-',dir='/root') as d:
         else: raise AssertionError('invalid observation evidence accepted')
         assert os.path.lexists(path)
     print('INVALID_OBSERVATION_EVIDENCE_REFUSED_BEFORE_INSTALLED_QUERY')
+    for suffix,kind in [('.prepared.json','fifo'),('.approved.json','directory')]:
+        case=evidence/('preparation-'+kind); case.mkdir(mode=0o700); case_stem=case/'operation'
+        case_stem.with_suffix('.prepared.json').write_text('{}')
+        case_stem.with_suffix('.approved.json').write_text('{}')
+        bad=case_stem.with_suffix(suffix); bad.unlink()
+        if kind=='fifo': os.mkfifo(bad)
+        else: bad.mkdir(mode=0o700)
+        try: evidence_manager._prepared({'instance_id':'probe'},case_stem)
+        except u.UpdateError as exc: assert 'prepared and approval evidence must be regular files' in str(exc)
+        else: raise AssertionError('nonregular preparation evidence accepted')
+        assert os.path.lexists(bad)
+    print('NONREGULAR_PREPARATION_EVIDENCE_REFUSED_BEFORE_METADATA')
     class JobManager:
         packages=u.Debian()
         registry=registry

@@ -463,6 +463,8 @@ class Updates:
         approved = stem.with_suffix(".approved.json")
         nh._trusted(path)
         nh._trusted(approved)
+        if not stat.S_ISREG(path.lstat().st_mode) or not stat.S_ISREG(approved.lstat().st_mode):
+            raise UpdateError("prepared and approval evidence must be regular files")
         if not nh._valid_admin_approval(json.loads(approved.read_text()), nh._digest(path)):
             raise UpdateError("accurate approval required")
         value = json.loads(path.read_text())

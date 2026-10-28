@@ -410,6 +410,24 @@ def test_reconcile_rejects_invalid_observation_evidence(update, monkeypatch, suf
     assert packages.calls == 0
 
 
+@pytest.mark.parametrize("suffix", [".prepared.json", ".approved.json"])
+@pytest.mark.parametrize("kind", ["fifo", "directory"])
+@pytest.mark.parametrize("action", ["apply", "reconcile", "recover"])
+def test_nonregular_preparation_evidence_refused_before_metadata(update, monkeypatch, suffix, kind, action):
+    manager, packages, _, _ = update
+    path = (manager.registry / "updates/5-probe--one").with_suffix(suffix)
+    path.unlink()
+    if kind == "fifo":
+        os.mkfifo(path)
+    else:
+        path.mkdir()
+    monkeypatch.setattr(packages, "metadata", lambda *_: pytest.fail("metadata called"))
+    monkeypatch.setattr(packages, "installed", lambda *_: pytest.fail("installed called"))
+    with pytest.raises(nu.UpdateError, match="prepared and approval evidence must be regular files"):
+        getattr(manager, action)("probe", "one")
+    assert os.path.lexists(path) and packages.calls == 0
+
+
 @pytest.mark.parametrize(
     "mode,state",
     [

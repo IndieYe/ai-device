@@ -2111,3 +2111,10 @@ job/update 定向 164 passed；完整回归 1358 passed / 16 skipped、ruff 通�
 盘点 `Debian.metadata`、`installed` 以及包 guard 查询调用与锁/后续写入，记录于 `docs/native-query-supervisor-recovery-design.md`。准备阶段在 package SH、变更阶段部分在 EX，观察可能无 package 租约；锁与监督意图检查不能证明查询的后代退出或外部 job 收口。
 
 隔离 Linux/Python 3.13 使用有限寿命 fork 替身验证：直接子进程等待或先退出两种情况下，`subprocess.run` 捕获管道的 0.25 秒超时均约 0.26 秒返回，后代随后仍运行并自然结束（`20261028-124618-f9e097.log`）。首次误以为 timeout 会等待管道后代，测试以约 0.26 秒返回否定该假设（`20261028-124547-1fbe31.log`），已修正实验与记录；这不是实际 dpkg 派生后代的证明。专属容器自动删除并验证不存在。未修改产品代码或重跑完整回归，最近完整结果仍为第266节 1381 passed / 16 skipped。生产、恢复和退休门禁保持关闭。
+
+
+## 268. 更新预校验拒绝非普通准备与批准记录
+
+`_prepared` 在既有可信路径检查后、读取批准 JSON 或计算 prepared 摘要前，要求 prepared 与 approved 均为普通文件，避免 FIFO 等特殊文件令读取阻塞或目录被误作记录。apply、reconcile、recover 的共同预校验因此在 metadata 查询前拒绝这些异常；文件检查与后续读取仍依赖管理员维护 registry 及祖先稳定，不是对恶意并发替换的 OS 沙箱。记录不删除，合法行为和生产门禁不变。
+
+定向 199 项通过；完整 1393 passed / 16 skipped、ruff 通过（`20261028-124844-755aeb.log`）。隔离 Linux 在真实路径检查下验证 prepared FIFO、approved 目录在 metadata 前拒绝（`20261028-124836-676aa3.log`），包与 helper 为替身，容器已删除。未构建新包或证明真实查询后代收口；旧包和冻结 snapshot 不自动更新。
