@@ -213,6 +213,11 @@ def _prepare_dispatch_locked(manager, instance_id, operation_id, binding, stem):
         python = snapshot / "runtime/bin/python3.13"
         argv = [
             "/usr/bin/systemd-run",
+            # Return as soon as systemd accepts the job. Without this, oneshot
+            # plus TimeoutStartSec=infinity blocks the dispatcher until the whole
+            # package transaction ends, and the 30s runner timeout would then
+            # report dispatch_unknown while the unit keeps running.
+            "--no-block",
             "--unit=" + unit,
             "--service-type=oneshot",
             "--property=Restart=no",
@@ -246,6 +251,11 @@ def dispatch_job(manager, instance_id, operation_id, *, runner=None):
 
     The caller supplies the normal Updates manager. Never exposes arbitrary argv.
     A lost systemd response leaves a durable unknown; no automatic resubmission.
+
+    --no-block keeps this a submission, not an execution wait: the oneshot unit
+    uses TimeoutStartSec=infinity, so a blocking systemd-run would hold the
+    caller for the entire package transaction and then be cut off by the 30s
+    runner timeout while the unit kept running.
     """
     import subprocess
     import sys
@@ -268,6 +278,8 @@ def dispatch_job(manager, instance_id, operation_id, *, runner=None):
         argv, digest, unit = prepared
 
     # Persisted intent fences the gap after releasing leases, before dispatch.
+    # Accepted means only that systemd queued the job; the package transaction
+    # has not been confirmed and the unit is not observed here.
     try:
         runner(
             argv,
@@ -277,6 +289,10 @@ def dispatch_job(manager, instance_id, operation_id, *, runner=None):
             env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C"},
         )
         state = "dispatch_accepted"
+    except subprocess.TimeoutExpired:
+        # No-block should return at once; a timeout now means the request itself
+        # was not confirmed by systemd, not that a running unit was abandoned.
+        state = "dispatch_unknown"
     except (OSError, subprocess.SubprocessError):
         state = "dispatch_unknown"
     receipt = {

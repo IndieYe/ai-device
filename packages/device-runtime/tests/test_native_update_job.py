@@ -94,6 +94,59 @@ def test_changed_transaction_evidence_refused(transaction, change):
         job.describe_job(transaction)
 
 
+def test_dispatch_never_waits_for_the_package_transaction(transaction, monkeypatch):
+    """Dispatch is a submission; the 30s runner budget must not bound execution.
+
+    A blocking systemd-run against a oneshot with TimeoutStartSec=infinity would
+    hold the caller for the whole transaction and then be cut off by the timeout,
+    recording dispatch_unknown while the unit was still running.
+    """
+    from types import SimpleNamespace
+
+    from device_runtime import native_update as update
+
+    def prepared(binding, stem):
+        return None
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def txn(instance_id, operation_id, **kwargs):
+        yield SimpleNamespace(), transaction
+
+    @contextmanager
+    def lease(*args, **kwargs):
+        yield None
+
+    manager = SimpleNamespace(
+        packages=update.Debian(),
+        registry=transaction.parent.parent,
+        _transaction=txn,
+        _dispatch_transaction=txn,
+        _prepared=prepared,
+        _apply_lease=lease,
+    )
+    seen = {}
+
+    def runner(argv, **kw):
+        seen["timeout"] = kw.get("timeout")
+        seen["no_block"] = "--no-block" in argv
+
+    monkeypatch.setattr(job, "_require_proven_job_fence", lambda: None)
+    monkeypatch.setattr(job.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(__import__("sys"), "platform", "linux")
+    # The heavy snapshot preparation is unrelated to this contract.
+    monkeypatch.setattr(job, "_prepare_dispatch_locked", lambda *a, **k: (
+        None,
+        (["/usr/bin/systemd-run", "--no-block", "--unit=x.service", "--", "worker"], "d" * 64, "x.service"),
+    ))
+    receipt = job.dispatch_job(manager, "probe", "one", runner=runner)
+    assert receipt["state"] == "dispatch_accepted"
+    assert seen["no_block"] is True
+    # The timeout bounds the submission call only, never the package transaction.
+    assert seen["timeout"] == 30
+
+
 @pytest.mark.parametrize("lost", [False, True])
 def test_dispatch_records_once_without_replay(transaction, monkeypatch, lost):
     import subprocess
@@ -167,6 +220,9 @@ def test_dispatch_records_once_without_replay(transaction, monkeypatch, lost):
     assert second["state"] == "dispatch_already_recorded" and not second["replayed"]
     assert len(calls) == 1
     assert calls[0][0] == "/usr/bin/systemd-run"
+    assert "--no-block" in calls[0]
+    unit_at = next(i for i, a in enumerate(calls[0]) if a.startswith("--unit="))
+    assert calls[0].index("--no-block") < unit_at
     assert "--property=Restart=no" in calls[0]
     assert "--property=RemainAfterExit=yes" in calls[0]
 

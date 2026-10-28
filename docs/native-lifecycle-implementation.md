@@ -2217,3 +2217,28 @@ job/update 定向 164 passed；完整回归 1358 passed / 16 skipped、ruff 通�
 ### 环境异常（必须记录）
 
 `device-qual-systemd-amd64-ses13838:probe` 与 `device-qual-systemd-ses13838:probe` 在本轮中途**从本机消失**：第 273 节运行时仍可用，随后 `image list` 只剩 redis/pgvector，`inspect` 报 `image not found`。本轮改用按 `ubuntu:24.04 + systemd` 重建的等价镜像 `device-qual-systemd-amd64-probe:rebuild`（systemd 255，与原镜像版本一致，PID1=systemd、`is-system-running=degraded`）。重建镜像与已丢失的原镜像**不是同一制品**，后续涉及镜像身份的结论需注明使用哪一个。原镜像丢失原因未知，不能排除是被外部清理。
+
+
+## 275. 修复：dispatch 不再阻塞于包事务
+
+### 问题
+`_prepare_dispatch_locked` 生成的 argv 缺少 `--no-block`。oneshot 加 `TimeoutStartSec=infinity` 时，`systemd-run` 会一直等到 ExecStart 结束才返回，而 `dispatch_job` 的 runner 用 `timeout=30`。真实包事务远超 30 秒，于是：派发在 30 秒抛 `TimeoutExpired` → 记为 `dispatch_unknown`，而 unit 仍在正常执行。这是把「执行中」误报成「结果未知」。
+
+### 改动
+`native_update_job.py`：
+- argv 增加 `--no-block`，位置在 `--unit=` 之前。
+- 单独捕获 `subprocess.TimeoutExpired`。加 `--no-block` 后正常路径应立即返回，超时只代表「systemd 未确认本次提交」，不再代表「已提交的执行被放弃」。
+- 更新 `dispatch_job` docstring，写明 `--no-block` 的原因与边界。
+
+未改动：`dispatch` 的永拒门禁、`observe`/`recover`/`retire` 的任何判定、`package_execution_confirmed` 恒为 false 的语义。
+
+### 验证
+- 单测 `test_dispatch_records_once_without_replay` 增加断言：argv 含 `--no-block` 且位于 `--unit=` 之前。
+- 新增 `test_dispatch_never_waits_for_the_package_transaction`：断言 runner 收到 `--no-block`，且 timeout 仍为 30（仅约束提交调用，不约束事务）。
+- 真实 systemd 实测（一次性容器，已删除）：8 秒 ExecStart → 派发 **0.04s** 返回，回执 `dispatch_accepted`，同时 unit 处于 `activating/MainPID=79`；`/bin/false` 场景派发 0.06s 返回、2 秒后 unit 为 `failed`。日志 `20261028-154234`。
+- 完整回归 **1425 passed, 16 skipped**（`20261028-154254`），ruff 通过。
+
+### 仍然存在的边界
+- 「accepted」依旧只表示 systemd 接受了作业，不表示包事务成功，也不表示 unit 已观察。`package_execution_confirmed` 保持 false。
+- 派发成功后 unit 立刻崩溃、或 systemd 在接受后重启，本轮未覆盖，仍依赖后续 `observe`。
+- 修复不改变「派发失去响应即 durable unknown 且不自动重投」的既有契约。
