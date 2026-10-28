@@ -19,6 +19,8 @@ with tempfile.TemporaryDirectory(prefix='device-query-supervisor-tree-',dir='/ro
     endpoint=root/'unused.sock'; ready=root/'worker-pid'; release=root/'release'; child=root/'handler-pid'; fake=root/'fake-systemctl'
     fake.write_text('#!'+sys.executable+'\nimport os,time,pathlib\np=pathlib.Path('+repr(str(root))+')\n(p/"worker-pid").write_text(str(os.getpid()))\ndeadline=time.monotonic()+20\nwhile not (p/"release").exists() and time.monotonic()<deadline: time.sleep(.05)\n')
     fake.chmod(0o700)
+    # Test-only fixture preparation in the disposable container, never production authorization.
+    b._require_proven_candidate_publication_fence=lambda: None
     evidence=b.publish_managed_helper_candidate(registry,Path('/opt/ai-device/bootstrap/0.2.2-native1/runtime'),'candidate')
     candidates=registry/'bootstrap-candidates'
     preflight='''import subprocess,sys

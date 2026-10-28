@@ -18,6 +18,8 @@ with tempfile.TemporaryDirectory(prefix='device-supervisor-',dir='/root') as roo
     (registry/'bootstrap-candidates').mkdir(mode=0o700)
     endpoint=Path(root)/'query.sock'
     source=Path('/opt/ai-device/bootstrap/0.2.2-native1/runtime')
+    # Test-only fixture preparation in the disposable container, never production authorization.
+    b._require_proven_candidate_publication_fence=lambda: None
     evidence=b.publish_managed_helper_candidate(registry,source,'candidate')
     candidates=registry/'bootstrap-candidates'
     code='from device_runtime import native_bootstrap as b; import sys; print(b._supervise_candidate_queries(sys.argv[1],"candidate",registry=sys.argv[2],socket_path=sys.argv[3],group=0,expected_snapshot_sha256=sys.argv[4]),flush=True)'

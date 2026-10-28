@@ -22,6 +22,8 @@ from device_runtime import native_bootstrap as b, native_helper as h
 registry=Path('/var/lib/ai-device/manager')
 h.register(registry,Path('/etc/systemd/system'),instance_id='probe',root=Path('/home/probe/instance'),username='probe',environment_file='/etc/device-query-fixture.env')
 (registry/'bootstrap-candidates').mkdir(mode=0o700)
+# Test-only fixture preparation in the disposable container, never production authorization.
+b._require_proven_candidate_publication_fence=lambda: None
 evidence=b.publish_managed_helper_candidate(registry,Path('/opt/ai-device/bootstrap/0.2.2-native1/runtime'),'candidate')
 with tempfile.TemporaryDirectory(prefix='device-real-query-tree-',dir='/root') as tmp:
  root=Path(tmp); endpoint=root/'query.sock'; ready=root/'worker-pid'; grand=root/'grand-pid'; release=root/'release'; handler=root/'handler-pid'; fake=root/'fake-systemctl'; failed=root/'wait-failed'; allow=root/'allow-wait'

@@ -17,6 +17,8 @@ with tempfile.TemporaryDirectory(prefix='device-reap-failure-',dir='/root') as r
     registry=Path(root)/'registry'; registry.mkdir(mode=0o700)
     (registry/'bootstrap-candidates').mkdir(mode=0o700)
     endpoint=Path(root)/'query.sock'; failed=Path(root)/'reap-failed'; release=Path(root)/'allow-reap'; receipt=Path(root)/'reaped'
+    # Test-only fixture preparation in the disposable container, never production authorization.
+    b._require_proven_candidate_publication_fence=lambda: None
     evidence=b.publish_managed_helper_candidate(registry,Path('/opt/ai-device/bootstrap/0.2.2-native1/runtime'),'candidate')
     code='''from device_runtime import native_bootstrap as b
 import os,pathlib,select,signal,sys
