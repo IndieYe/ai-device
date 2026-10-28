@@ -1796,3 +1796,12 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 将 `run_verified_helper_candidate` 原有的三个内存源码模块创建、编译和 `sys.modules` 恢复抽成内部 `_verified_helper_modules` 上下文；公开入口仍先调用原 `_verified_helper_bytes` 校验，再进入作用域并调用候选 `serve`，不改变加锁或服务逻辑。新增候选模块编译执行失败及调用方失败时恢复原模块的回归；已有候选路径替换后仍执行已校验字节的测试继续通过。bootstrap 与握手定向 60 通过（`20261028-091511-bcac69.log`），完整 `1274 passed, 16 skipped`（`20261028-091520-aeac99.log`），ruff 通过（`20261028-091512-c5efa0.log`）。
 
 内部作用域不校验传入字节，调用者须先以原权威检查取得并持有验证结果；它修改进程全局模块表，须单线程独占使用，不能用作外部可调用入口、身份或授权证明。本步骤没有 fork、监督、锁交接或门禁放行，尚未完成该检查点准确包的真实候选加载验证；P1 未完成。
+
+
+## 229. 候选模块作用域准确 DEB 验收
+
+以干净源码检查点 `bcb6ec500dbf6dbd6e6aadc7839e7813677f2a40` 离线生成 Device wheel SHA256 `15c355aa8addb7f450820a7858807dc8321ff9f2318dcd68b72df073c8a4d665`（`20261028-091715-d22eec.log`），34 个 Python 模块与提交逐字节一致（`20261028-091843-cb8fa9.log`）。无网络生成未签名 DEB `build/native-packages-p1-bcb6ec5/ai-device-native-client_0.2.2-1_amd64.deb`，105258776 字节，SHA256 `d45bff032c4f5b985b706f7978edd54b2970b2247bf1b43db134516e0ccca7b7`（`20261028-091723-029a4b.log`）。
+
+一次性离线 Linux amd64/Rosetta 容器干净安装准确包，包内 uv 检查 17 项依赖，独立 bootstrap 与 helper 模块均匹配 wheel；发布实际候选后，错误固定摘要拒绝且没有创建 socket，正确摘要通过原同进程入口执行实际候选，socket peer PID 与测试启动的子进程匹配，畸形请求拒绝；测试子进程终止并回收，构建与验收容器已删除（`scripts/accept-native-bootstrap-scope-bcb6ec5.sh`，`20261028-091833-60c489.log`）。
+
+该验证限于旧同进程入口，没有证明受控监督、实际消息处理者、持锁交接或动作授权，不开放生产门禁；P1 未完成。
