@@ -1,12 +1,16 @@
 """Observe real systemd job terminal states with the current read-only parser.
 
-Disposable systemd container only. Never dispatches a real package transaction:
-the units here are inert fixtures. The point is to record what the current
-parser reports after failure, cancellation and unit removal, and to prove it
-never converts an unknown into retry permission.
+Disposable systemd container only. Every unit is an inert fixture: nothing here
+dispatches a real package transaction. What is recorded is only what the current
+parser reports, and that no report ever grants retry.
+
+Cancellation note: `systemctl cancel` needs a queued job. A Type=simple start job
+completes as soon as the process is forked, so the queue is always empty by the
+time we look. A oneshot unit with RemainAfterExit keeps its start job queued for
+the whole ExecStart, which is the only way to observe a real queued job.
 """
 import hashlib
-import importlib.util
+import importlib
 import json
 import os
 import subprocess
@@ -14,6 +18,9 @@ import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
+
+SOURCE = Path("/pkg")
+PROBE_ROOT = Path("/root/probe")
 
 
 def guard():
@@ -27,29 +34,45 @@ def guard():
         raise RuntimeError("must not run against an installed instance")
 
 
-def systemctl(*args):
+def load_module():
+    """Import as a package member so relative imports resolve to the bound source."""
+    sys.path.insert(0, str(SOURCE))
+    package = importlib.import_module("device_runtime")
+    expected = (SOURCE / "device_runtime").resolve()
+    if Path(package.__file__).resolve().parent != expected:
+        raise RuntimeError("bound source must win the import")
+    return importlib.import_module("device_runtime.native_update_job")
+
+
+def systemd_run(unit, command):
     return subprocess.run(
-        ["/usr/bin/systemctl", *args],
-        check=True,
+        [
+            "/usr/bin/systemd-run",
+            "--no-block",
+            "--unit", unit,
+            "--property=Type=oneshot",
+            "--property=RemainAfterExit=yes",
+            "--", command,
+        ],
+        check=False,
         capture_output=True,
         text=True,
         timeout=30,
-    ).stdout
-
-
-def load_module():
-    spec = importlib.util.spec_from_file_location(
-        "device_runtime.native_update_job_probe", "/source/native_update_job.py"
     )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
-def make_transaction(module, root, stem):
-    """Create minimal but exactly-shaped evidence for the read-only parser."""
-    updates = root / "updates"
-    updates.mkdir(parents=True, mode=0o700)
+def systemctl(*args, check=True):
+    return subprocess.run(
+        ["/usr/bin/systemctl", *args],
+        check=check,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+def write_evidence(stem, module):
+    """Build the exact evidence shape observe_job validates, in order."""
     prepared = stem.with_suffix(".prepared.json")
     prepared.write_text(
         json.dumps({"metadata": {"Package": "fixture", "Version": "2", "Architecture": "amd64"}})
@@ -63,7 +86,7 @@ def make_transaction(module, root, stem):
         json.dumps(
             {
                 "unit": unit,
-                "instance_id": "probe",
+                "instance_id": INSTANCE,
                 "operation_id": stem.name.split("--", 1)[1],
                 "prepared_sha256": digest,
                 "runtime_snapshot_sha256": "snapshot-fixture",
@@ -73,160 +96,163 @@ def make_transaction(module, root, stem):
     return unit
 
 
-def observe(module, root, operation="one"):
-    return module.observe_job(SimpleNamespace(registry=root), "probe", operation)
+def new_stem(operation):
+    directory = PROBE_ROOT / "updates"
+    directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+    return directory / f"{len(INSTANCE)}-{INSTANCE}--{operation}{RUN}"
 
 
-def wait_for(module, root, predicate, timeout=20, operation="one"):
+def observe(module, operation):
+    return module.observe_job(SimpleNamespace(registry=PROBE_ROOT), INSTANCE, operation + RUN)
+
+
+def wait_for(module, operation, predicate, timeout=25):
     deadline = time.monotonic() + timeout
+    last = None
     while True:
-        report = observe(module, root, operation)
-        if predicate(report):
-            return report
+        last = observe(module, operation)
+        if predicate(last):
+            return last
         if time.monotonic() >= deadline:
-            raise TimeoutError(json.dumps(report, sort_keys=True))
+            raise TimeoutError(json.dumps(last, sort_keys=True, default=str))
         time.sleep(0.1)
 
 
-def assert_never_retry(report):
-    assert report["retry_allowed"] is False, report
-    assert report["fence_retained"] is True, report
+def check_invariants(report, label):
+    """The parser must never convert any observation into permission."""
+    assert report["retry_allowed"] is False, (label, report)
+    assert report["fence_retained"] is True, (label, report)
 
 
-def case_failed(module, root):
-    stem = root / "updates" / "5-probe--one"
-    unit = make_transaction(module, root, stem)
-    subprocess.run(
-        [
-            "/usr/bin/systemd-run",
-            "--unit",
-            unit,
-            "--property=RemainAfterExit=yes",
-            "/bin/false",
-        ],
-        check=False,
-        capture_output=True,
-        timeout=30,
-    )
+def unit_observation(report):
+    return report["unit_observation"] or {}
+
+
+def case_failed(module):
+    stem = new_stem("one")
+    unit = write_evidence(stem, module)
+    # RemainAfterExit keeps the failed state inspectable after exit.
+    systemd_run(unit, "/bin/false")
     report = wait_for(
-        module,
-        stem.parent.parent,
-        lambda value: value["unit_observation"]
-        and value["unit_observation"]["ActiveState"] == "failed",
+        module, "one", lambda r: unit_observation(r).get("ActiveState") == "failed"
     )
-    assert_never_retry(report)
-    fields = report["unit_observation"]
-    assert fields["Result"] == "exit-code", fields
+    check_invariants(report, "failed")
+    fields = unit_observation(report)
+    assert fields["LoadState"] == "loaded", fields
     assert fields["MainPID"] == "0", fields
-    print("REAL_SYSTEMD_FAILED_JOB_REPORTED_AS_REVIEW_REQUIRED", flush=True)
+    assert fields["Job"] in ("", "0"), fields
+    assert report["state"] == "job_failed_requires_review", report
+    print("FAILED " + json.dumps(fields, sort_keys=True), flush=True)
     return report
 
 
-def case_cancelled(module, root):
-    stem = root / "updates" / "7-probe--two"
-    unit = make_transaction(module, root, stem)
-    worker = root / "blocking-worker"
-    worker.write_text("#!/bin/sh\nsleep 300\n")
+def case_cancelled(module):
+    stem = new_stem("two")
+    unit = write_evidence(stem, module)
+    worker = PROBE_ROOT / "blocking-worker.sh"
+    worker.write_text("#!/bin/sh\nexec sleep 300\n")
     worker.chmod(0o700)
-    subprocess.run(
-        [
-            "/usr/bin/systemd-run",
-            "--unit",
-            unit,
-            "--property=RemainAfterExit=yes",
-            "--",
-            str(worker),
-        ],
-        check=True,
-        capture_output=True,
-        timeout=30,
-    )
+    # oneshot keeps the start job queued while ExecStart runs.
+    systemd_run(unit, str(worker))
     running = wait_for(
-        module,
-        stem.parent.parent,
-        lambda value: value["unit_observation"]
-        and value["unit_observation"]["ActiveState"] == "active",
-        operation="two",
+        module, "two", lambda r: unit_observation(r).get("ActiveState") == "activating"
     )
-    assert_never_retry(running)
+    check_invariants(running, "cancelled-running")
+    running_fields = unit_observation(running)
+    job_id = running_fields["Job"]
+    assert job_id not in ("", "0"), running_fields
     assert running["state"] == "job_in_progress", running
-    job_id = running["unit_observation"]["Job"]
-    assert job_id not in ("", "0"), running
+    print("QUEUED_BEFORE_CANCEL " + json.dumps(running_fields, sort_keys=True), flush=True)
+
+    # A queued start job does NOT own the ExecStart process. Cancelling it clears
+    # the job id while the unit keeps running, so the parser must keep reporting
+    # in-progress. Treating cancel as terminal would be a safety bug.
     systemctl("cancel", job_id)
+    after_cancel = wait_for(
+        module, "two", lambda r: unit_observation(r).get("Job") in ("", "0")
+    )
+    check_invariants(after_cancel, "cancelled-queue")
+    fields = unit_observation(after_cancel)
+    assert fields["ActiveState"] == "activating", fields
+    assert fields["MainPID"] != "0", fields
+    assert after_cancel["state"] == "job_in_progress", after_cancel
+    print("CANCELLED_QUEUE_STILL_RUNNING " + json.dumps(fields, sort_keys=True), flush=True)
+
+    # Only an explicit stop produces a terminal state for the same unit.
+    systemctl("stop", unit, check=False)
     stopped = wait_for(
         module,
-        stem.parent.parent,
-        lambda value: value["unit_observation"]
-        and value["unit_observation"]["ActiveState"] in ("failed", "inactive"),
-        operation="two",
+        "two",
+        lambda r: unit_observation(r).get("ActiveState") in ("failed", "inactive"),
     )
-    assert_never_retry(stopped)
-    assert stopped["state"] == "job_failed_requires_review", stopped
-    print("REAL_SYSTEMD_CANCELLED_JOB_BECOMES_REVIEW_REQUIRED", flush=True)
-    return stopped
+    check_invariants(stopped, "cancelled-stopped")
+    stopped_fields = unit_observation(stopped)
+    assert stopped_fields["MainPID"] == "0", stopped_fields
+    assert stopped_fields["Job"] in ("", "0"), stopped_fields
+    assert stopped["state"] in ("job_failed_requires_review", "dispatch_unknown"), stopped
+    print("AFTER_STOP " + json.dumps(stopped_fields, sort_keys=True), flush=True)
+    return {"cancel": after_cancel["state"], "stop": stopped["state"]}
 
 
-def case_unit_removed(module, root):
-    stem = root / "updates" / "7-probe--three"
-    unit = make_transaction(module, root, stem)
-    subprocess.run(
-        [
-            "/usr/bin/systemd-run",
-            "--unit",
-            unit,
-            "--property=RemainAfterExit=yes",
-            "/bin/true",
-        ],
-        check=True,
-        capture_output=True,
-        timeout=30,
+def case_unit_removed(module):
+    stem = new_stem("three")
+    unit = write_evidence(stem, module)
+    systemd_run(unit, "/bin/true")
+    done = wait_for(
+        module, "three", lambda r: unit_observation(r).get("ActiveState") == "active"
     )
-    wait_for(
-        module,
-        stem.parent.parent,
-        lambda value: value["unit_observation"]
-        and value["unit_observation"]["ActiveState"] == "active",
-        operation="three",
-    )
-    systemctl("reset-failed", unit)
-    subprocess.run(
-        ["/usr/bin/systemctl", "clean", unit], check=False, capture_output=True, timeout=30
-    )
-    subprocess.run(
-        ["/usr/bin/systemctl", "stop", unit], check=False, capture_output=True, timeout=30
-    )
+    check_invariants(done, "removed-active")
+    assert done["state"] == "job_in_progress", done
+    assert unit_observation(done)["SubState"] == "exited", done
+
+    systemctl("stop", unit, check=False)
+    systemctl("reset-failed", unit, check=False)
+    systemctl("clean", unit, "--what=all", check=False)
     report = wait_for(
-        module,
-        stem.parent.parent,
-        lambda value: value["unit_observation"]
-        and value["unit_observation"]["LoadState"] == "not-found",
-        operation="three",
+        module, "three", lambda r: unit_observation(r).get("LoadState") == "not-found"
     )
-    assert_never_retry(report)
+    check_invariants(report, "removed")
+    fields = unit_observation(report)
     assert report["state"] == "dispatch_unknown", report
-    print("REAL_SYSTEMD_REMOVED_UNIT_RETURNS_TO_UNKNOWN", flush=True)
+    print("UNIT_REMOVED " + json.dumps(fields, sort_keys=True), flush=True)
     return report
+
+
+def case_unreachable_systemctl(module):
+    """A runner failure must also stay unknown, never retry."""
+    stem = new_stem("four")
+    write_evidence(stem, module)
+    report = module.observe_job(
+        SimpleNamespace(registry=PROBE_ROOT),
+        INSTANCE,
+        "four" + RUN,
+        runner=lambda *a, **k: (_ for _ in ()).throw(OSError("no systemctl")),
+    )
+    check_invariants(report, "unreachable")
+    assert report["state"] == "dispatch_unknown", report
+    assert report["unit_observation"] is None, report
+    print("UNREACHABLE_SYSTEMCTL_STAYS_UNKNOWN", flush=True)
+    return report
+
+
+INSTANCE = "probe"
+# Unique per run: a leftover failed unit from a previous run must never be
+# mistaken for this run's terminal state.
+RUN = os.environ.get("PROBE_RUN_ID") or str(int(time.time()))
 
 
 def main():
     guard()
     module = load_module()
-    root = Path("/run/device-job-terminal-probe")
-    root.mkdir(mode=0o700)
-    failed = case_failed(module, root)
-    cancelled = case_cancelled(module, root)
-    removed = case_unit_removed(module, root)
-    summary = {
-        "failed": failed["state"],
-        "cancelled": cancelled["state"],
-        "removed": removed["state"],
-        "retry_allowed": [
-            failed["retry_allowed"],
-            cancelled["retry_allowed"],
-            removed["retry_allowed"],
-        ],
+    print("SOURCE " + module.__file__, flush=True)
+    PROBE_ROOT.mkdir(mode=0o700, exist_ok=True)
+    results = {
+        "failed": case_failed(module)["state"],
+        "cancelled": case_cancelled(module),
+        "removed": case_unit_removed(module)["state"],
+        "unreachable": case_unreachable_systemctl(module)["state"],
     }
-    print("TERMINAL_STATE_SUMMARY " + json.dumps(summary, sort_keys=True), flush=True)
+    print("TERMINAL_STATE_SUMMARY " + json.dumps(results, sort_keys=True), flush=True)
     print("PROBE_OK", flush=True)
 
 

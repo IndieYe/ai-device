@@ -2154,3 +2154,32 @@ job/update 定向 164 passed；完整回归 1358 passed / 16 skipped、ruff 通�
 新增 `scripts/probe-native-job-terminal-states.py`，在一次性 systemd 容器内用当前只读 `observe_job` 覆盖三种此前无证据的终态：`/bin/false` 失败 unit、排队 job 被 `systemctl cancel`、unit 被清理后 `LoadState=not-found`；每种都断言 `retry_allowed=false` 且 `fence_retained=true`。脚本强制 `DEVICE_NATIVE_DISPOSABLE_PROBE=yes`、root、PID1 为 systemd，并在 `/opt/ai-device/instances` 存在时拒绝运行，避免触碰已安装实例。全部 unit 为惰性 fixture，不执行真实包事务。
 
 **本轮未执行**：脚本尚未在容器中运行，任何终态结论都还没有实际证据，不能据此声称 systemd 终态已验证。上一轮已确认可用的镜像 `device-qual-systemd-amd64-ses13838:probe` 默认 `Cmd` 为 `/sbin/init`。接续第一步应为：只读挂载 `packages/device-runtime/src/device_runtime` 到 `/source`，无网络运行该脚本，把 `TERMINAL_STATE_SUMMARY` 与 `PROBE_OK` 作为证据记录，然后才更新第270/271节的未闭环项。若脚本失败，应先修正探测而非修改产品判定。
+
+
+## 273. 真实 systemd job 终态实测
+
+在一次性 amd64 systemd255/cgroupv2 容器（`--cap-add ALL --rosetta`、`--network none`、PID1=`systemd`、`system-is-running=degraded`）内运行 `scripts/probe-native-job-terminal-states.py`，只读导入 `/pkg/device_runtime`（当前源码）并对真实 unit 调用 `observe_job`。容器已精确 `stop`+`delete`，`container list --all` 复核不存在。日志 `20261028-141740-edcac3.log`。
+
+实测事实（`TERMINAL_STATE_SUMMARY` + `PROBE_OK`）：
+
+| 场景 | systemctl show | observe_job.state |
+| --- | --- | --- |
+| oneshot `/bin/false` 失败 | loaded/failed, Result=exit-code, MainPID=0, Job空 | `job_failed_requires_review` |
+| oneshot 运行中，存在排队 job（Job=720） | loaded/activating, SubState=start, MainPID=620 | `job_in_progress` |
+| `systemctl cancel <job>` 之后 | loaded/**activating**, MainPID=620 仍在, Job空 | `job_in_progress` |
+| 再 `systemctl stop` | loaded/failed, Result=signal, MainPID=0 | `job_failed_requires_review` |
+| `clean` 后 unit 消失 | **not-found**/inactive, MainPID=0 | `dispatch_unknown` |
+| systemctl 不可用（runner 抛 OSError） | 无观察 | `dispatch_unknown` |
+
+所有六个场景 `retry_allowed=false`、`fence_retained=true`。
+
+### 重要否定结论
+- **`systemctl cancel` 不是终态**：它只清 Job 号，已 fork 的 ExecStart 进程继续运行，unit 仍 `activating`。把 cancel 当 failed 会误判为可进入 review/恢复路径，当前解析器没有这个错误。
+- **unit 消失不会变成失败或成功**，仍停留在 `dispatch_unknown`，正确保持保守。
+- `MainPID=0`＋`Result=success` 同时可能出现在 `active/exited`（Recording）与 `not-found`，单看这两个字段不区分终态，必须结合 `LoadState`。
+
+### 仍然成立的边界（未因本轮而改变）
+- 以上是**同一 systemd 实例内的瞬时观察**，不是宿主重启后的持久终态证据。
+- 未覆盖崩溃中途（systemd 自身重启、机器掉电）后的 InvocationID 变化与 job 台账对齐。
+- `job_in_progress`/`job_failed_requires_review` 都不授予 retry、不释放围栏、不触发退休；生产 `dispatch`/`recover`/`retire` 门禁保持不变。
+- 探测中曾出现 `systemctl run`（不存在该子命令）、缺 `--no-block`、同名 failed unit 复用三次夹具错误，均已修正脚本，不是产品缺陷。
