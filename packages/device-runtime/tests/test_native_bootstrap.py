@@ -483,6 +483,33 @@ def test_verified_helper_candidate_executes_checked_bytes(runtime, monkeypatch):
     assert real_sys is sys
 
 
+def test_verified_module_scope_restores_modules_when_candidate_import_fails(tmp_path):
+    import sys
+
+    names = ("device_runtime", "device_runtime.management_lock", "device_runtime.native_helper")
+    before = {name: sys.modules.get(name) for name in names}
+    contents = {
+        "__init__": (tmp_path / "__init__.py", b"# package\n"),
+        "management_lock": (tmp_path / "management_lock.py", b"raise RuntimeError('candidate failure')\n"),
+        "native_helper": (tmp_path / "native_helper.py", b"# helper\n"),
+    }
+    with pytest.raises(RuntimeError, match="candidate failure"), bootstrap._verified_helper_modules(contents):
+        pytest.fail("scope must not be entered")
+    assert {name: sys.modules.get(name) for name in names} == before
+
+
+def test_verified_module_scope_restores_modules_when_caller_fails(tmp_path):
+    import sys
+
+    names = ("device_runtime", "device_runtime.management_lock", "device_runtime.native_helper")
+    before = {name: sys.modules.get(name) for name in names}
+    contents = {name: (tmp_path / f"{name}.py", b"# fixture\n") for name in ("__init__", "management_lock", "native_helper")}
+    with pytest.raises(RuntimeError, match="caller failure"), bootstrap._verified_helper_modules(contents) as candidate:
+        assert candidate is sys.modules["device_runtime.native_helper"]
+        raise RuntimeError("caller failure")
+    assert {name: sys.modules.get(name) for name in names} == before
+
+
 @pytest.mark.parametrize("failure", ["interpreter", "candidate_interpreter", "not_isolated", "bytecode", "source_drift", "unit_digest_mismatch", "unit_digest_invalid"])
 def test_verified_helper_candidate_refuses_untrusted_launch(runtime, monkeypatch, failure):
     import hashlib

@@ -16,6 +16,7 @@ import stat
 import struct
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import native_helper as helper
@@ -287,9 +288,20 @@ def run_verified_helper_candidate(candidates_dir, version, *, registry, socket_p
     writes disabled. Modules are compiled from the exact bytes just checked,
     not imported again from mutable paths.
     """
+    contents = _verified_helper_bytes(candidates_dir, version, expected_snapshot_sha256)
+    with _verified_helper_modules(contents) as candidate:
+        candidate.serve(registry, socket_path, group=group)
+
+
+@contextmanager
+def _verified_helper_modules(contents):
+    """Temporarily load caller-verified bytes; not an identity or authorization proof.
+
+    The caller is responsible for obtaining and retaining validated bytes. This
+    process-global module replacement requires single-threaded exclusive use.
+    """
     import types
 
-    contents = _verified_helper_bytes(candidates_dir, version, expected_snapshot_sha256)
     names = ("__init__", "management_lock", "native_helper")
     # Keep imports for these modules inside this exact validated byte set.
     module_names = ("device_runtime", "device_runtime.management_lock", "device_runtime.native_helper")
@@ -304,7 +316,7 @@ def run_verified_helper_candidate(candidates_dir, version, *, registry, socket_p
                 module.__path__ = [str(path.parent)]
             sys.modules[qualified] = module
             exec(compile(data, str(path), "exec"), module.__dict__)  # noqa: S102
-        sys.modules["device_runtime.native_helper"].serve(registry, socket_path, group=group)
+        yield sys.modules["device_runtime.native_helper"]
     finally:
         for name, module in previous.items():
             if module is None:
