@@ -145,8 +145,13 @@ def _prepare_dispatch_locked(manager, instance_id, operation_id, binding, stem):
         raise JobError("Linux administrator required")
     if not isinstance(manager.packages, update.Debian):
         raise JobError("only Debian production adapter can dispatch")
-    manager._prepared(binding, stem)
     path = stem.with_suffix(".job-intent.json")
+    if not os.path.lexists(path):
+        # Fail before metadata subprocesses or any new dispatch preparation.
+        _require_proven_job_fence()
+    elif path.is_symlink():
+        raise JobError("invalid job intent path; action refused")
+    manager._prepared(binding, stem)
     if path.exists():
         helper._trusted(path)
         intent = json.loads(path.read_bytes())

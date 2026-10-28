@@ -165,7 +165,7 @@ def test_locked_dispatch_preparation_remains_default_deny(transaction, monkeypat
     manager = SimpleNamespace(
         packages=update.Debian(),
         registry=transaction.parent.parent,
-        _prepared=lambda *args: None,
+        _prepared=lambda *args: pytest.fail("metadata preparation before default deny"),
         _apply_lease=lambda *args: pytest.fail("package lease before default deny"),
     )
     before = {p: p.read_bytes() for p in transaction.parent.iterdir() if p.is_file()}
@@ -173,6 +173,25 @@ def test_locked_dispatch_preparation_remains_default_deny(transaction, monkeypat
         job._prepare_dispatch_locked(manager, "probe", "one", {}, transaction)
     assert {p: p.read_bytes() for p in before} == before
     assert not transaction.with_suffix(".job-intent.json").exists()
+
+
+def test_dangling_job_intent_refused_before_metadata(transaction, monkeypatch):
+    from types import SimpleNamespace
+
+    from device_runtime import native_update as update
+
+    monkeypatch.setattr(job.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(__import__("sys"), "platform", "linux")
+    marker = transaction.with_suffix(".job-intent.json")
+    marker.symlink_to("missing")
+    manager = SimpleNamespace(
+        packages=update.Debian(),
+        registry=transaction.parent.parent,
+        _prepared=lambda *args: pytest.fail("metadata read before invalid intent rejection"),
+    )
+    with pytest.raises(job.JobError, match="invalid job intent path"):
+        job._prepare_dispatch_locked(manager, "probe", "one", {}, transaction)
+    assert marker.is_symlink()
 
 
 def test_locked_dispatch_preparation_does_not_reenter_transaction_or_run_job(transaction, monkeypatch):

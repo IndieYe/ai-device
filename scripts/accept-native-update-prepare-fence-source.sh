@@ -3,18 +3,19 @@
 set -eu
 [ "${DEVICE_NATIVE_DISPOSABLE_PROBE:-}" = update-prepare-fence-source ] || exit 2
 [ "$(id -u)" = 0 ] && [ "$(uname -m)" = x86_64 ] && [ "$$" = 1 ] || exit 2
-[ "$#" = 4 ] && [ ! -e /opt/ai-device ] && [ ! -e /var/lib/ai-device ] || exit 2
+[ "$#" = 5 ] && [ ! -e /opt/ai-device ] && [ ! -e /var/lib/ai-device ] || exit 2
 printf '%s  %s\n' 36b5ee9ddc3e43c85a7c4c6d3a25b43e2c82b5768ec655017bae03ba2242cbe4 "$1" | sha256sum -c -
 dpkg -i "$1"
 B=/opt/ai-device/packages/0.2.2-native1/runtime
 cp "$2" "$B/lib/python3.13/site-packages/device_runtime/native_bootstrap.py"
 cp "$3" "$B/lib/python3.13/site-packages/device_runtime/native_helper.py"
 cp "$4" "$B/lib/python3.13/site-packages/device_runtime/native_update.py"
+cp "$5" "$B/lib/python3.13/site-packages/device_runtime/native_update_job.py"
 "$B/bin/python3.13" -I -B - <<'PY'
 import os, tempfile
 from contextlib import contextmanager
 from pathlib import Path
-from device_runtime import native_helper as h, native_update as u
+from device_runtime import native_helper as h, native_update as u, native_update_job as job
 with tempfile.TemporaryDirectory(prefix='device-prep-fence-',dir='/root') as d:
     root=Path(d); registry=root/'registry'; registry.mkdir(mode=0o700)
     instance=root/'instance'; instance.mkdir(mode=0o700); (instance/'active.json').write_text('{}')
@@ -51,5 +52,15 @@ with tempfile.TemporaryDirectory(prefix='device-prep-fence-',dir='/root') as d:
     assert prepared.read_bytes()==before and not (registry/'updates/5-probe--one.approved.json').exists()
     assert marker.read_bytes()==b'unknown' and packages.calls==1
     print('PREPARE_METADATA_HOLDS_SH_AND_APPROVAL_REFUSES_WITHOUT_WRITES')
+    class JobManager:
+        packages=u.Debian()
+        registry=registry
+        def _prepared(self,*args): raise AssertionError('metadata preparation executed')
+    jobstem=registry/'updates/5-probe--new'
+    try: job._prepare_dispatch_locked(JobManager(),'probe','new',{},jobstem)
+    except job.JobError as exc: assert 'new dispatch disabled' in str(exc)
+    else: raise AssertionError('new job dispatch not denied')
+    assert not os.path.lexists(jobstem.with_suffix('.job-intent.json'))
+    print('NEW_JOB_DENIED_BEFORE_METADATA_OR_JOB_INTENT')
     print('FAKE_PACKAGES_NO_DEVICE_SERVICE_OR_EXTERNAL_PROCESS_TREE_PROOF')
 PY
