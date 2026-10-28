@@ -1832,3 +1832,12 @@ CLOEXEC 不阻止 fork 后、exec 前的继承，也不证明非并发代码、�
 一次性无网络 Linux amd64/Rosetta systemd 容器干净安装包并通过包内 uv 检查 17 项依赖；普通用户安装实例并真实登记测试 unit；测试专属子进程调用包内内部 `_serve_credential_queries`，真实 root socket 查询返回该实例 inactive，start 和重复 action 拒绝，设备 unit 保持 inactive/MainPID 0、无 start intent；监听期间双锁冲突，退出后可重新取得（`scripts/accept-native-query-listener-2cd3c17.sh`、`20261028-093357-b1c49e.log`）。构建及验收容器已删除并核实（`20261028-093428-7dd357.log`）。
 
 这是直接调用未接生产的内部监听器，不是受控启动、handler 身份、invocation、更新事务或失败恢复验收；没有实际启动 Device 服务。旧包和冻结 snapshot 不自动更新，生产门禁不变，P1 未完成。
+
+
+## 233. 继承双锁的内部查询循环
+
+将 `_serve_credential_queries` 内的监听循环抽取为 `_serve_credential_queries_locked`，原入口仍在现有 daemon 双锁内调用，原 Linux/root、凭据能力、可信路径和 query-only 约束不变。新私有循环明确要求调用者在整个生命周期持有两把锁，但不能验证该前提，不是公开入口、监督或授权。新增测试验证循环不重复取得 daemon 锁；helper 定向 `213 passed, 1 skipped`（`20261028-094003-702d7f.log`），完整 `1279 passed, 16 skipped`（`20261028-094101-d75b4d.log`），ruff 通过。
+
+一次性离线 Linux amd64/Rosetta 容器安装旧 2cd3c17 DEB，容器内覆盖当前 helper 源码；测试父进程持两锁 fork 子进程后退出自身租约作用域，子进程继承双锁并运行新私有查询循环；观察两个锁各自冲突、start 请求拒绝，测试子进程退出回收后两锁可重新获取（`scripts/accept-native-query-inherited-lock-source.sh`、`20261028-094056-f01145.log`），容器已删除。这是源码覆盖实验，不是准确新包、成功实例查询或系统级监督验收。
+
+该接口不证明 FD 仍持锁，不阻止后代继承或共享 OFD 显式解锁，也未完成 pidfd 门闩、父子死亡处理、消息处理者和 invocation 绑定；生产门禁不变，P1 未完成。

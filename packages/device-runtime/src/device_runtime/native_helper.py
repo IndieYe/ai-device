@@ -1202,18 +1202,33 @@ def _serve_credential_queries(registry, socket_path, *, group):
     )):
         raise HelperError("per-message credentials unavailable")
     with _daemon_lease(registry):
-        service = Helper(registry)
-        socket_path = _path(socket_path)
-        _trusted(socket_path.parent, directory=True)
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
-            server.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
-            server.bind(str(socket_path))
-            os.chown(socket_path, 0, group)
-            os.chmod(socket_path, 0o600)
-            server.listen(8)
-            while True:
-                connection, _ = server.accept()
-                _serve_credential_query_once(service, connection, deadline=time.monotonic() + 5)
+        _serve_credential_queries_locked(registry, socket_path, group=group)
+
+
+def _serve_credential_queries_locked(registry, socket_path, *, group):
+    """Internal query loop; caller owns both daemon locks for its entire lifetime.
+
+    This function cannot verify that precondition or authenticate a supervisor;
+    it must not be treated as an authorization or public service entry point.
+    """
+    if sys.platform != "linux" or os.geteuid() != 0:
+        raise HelperError("query listener requires Linux administrator identity")
+    if not all(hasattr(socket, name) for name in (
+        "SO_PASSCRED", "SCM_CREDENTIALS", "SCM_RIGHTS", "MSG_CMSG_CLOEXEC"
+    )):
+        raise HelperError("per-message credentials unavailable")
+    service = Helper(registry)
+    socket_path = _path(socket_path)
+    _trusted(socket_path.parent, directory=True)
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
+        server.bind(str(socket_path))
+        os.chown(socket_path, 0, group)
+        os.chmod(socket_path, 0o600)
+        server.listen(8)
+        while True:
+            connection, _ = server.accept()
+            _serve_credential_query_once(service, connection, deadline=time.monotonic() + 5)
 
 
 @contextmanager
