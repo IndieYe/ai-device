@@ -2104,3 +2104,10 @@ job/update 定向 164 passed；完整回归 1358 passed / 16 skipped、ruff 通�
 `_observation` 对 apply intent、outcome、recovery 使用 `lexists` 区分缺失与异常目录项，已有条目须经可信路径及普通文件校验；断链、链接、目录、FIFO 等保留并拒绝，不打开 FIFO 或调用后续 installed 查询。合法文件的观察结构不变；错误不代表事务已完成或恢复获授权。已有调用方在进入 `_observation` 前仍可能执行 `_prepared` 的 metadata 查询，不能声称所有查询前拒绝。检查和读取间依赖可信管理员维护稳定目录，不是 OS 沙箱。
 
 定向 187 项通过；完整 1381 passed / 16 skipped、ruff 通过（`20261028-124307-443bbd.log`）。隔离 Linux 使用真实可信路径检查对三类证据分别验证断链、符号链接和 FIFO 拒绝（`20261028-124302-4fd495.log`）；该实验直接调用观察函数，包及 helper 为替身，容器已删除。旧冻结代码、真实包查询后代和持久终态不受该局部修正完整覆盖，生产与恢复门禁保持关闭。
+
+
+## 267. 包查询进程树与超时边界审计
+
+盘点 `Debian.metadata`、`installed` 以及包 guard 查询调用与锁/后续写入，记录于 `docs/native-query-supervisor-recovery-design.md`。准备阶段在 package SH、变更阶段部分在 EX，观察可能无 package 租约；锁与监督意图检查不能证明查询的后代退出或外部 job 收口。
+
+隔离 Linux/Python 3.13 使用有限寿命 fork 替身验证：直接子进程等待或先退出两种情况下，`subprocess.run` 捕获管道的 0.25 秒超时均约 0.26 秒返回，后代随后仍运行并自然结束（`20261028-124618-f9e097.log`）。首次误以为 timeout 会等待管道后代，测试以约 0.26 秒返回否定该假设（`20261028-124547-1fbe31.log`），已修正实验与记录；这不是实际 dpkg 派生后代的证明。专属容器自动删除并验证不存在。未修改产品代码或重跑完整回归，最近完整结果仍为第266节 1381 passed / 16 skipped。生产、恢复和退休门禁保持关闭。

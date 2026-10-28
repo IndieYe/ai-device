@@ -12,7 +12,7 @@ cp "$3" "$B/lib/python3.13/site-packages/device_runtime/native_helper.py"
 cp "$4" "$B/lib/python3.13/site-packages/device_runtime/native_update.py"
 cp "$5" "$B/lib/python3.13/site-packages/device_runtime/native_update_job.py"
 "$B/bin/python3.13" -I -B - <<'PY'
-import os, tempfile
+import os, subprocess, sys, tempfile, time
 from contextlib import contextmanager
 from pathlib import Path
 from device_runtime import native_helper as h, native_update as u, native_update_job as job
@@ -142,4 +142,30 @@ with tempfile.TemporaryDirectory(prefix='device-prep-fence-',dir='/root') as d:
     assert not os.path.lexists(jobstem.with_suffix('.job-intent.json'))
     print('NEW_JOB_DENIED_BEFORE_METADATA_OR_JOB_INTENT')
     print('FAKE_PACKAGES_NO_DEVICE_SERVICE_OR_EXTERNAL_PROCESS_TREE_PROOF')
+
+# Check CPython's captured-pipe timeout boundary with a bounded fixture,
+# not with dpkg and not as proof of any real package tool's process tree.
+for mode in ('parent-waits', 'parent-exits'):
+    child_code = '''import os,sys,time
+pid=os.fork()
+if pid==0:
+ time.sleep(2)
+ open(sys.argv[2],'w').write('finished')
+ os._exit(0)
+if sys.argv[1]=='parent-waits': time.sleep(10)
+'''
+    with tempfile.TemporaryDirectory(prefix='query-pipe-',dir='/root') as d:
+        finished=Path(d)/'finished'
+        begin=time.monotonic()
+        try:
+            subprocess.run([sys.executable,'-I','-B','-c',child_code,mode,str(finished)],
+                           capture_output=True,timeout=0.25,check=True)
+        except subprocess.TimeoutExpired:
+            elapsed=time.monotonic()-begin
+            assert not finished.exists(), (mode,elapsed)
+            deadline=time.monotonic()+6
+            while not finished.exists() and time.monotonic()<deadline: time.sleep(0.05)
+            assert finished.read_text()=='finished'
+            print('CAPTURED_PIPE_TIMEOUT_BEFORE_DESCENDANT_FINISHED',mode,round(elapsed,2))
+        else: raise AssertionError('expected captured-pipe timeout')
 PY
