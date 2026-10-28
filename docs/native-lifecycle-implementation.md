@@ -2979,3 +2979,37 @@ CLI：`ai-device-native-helper unregister --registry --unit-dir --instance-id`�
 - RPM 验证使用挂载新代码覆盖容器内模块，不是新构建制品的验收。
 - 未验证 RPM 升级路径与 `%preun` 在真实升级中的行为。
 - ghost unit 之外的 enable 状态残留（如 preset 目录）未纳入清理。
+
+## 295. 制品级 RPM 验收
+
+上一轮 RPM 验收用挂载覆盖容器内模块，实际加载的仍是包内旧代码（首次尝试时 `sys.path.insert` 未生效，`KeyError: 'removed_enable_links'` 暴露了这一点）。因此那次结论只能算源码行为验证，不是制品证据。
+
+### 本轮制品
+从 `5e1da8a` 构建，把源码痕迹核对进包内：
+
+| 项 | 值 |
+| --- | --- |
+| device wheel | `2c2b7268e7c5…` |
+| RPM | `86dc5d2a815b…`（106368906 字节） |
+| 包内 helper 含 `_unlink_enable_links` | 是（payload 与 bootstrap 各 2 处） |
+| manifest `source_commit` | `5e1da8a…` |
+
+同时修正了此前 `source_commit` 固定为 `76c4060`、与实际源码不符的问题。
+
+### 制品级验收结果（隔离 Rocky 9 systemd 容器，`rpm -i` 不加 `--nodeps`）
+| 环节 | 结果 |
+| --- | --- |
+| 加载模块来源 | 包内 bootstrap site-packages（非挂载），`_unlink_enable_links` 存在 |
+| register + enable + start | active，uid 12345 |
+| unregister | `removed_enable_links` 返回该链接 |
+| unit / wants | 两者均 absent |
+| ghost units | 0 |
+| `rpm -e` | 成功，payload 目录删除 |
+| 卸包后 venv | `venv ok 3.13.17` |
+| 卸包后 systemd start | active，实例解释器 6 段映射，包引用 0 |
+
+### 边界
+- 构建阶段需联网安装 `rpm-build`（基础镜像不带）；制品本身离线安装。构建链未完全离线。
+- 制品未签名，`development_build=true`。
+- 未验证 RPM 升级路径（`rpm -U`）与 `%preun` 在升级中的行为。
+- DEB 未用同一源码重建，两包源码同源但制品未同步刷新。
