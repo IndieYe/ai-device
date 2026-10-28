@@ -7,11 +7,49 @@ No service operations or implicit adoption of existing instances are permitted.
 import argparse
 import json
 import os
+import shutil
+import stat
 import sys
 from pathlib import Path
 
 from .bundle import inspect_bundle
 from .installation import InstallationError, install_instance
+
+
+def _check_bundle_copy_space(bundle, manifest, destination):
+    """Reject only when the verified bundle's copied files cannot fit.
+
+    This is a lower bound, not a reservation or an estimate of the venv,
+    filesystem overhead, quotas, or concurrent use.
+    """
+    files = [
+        bundle / "manifest.json",
+        bundle / "constraints.txt",
+        bundle / "dependencies/manifest.json",
+    ]
+    files.extend(bundle / entry["path"] for entry in manifest["components"].values())
+    files.extend(
+        bundle / "dependencies" / entry["path"]
+        for entry in manifest["dependencies"]["manifest"]["wheels"]
+    )
+    try:
+        required = sum(path.stat().st_size for path in files)
+        parent = destination.parent
+        while True:
+            try:
+                info = parent.stat()
+                break
+            except FileNotFoundError:
+                if parent.is_symlink() or parent == parent.parent:
+                    raise
+                parent = parent.parent
+        if not stat.S_ISDIR(info.st_mode):
+            raise OSError("destination ancestor is not a directory")
+        free = shutil.disk_usage(parent).free
+    except OSError as exc:
+        raise InstallationError("cannot determine available space for bundle copy") from exc
+    if free < required:
+        raise InstallationError("insufficient space for bundle copy")
 
 
 def install_payload(payload, *, root, instance_id, server_url):
@@ -34,6 +72,7 @@ def install_payload(payload, *, root, instance_id, server_url):
         raise InstallationError("native install refuses existing instances; adoption is explicit")
     if "\n" in str(python) or " " in str(python) or len(str(python).encode()) > 120:
         raise InstallationError("packaged interpreter path cannot be used as a stable shebang")
+    _check_bundle_copy_space(payload / "bundle", manifest, root)
     # Child processes inherit only the packaged tool PATH. Restore caller state.
     previous = os.environ.get("PATH")
     os.environ["PATH"] = str(payload / "tools") + ":/usr/bin:/bin"

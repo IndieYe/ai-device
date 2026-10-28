@@ -1,4 +1,6 @@
 import os
+import shutil
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,6 +19,12 @@ def payload(tmp_path, monkeypatch):
     uv = root / "tools/uv"
     uv.write_text("fixture")
     uv.chmod(0o755)
+    bundle = root / "bundle"
+    (bundle / "wheels").mkdir(parents=True)
+    (bundle / "dependencies").mkdir()
+    for name in ("manifest.json", "constraints.txt", "wheels/device.whl",
+                 "dependencies/manifest.json", "dependencies/dep.whl"):
+        (bundle / name).write_bytes(b"1234567890")
     monkeypatch.setattr(native.sys, "executable", str(python))
     monkeypatch.setattr(
         native,
@@ -24,9 +32,74 @@ def payload(tmp_path, monkeypatch):
         lambda _: {
             "format_version": 3,
             "target": {"system": "linux"},
+            "components": {"device": {"path": "wheels/device.whl"}},
+            "dependencies": {"manifest": {"wheels": [{"path": "dep.whl"}]}},
         },
     )
     return root
+
+
+@pytest.mark.parametrize("free", [0, 49])
+def test_native_install_rejects_insufficient_bundle_copy_space_before_creation(
+    tmp_path, monkeypatch, payload, free
+):
+    destination = tmp_path / "not-yet-created" / "instance"
+    checked = []
+    monkeypatch.setattr(
+        shutil, "disk_usage", lambda path: checked.append(path) or SimpleNamespace(free=free)
+    )
+    monkeypatch.setattr(native, "install_instance", lambda *a, **k: pytest.fail("core called"))
+    with pytest.raises(InstallationError, match="insufficient space for bundle copy"):
+        native.install_payload(
+            payload, root=destination, instance_id="fixture", server_url="https://example.invalid"
+        )
+    assert checked == [tmp_path]
+    assert not destination.parent.exists()
+
+
+def test_native_install_rejects_unavailable_disk_space_without_creating_root(tmp_path, monkeypatch, payload):
+    destination = tmp_path / "instance"
+
+    def fail(_path):
+        raise OSError("disk usage unavailable")
+
+    monkeypatch.setattr(shutil, "disk_usage", fail)
+    monkeypatch.setattr(native, "install_instance", lambda *a, **k: pytest.fail("core called"))
+    with pytest.raises(InstallationError, match="cannot determine available space"):
+        native.install_payload(
+            payload, root=destination, instance_id="fixture", server_url="https://example.invalid"
+        )
+    assert not destination.exists()
+
+
+def test_native_install_space_lower_bound_allows_equal_space(tmp_path, monkeypatch, payload):
+    monkeypatch.setattr(shutil, "disk_usage", lambda _: SimpleNamespace(free=50))
+    monkeypatch.setattr(native, "install_instance", lambda *a, **k: {"release": "fixture"})
+    result = native.install_payload(
+        payload, root=tmp_path / "instance", instance_id="fixture", server_url="https://example.invalid"
+    )
+    assert result["release"] == "fixture"
+
+
+@pytest.mark.parametrize("case", ["missing-file", "dangling-parent", "file-parent"])
+def test_native_install_rejects_unverifiable_space_inputs(tmp_path, monkeypatch, payload, case):
+    parent = tmp_path / "parent"
+    if case == "missing-file":
+        (payload / "bundle/dependencies/dep.whl").unlink()
+        parent = tmp_path
+    elif case == "dangling-parent":
+        parent.symlink_to(tmp_path / "missing")
+    else:
+        parent.write_text("not a directory")
+    monkeypatch.setattr(native, "install_instance", lambda *a, **k: pytest.fail("core called"))
+    with pytest.raises(InstallationError, match="cannot determine available space"):
+        native.install_payload(
+            payload, root=parent / "instance", instance_id="fixture", server_url="https://example.invalid"
+        )
+    if case == "file-parent":
+        assert parent.read_text() == "not a directory"
+    if case == "dangling-parent":
+        assert parent.is_symlink()
 
 
 def test_native_install_calls_existing_core_and_restores_path(tmp_path, monkeypatch, payload):
