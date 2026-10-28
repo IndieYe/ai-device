@@ -1900,3 +1900,17 @@ CLOEXEC 不阻止 fork 后、exec 前的继承，也不证明非并发代码、�
 query-only、未接生产的监督候选在直接子回收结果未知时，不再抛出后离开双锁作用域：保留父侧租约和 pidfd，持续尝试；无子 pidfd 的门闩路径亦等待 `waitpid` 实际回收，不向裸 PID 发信号。第一次未知向 stderr 输出有界固定诊断；后续即使回收成功，也以失败而非正常停止退出。未知可能永久存在，因此可能无限期持锁，需要后续管理员诊断与处置设计，不能把 ECHILD 或锁本身当作完整进程树证明。控制通道或自身 pidfd 关闭异常也不能跳过直接子回收。SIGKILL、宿主故障、后代及外部 job 不在本保证内。
 
 隔离旧 2cd3c17 DEB＋源码覆盖：注入自身 pidfd 关闭异常和直接子 pidfd 回收故障，先使直接子退出并用 pidfd 验证退出，再验证父监督存活、两锁均竞争失败；再发 SIGTERM、解除注入后验证真实回收回执、非零退出和双锁可重取（`20261028-102924-732bcb.log`）。正常终止及 fork/pidfd 窗口回归通过（`20261028-102614-873655.log`；该结果在最终清理顺序调整前）。最终源码完整回归 1305 passed / 16 skipped，ruff 通过（`20261028-102935-2e0003.log`）。测试容器已回收；这是限定源码实验，尚非准确新包、完整树/job 或生产授权验收。补充两种故障路径的最终源码验证（`20261028-103132-02e29d.log`）：子 pidfd 回收未知，以及子 pidfd 获取失败后门闩子进程 `waitpid` 回收未知。两种场景均先确认子退出、重复终止信号后父侧双锁仍被持有，并在恢复后取得回收回执；门闩场景未创建 listener。生产门禁保持关闭。
+
+
+## 241. 查询处理进程异常退出后的查询子进程
+
+一次性无网络 Linux 容器中，旧 2cd3c17 DEB 加载当前 `native_helper` 源码，运行实际 `Systemd.query`，将 `systemctl` 替换为有限寿命、可显式释放的测试程序。测试父进程持有真实 daemon 双锁并创建 Unix listener；替身启动后通过 pidfd SIGKILL 该父进程，确认父进程退出后替身仍存活，而双锁可重取；替身进程 FD 检查未发现 socket。最后显式释放替身并观察 pidfd 退出，专属容器已删除。脚本 `scripts/accept-native-query-subprocess-orphan-source.sh`，日志 `20261028-103429-bc81b2.log`。
+
+该实验直接调用真实 `Systemd.query`，不是完整受控监督候选、实际绑定实例或真实 systemd；只证明替身时序下直接回收处理进程、锁可重取不等于查询子进程终止，不证明真实 systemctl 有同样长期存活，不证明后代、外部 job 或生产影响。需要先设计对查询子进程和后代的可验证持锁收口，覆盖子进程启动窗口、handler/监督者异常退出、pidfd/回收错误和外部委派；不可把本实验或局部 pidfd 回收用于开启 dispatch/recovery。
+
+
+## 242. 查询后代 subreaper 限定收养实验
+
+一次性 Linux 容器中先设置并读取 Linux child subreaper 标志，独立监督 fixture 持有 daemon 双锁，启动调用真实 `Systemd.query` 的 handler，测试替身启动后通过 pidfd 结束 handler。`waitpid(-1,WNOHANG)` 表明被收养子仍存活，竞争进程不能取得双锁；显式让替身自然退出后由监督 fixture 实际回收该 PID，再观察 ECHILD 并退出锁作用域，之后双锁可重取。旧 2cd3c17 DEB 加源码覆盖，`scripts/accept-native-query-subreaper-source.sh`，日志 `20261028-103601-1a0f00.log`，测试容器已删除。
+
+此为单受控替身、非完整 `_supervise_candidate_queries` 的可行性实验，不证明多代并发、fork 竞态、稳定身份强制终止、回收故障、监督者自身崩溃、外部 job 或持久状态；未接入生产，不授权启动和恢复。候选及其必要限制见 `docs/native-helper-dispatch-handoff-design.md` 的“查询监督的后代收口候选”。
