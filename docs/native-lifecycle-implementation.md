@@ -1664,3 +1664,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 无网络 amd64 一次性 Linux 容器以 root 安装准确包，包内 uv 检查 17 项依赖，普通 UID 12345 从包内 Python 运行 `native_install.install_payload`，核对安装模块与准确 wheel 字节一致。对 `_prepare` 注入 errno 13 和 28：错误报告 errno、部分实例保留，再调用拒绝已有实例且证据不变；恢复正常路径后普通用户干净安装成功，重复安装拒绝且 active 不变（`20261028-075403-76ac6c.log`；`scripts/accept-native-install-errors-2437e20.sh`）。容器 `--rm`，随后核对已回收（`20261028-075417-be9f56.log`）。
 
 故障是注入而非实际磁盘耗尽；测试直接调用包内函数而非独立 CLI 子进程，未验证真实主机、systemd、安装恢复或重建，旧包不自动更新。生产 job/恢复/覆盖门禁不变，P1 未完成。
+
+
+## 213. job 观察拒绝孤立执行证据
+
+`observe_job` 原先在 apply intent 缺失而 sender 或 outcome 存在时，仍只返回 `apply_intent_present=false`，遗漏矛盾证据；用实际观察入口构造两种孤立文件，先复现均未报错（`20261028-075830-f00758.log`）。现检测此冲突并报 `job execution evidence without apply intent`，保留文件不重放；apply intent 使用 `lexists`，不再把悬空链接误认为完全缺失。只读诊断仍不授权重试或释放围栏，不证明证据来源、运行身份、外部 job 终态或可恢复性。
+
+更新/job 定向 147 通过（`20261028-075907-ad1f48.log`），完整 1210 通过、16 跳过（`20261028-075919-082716.log`），ruff 与 diff 检查通过。新代码尚未构建准确包，旧 helper/snapshot 不自动更新；生产派发、worker、退休和恢复门禁不变，P1 未完成。

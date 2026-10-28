@@ -483,6 +483,28 @@ def test_observe_read_only_and_never_grants_retry(transaction, unit_state, expec
     assert not list(manager.registry.glob("*.lock"))
 
 
+@pytest.mark.parametrize("evidence", ["sender", "outcome"])
+def test_observe_rejects_execution_evidence_without_apply_intent(transaction, evidence):
+    import hashlib
+    from types import SimpleNamespace
+
+    intent = {
+        "unit": "ai-device-package-" + hashlib.sha256(str(transaction).encode()).hexdigest() + ".service",
+        "instance_id": "probe", "operation_id": "one",
+        "prepared_sha256": job.helper._digest(transaction.with_suffix(".prepared.json")),
+        "runtime_snapshot_sha256": "snapshot",
+    }
+    transaction.with_suffix(".job-intent.json").write_text(json.dumps(intent))
+    transaction.with_suffix(".apply-intent.json").unlink()
+    orphan = transaction.with_suffix(f".{evidence}.json")
+    orphan.write_text('{"state":"fixture"}')
+    manager = SimpleNamespace(registry=transaction.parent.parent)
+    before = {p.name: p.read_bytes() for p in transaction.parent.iterdir() if p.is_file()}
+    with pytest.raises(job.JobError, match="execution evidence without apply intent"):
+        job.observe_job(manager, "probe", "one", runner=lambda *a, **kw: SimpleNamespace(stdout=""))
+    assert {p.name: p.read_bytes() for p in transaction.parent.iterdir() if p.is_file()} == before
+
+
 def test_observe_requires_matching_sender_before_reporting_outcome(transaction):
     import hashlib
     from types import SimpleNamespace

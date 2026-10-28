@@ -454,7 +454,7 @@ def observe_job(manager, instance_id, operation_id, *, runner=None):
         pass
     apply_path = stem.with_suffix(".apply-intent.json")
     outcome_path = stem.with_suffix(".outcome.json")
-    if apply_path.exists():
+    if os.path.lexists(apply_path):
         helper._trusted(apply_path)
         apply_intent = json.loads(apply_path.read_bytes())
         expected_apply = {
@@ -496,6 +496,8 @@ def observe_job(manager, instance_id, operation_id, *, runner=None):
             report["state"] = "package_outcome_recorded"
             report["outcome"] = outcome
     else:
+        if any(os.path.lexists(stem.with_suffix(suffix)) for suffix in (".sender.json", ".outcome.json")):
+            raise JobError("job execution evidence without apply intent")
         report["apply_intent_present"] = False
     return report
 
