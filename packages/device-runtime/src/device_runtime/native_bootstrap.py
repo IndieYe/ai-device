@@ -473,6 +473,45 @@ def _reap_direct_child_pidfd(pidfd, *, deadline):
         raise BootstrapError("direct child pidfd reap failed") from exc
 
 
+def _hold_until_direct_child_reaped(attempt):
+    """Keep the caller's leases until an attempt confirms direct-child reaping.
+
+    Fail closed indefinitely on unknown results, including ECHILD; a different
+    waiter is not proof that this supervisor reaped its child. SIGKILL, process
+    or host failure can still release leases. This is not a tree/job fence.
+    """
+    unknown = False
+    while True:
+        try:
+            attempt()
+        except BaseException:  # noqa: BLE001 - an unknown result must not release leases
+            if not unknown:
+                unknown = True
+                try:
+                    os.write(2, b"query supervisor: direct child reap unknown; holding leases and retrying\n")
+                except BaseException:  # noqa: BLE001, S110 - diagnostics cannot release leases
+                    pass
+            try:
+                time.sleep(1)
+            except BaseException:  # noqa: BLE001, S112 - interruption is not a reap receipt
+                continue
+        else:
+            if unknown:
+                raise BootstrapError("direct child reaped after unknown cleanup; not authorized")
+            return
+
+
+def _reap_gated_child_waitpid(pid, *, deadline):
+    """Reap the still-gated direct child without signaling a numeric PID."""
+    while True:
+        waited, _ = os.waitpid(pid, os.WNOHANG)
+        if waited == pid:
+            return
+        if time.monotonic() >= deadline:
+            raise BootstrapError("gated child cleanup unknown")
+        time.sleep(0.01)
+
+
 def _observe_child_handshake(connection, pidfd, child_pid, challenge, *, deadline):
     """Observe a direct child record on a caller-owned private SEQPACKET channel.
 
@@ -652,27 +691,28 @@ def _supervise_candidate_queries(candidates_dir, version, *, registry, socket_pa
                         return "query_supervisor_stopped_not_authorized"
                 raise BootstrapError("query child exited unexpectedly")
             finally:
-                parent.close()
-                child_socket.close()
-                if self_pidfd is not None:
-                    os.close(self_pidfd)
-                if pid is not None:
-                    if pidfd is None:
-                        # The child is gated and owns inherited leases; never use
-                        # a numeric PID for signaling or claim successful cleanup.
-                        end = time.monotonic() + 5
-                        while True:
-                            waited, _ = os.waitpid(pid, os.WNOHANG)
-                            if waited == pid:
-                                break
-                            if time.monotonic() >= end:
-                                raise BootstrapError("gated child cleanup unknown")
-                            time.sleep(0.01)
-                    else:
-                        try:
-                            _reap_direct_child_pidfd(pidfd, deadline=time.monotonic() + 5)
-                        finally:
-                            os.close(pidfd)
+                try:
+                    try:
+                        parent.close()
+                    finally:
+                        child_socket.close()
+                finally:
+                    try:
+                        if self_pidfd is not None:
+                            os.close(self_pidfd)
+                    finally:
+                        if pid is not None and pidfd is None:
+                            # Never signal a numeric PID or claim unknown cleanup.
+                            _hold_until_direct_child_reaped(
+                                lambda: _reap_gated_child_waitpid(pid, deadline=time.monotonic() + 5)
+                            )
+                        elif pid is not None:
+                            try:
+                                _hold_until_direct_child_reaped(
+                                    lambda: _reap_direct_child_pidfd(pidfd, deadline=time.monotonic() + 5)
+                                )
+                            finally:
+                                os.close(pidfd)
     finally:
         signal.pthread_sigmask(signal.SIG_SETMASK, oldmask)
 
