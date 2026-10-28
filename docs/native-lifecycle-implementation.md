@@ -2183,3 +2183,37 @@ job/update 定向 164 passed；完整回归 1358 passed / 16 skipped、ruff 通�
 - 未覆盖崩溃中途（systemd 自身重启、机器掉电）后的 InvocationID 变化与 job 台账对齐。
 - `job_in_progress`/`job_failed_requires_review` 都不授予 retry、不释放围栏、不触发退休；生产 `dispatch`/`recover`/`retire` 门禁保持不变。
 - 探测中曾出现 `systemctl run`（不存在该子命令）、缺 `--no-block`、同名 failed unit 复用三次夹具错误，均已修正脚本，不是产品缺陷。
+
+
+## 274. InvocationID 语义实测：不能作为「终态属于本次派发」的持久判据
+
+在一次性 amd64 systemd255/cgroupv2 容器内只做只读探测，全部 unit 为惰性 fixture。容器已 `stop`+`delete` 并复核不存在。日志 `20261028-145943`、`150015`、`150042`。
+
+### 实测事实
+
+| 场景 | InvocationID | 说明 |
+| --- | --- | --- |
+| oneshot 失败（`loaded/failed`） | 保留，32hex | **唯一稳定留存终态的场景** |
+| 成功后 `stop` | 变为空，`LoadState` 退化为 `not-found` | 停止即销毁代际 |
+| `clean` 后 | 空，`not-found` | 代际随之消失 |
+| `clean` 后重新派发同名 unit | 全新 32hex（`c0eab163…`） | 同名可复用，代际不延续 |
+| `reset-failed` 后重新派发同名 unit | 全新 32hex（`1db1494e…`） | 同上 |
+| unit 运行中两次观察 | 完全一致 | 活跃期稳定 |
+| 从未启动过的 unit 名 | 空 | 与「已停止」不可区分 |
+
+结论：**InvocationID 只在 unit 处于 `failed` 或活跃状态时存在**。一旦 `stop` 成功退出或 `clean`，代际标识即被 systemd 丢弃，且与「从未派发」在字段上不可区分。因此它无法承担「跨重启/跨停止后仍能证明终态归属」的持久判据职责。
+
+### 派发侧两个已确认的缺陷
+
+1. **`dispatch_job` 的 docstring 与实际行为不符。** 文档写「without waiting for execution」，但 `_prepare_dispatch_locked` 构造的 argv 没有 `--no-block`。实测同一 flag 集合对 6 秒 ExecStart **阻塞 6.1 秒**才返回。生产 worker 是真实包事务，`TimeoutStartSec=infinity`，派发将一直阻塞到包事务结束；而 `dispatch_job` 的 `runner` 用 `timeout=30`，长事务会在 30 秒后抛 `TimeoutExpired`，被归为 `dispatch_unknown`，但此时 unit 可能仍在正常运行。
+2. **InvocationID 在派发时确实可得**：`systemd-run` 把 `invocation ID: <32hex>` 写进 stderr，且与 `systemctl show` 一致（实测 match=true）。加 `--no-block` 后 0.03 秒返回，ID 依然可读。也就是说修复路径存在，但当前代码没有采集它。
+
+### 未做与边界
+
+- 未修改任何产品代码；上述两点只是实测结论，修复涉及派发语义与超时契约，需单独设计与验收。
+- 未验证 systemd 自身重启（`daemon-reexec`/崩溃）后的 InvocationID 变化，也未验证宿主重启。
+- 现有 8 项 dispatch 测试全部使用替身 `runner`，没有任何测试断言阻塞语义或真实 systemd 返回，因此这两个缺陷不会被当前测试发现。
+
+### 环境异常（必须记录）
+
+`device-qual-systemd-amd64-ses13838:probe` 与 `device-qual-systemd-ses13838:probe` 在本轮中途**从本机消失**：第 273 节运行时仍可用，随后 `image list` 只剩 redis/pgvector，`inspect` 报 `image not found`。本轮改用按 `ubuntu:24.04 + systemd` 重建的等价镜像 `device-qual-systemd-amd64-probe:rebuild`（systemd 255，与原镜像版本一致，PID1=systemd、`is-system-running=degraded`）。重建镜像与已丢失的原镜像**不是同一制品**，后续涉及镜像身份的结论需注明使用哪一个。原镜像丢失原因未知，不能排除是被外部清理。
