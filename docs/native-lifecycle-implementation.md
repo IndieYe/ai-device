@@ -2129,10 +2129,21 @@ job/update 定向 164 passed；完整回归 1358 passed / 16 skipped、ruff 通�
 
 ## 270. 外部 job 与旧快照入口覆盖审计
 
-外部 job 链：`dispatch_job` 由 `_require_proven_job_fence` 默认拒绝，拒绝发生在 `_prepare_dispatch_locked` 的元数据查询与 `updates` 目录初始化之前；`describe_job` 只产出不可派发的 unit 候选，`ConditionPathExists` 门禁文件从不创建；`observe_job` 先校验证据再做 unit 查询；`recover_job` 与 `retire_closed_job` 仍分别由 recovery/retirement 默认拒绝阻挡。系统命令共四处：`dispatch_job` 的 `systemd-run`、`observe_job` 的 `systemctl show`、`Updates.Systemd.query/cancel_job` 与向 `upgrade_supervisor` 的 `systemctl` 调用；后两者属旧升级器，不受新 job 围栏约束。
+外部 job 链：`dispatch_job` 由 `_require_proven_job_fence` 默认拒绝，拒绝发生在 `_prepare_dispatch_locked` 的元数据查询与 `updates` 目录初始化之前；`describe_job` 只产出不可派发的 unit 候选，`ConditionPathExists` 门禁文件从不创建；`observe_job` 先校验证据再做 unit 查询；`recover_job` 与 `retire_closed_job` 仍分别由 recovery/retirement 默认拒绝阻挡。系统命令共四处：`dispatch_job` 的 `systemd-run`、`observe_job` 的 `systemctl show`、`Updates.Systemd.query/cancel_job` 与向 `upgrade_supervisor` 的 `systemctl` 调用；后两者属旧升级器；但 `upgrader` 与 `upgrade_supervisor` 的全部 7 个入口都由 `@legacy_operation` 包裹，受管实例（存在 `.native-management.json`）会在执行 `systemctl` 前被 `management_lease` 直接拒绝，`native_prepare._binding` 另有 `_trusted_marker` 校验标记为 root 所有、非符号链接、无组/其他写权限。故旧路径不是无围栏，而是靠受管标记拒绝；旧包未部署该标记的未受管实例仍可走旧升级器。
 
 旧快照链：`run_verified_helper_candidate` 首行即调用 `_require_proven_candidate_launch_fence`（永抛），字节校验与 `exec(compile(...))` 均在其后不可达；`publish_managed_helper_candidate` 同样先默认拒绝；`deploy_helper` 候选路径另有固定 bootstrap 检查；普通部署的 bootstrap 已由既有 `_trusted` 与 `is_file` 覆盖符号链接、目录与不可信路径，本轮测试确认该既有行为，未新增围栏（早先添加的重复检查已撤回）。
 
 本轮实际收紧仅两处：`read_helper_candidate` 的 `candidate.json` 要求可信普通文件，避免 FIFO 阻塞；`describe_job`、close 前置检查与 `observe_job` 的 prepared/approved 统一改用 `_read_job_evidence`。定向 bootstrap 47 项、job 74 项通过；完整 1417 passed / 16 skipped、ruff 通过（`20261028-133859-936ff6.log`）。
 
 未闭环：`upgrade_supervisor` 旧路径仍可直接调用 `systemctl` 启动/停止真实 unit，无新意图检查；旧 helper、旧 bootstrap、冻结 snapshot 与在途进程不自动更新；外部 systemd job 的完成、取消与宿主重启后终态无持久证据；`standard` 单元部署后的实际运行身份绑定仍未验证。生产、恢复、退休门禁不变。
+
+
+## 271. 旧升级器围栏与受管标记核实
+
+第270节曾把 `upgrade_supervisor` 的 `systemctl` 调用记为“不受新 job 围栏约束”，本轮核实后判定该表述不准确，已在原节更正。实际事实：
+
+- `upgrader` 3 处、`upgrade_supervisor` 4 处入口全部由 `@legacy_operation` 装饰，进入即取 `management_lease(root)`。
+- 该租约在受管实例（存在 `.native-management.json`）上抛 `ValueError("native-managed instance requires the native lifecycle manager")`，发生在任何 `systemctl` 调用之前。
+- `native_preparation_lease` 只用 `is_file()` 粗判标记，但 `native_prepare._binding` 随后用 `_trusted_marker` 要求普通文件、root 所有、无组/其他写权限，并校验 schema2 绑定、身份、unit 与 active 摘要，因此不构成绕过。
+
+仍存在的真实缺口：未部署受管标记的旧实例可以正常走旧升级器启停真实 unit，这部分不受新协议约束，只能靠维护窗口人工迁移；旧包本身也不会因新源码而更新。本轮未调用任何真实 systemd unit，未在真实设备验证该拒绝路径，完整回归未因本次文档更正而变化（仍为 1417 passed / 16 skipped）。

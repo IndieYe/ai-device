@@ -221,3 +221,30 @@ def test_native_preparation_lease_keeps_legacy_fence(tmp_path):
             pass
     with pytest.raises(ValueError, match="native-managed"), management_lease(tmp_path):
         pass
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        (upgrader, "prepare"),
+        (upgrader, "activate"),
+        (upgrader, "reconcile"),
+        (upgrade_supervisor, "supervise"),
+        (upgrade_supervisor, "recover"),
+        (upgrade_supervisor, "resume_admission"),
+        (upgrade_supervisor, "reconcile_supervision"),
+    ],
+)
+def test_legacy_upgrade_entries_refuse_managed_instance_before_body(tmp_path, operation):
+    """Each legacy entry is decorated and must refuse a managed instance.
+
+    The decorated wrapper takes the lease before calling the body, so a managed
+    marker rejects the call prior to any systemctl or record access. No real
+    unit or service is touched here.
+    """
+    module, name = operation
+    root = tmp_path / "instance"
+    root.mkdir()
+    (root / ".native-management.json").write_text("{}")
+    with pytest.raises(ValueError, match="native-managed instance requires"):
+        getattr(module, name)(root)
