@@ -7,6 +7,7 @@ administrator dispatch_job uses systemd-run; it never enables boot startup.
 import hashlib
 import json
 import os
+import re
 import stat
 from pathlib import Path
 
@@ -439,6 +440,38 @@ def retire_closed_job(manager, instance_id, operation_id):
         return receipt
 
 
+def _read_run_start(path, intent_sha256):
+    """Read start evidence and bind it to this dispatch's intent.
+
+    Returns None when the record is absent: absence means "not attributable",
+    which callers must treat exactly like the pre-existing unknown state. A
+    record bound to a different intent is corrupt evidence, not absence.
+    """
+    value = _read_job_evidence(path)
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise JobError("job run evidence is not an object")
+    if set(value) != {
+        "schema_version",
+        "state",
+        "job_intent_sha256",
+        "boot_id",
+        "pid",
+        "started_at_ms",
+    }:
+        raise JobError("job run evidence shape differs")
+    if value["state"] != "job_run_started" or type(value["schema_version"]) is not int:
+        raise JobError("job run evidence state differs")
+    if value["job_intent_sha256"] != intent_sha256:
+        raise JobError("job run evidence belongs to another dispatch")
+    if not isinstance(value["boot_id"], str) or not re.fullmatch(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", value["boot_id"]
+    ):
+        raise JobError("job run evidence has invalid boot identity")
+    return value
+
+
 def observe_job(manager, instance_id, operation_id, *, runner=None):
     """Read-only observation: unit status never grants retry or clears a fence."""
     import subprocess
@@ -483,6 +516,11 @@ def observe_job(manager, instance_id, operation_id, *, runner=None):
         "fence_retained": True,
         "unit_observation": None,
     }
+    # Start evidence is reported but does not change `state` in this step.
+    run_start = _read_run_start(
+        stem.with_suffix(".job-run-start.json"), report["intent_sha256"]
+    )
+    report["run_start"] = run_start
     apply_intent = _read_job_evidence(stem.with_suffix(".apply-intent.json"))
     outcome = None
     sender = None
@@ -529,6 +567,26 @@ def observe_job(manager, instance_id, operation_id, *, runner=None):
                     report["state"] = "job_failed_requires_review"
     except (OSError, subprocess.SubprocessError):
         pass
+    if run_start is not None:
+        # The dispatch is now attributable: it demonstrably started. Only now can
+        # a missing unit or an unreachable systemctl be told apart from "never
+        # began". Every branch below still forbids retry and keeps the fence.
+        fields = report["unit_observation"] or {}
+        if report["state"] == "dispatch_unknown":
+            if not fields:
+                report["state"] = "job_in_progress_unverified"
+            elif fields.get("LoadState") != "loaded":
+                report["state"] = "job_completed_no_unit_evidence"
+        if apply_intent is None and report["state"] in (
+            "job_completed_no_unit_evidence",
+            "job_in_progress_unverified",
+            "job_in_progress",
+            "job_failed_requires_review",
+        ):
+            # Started but produced no apply intent: nothing proves the package
+            # database was untouched, so recovery stays refused.
+            report["state"] = "job_started_without_mutation"
+        report["prior_boot_execution"] = run_start["boot_id"] != _boot_id()
     if apply_intent is not None:
         expected_apply = {
             "prepared_sha256": prepared_digest,
@@ -619,10 +677,72 @@ def recover_job(manager, instance_id, operation_id, *, runner=None):
         return receipt
 
 
+def _read_boot_id():
+    """Raw kernel boot identity; a seam so tests never touch the global filesystem."""
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    except OSError as exc:
+        raise JobError("boot identity unavailable") from exc
+
+
+def _boot_id():
+    """Validated boot identity, used to tell executions apart across reboots."""
+    value = _read_boot_id()
+    if not re.fullmatch(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", value
+    ):
+        raise JobError("invalid boot identity")
+    return value
+
+
+def _record_run_start(registry, instance_id, operation_id, intent_sha256):
+    """Prove this dispatch actually started, before any package work.
+
+    Written once and never replaced: a second writer for the same dispatch means
+    the same job was started twice, which is refused rather than recorded. The
+    record is deliberately independent of the closed job-intent key set, so the
+    existing exact-shape comparisons stay valid.
+
+    This proves only that execution began. It never proves the package change
+    succeeded, and it grants no retry.
+    """
+    import time
+
+    helper._identifier(instance_id)
+    helper._identifier(operation_id)
+    if not isinstance(intent_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", intent_sha256):
+        raise JobError("invalid job intent digest")
+    registry = helper._path(registry)
+    helper._trusted(registry, directory=True)
+    directory = registry / "updates"
+    helper._trusted(directory, directory=True)
+    stem = directory / f"{len(instance_id)}-{instance_id}--{operation_id}"
+    intent = stem.with_suffix(".job-intent.json")
+    # The worker must run for the exact intent the dispatcher fenced. Missing or
+    # mismatched evidence means this start cannot be attributed; refuse before
+    # any package state can be touched.
+    if not os.path.lexists(intent):
+        raise JobError("job intent evidence missing before worker start")
+    helper._trusted(intent)
+    if helper._digest(intent) != intent_sha256:
+        raise JobError("job intent changed before worker start")
+    value = {
+        "schema_version": 1,
+        "state": "job_run_started",
+        "job_intent_sha256": intent_sha256,
+        "boot_id": _boot_id(),
+        "pid": os.getpid(),
+        "started_at_ms": int(time.time() * 1000),
+    }
+    try:
+        helper._save_new(stem.with_suffix(".job-run-start.json"), value)
+    except FileExistsError as exc:
+        raise JobError("job run already recorded; duplicate start refused") from exc
+    return value
+
+
 def main():
     import argparse
-
-    from .native_update import Updates
 
     parser = argparse.ArgumentParser(description="Fixed independent package transaction worker")
     parser.add_argument("--registry", required=True)
@@ -630,6 +750,14 @@ def main():
     parser.add_argument("--operation-id", required=True)
     parser.add_argument("--job-intent-sha256", required=True)
     args = parser.parse_args()
+    # Start evidence precedes everything else, including the apply-side imports:
+    # a worker that dies while importing native_update (missing dependency,
+    # broken snapshot) must still leave proof that this dispatch began.
+    _record_run_start(
+        args.registry, args.instance_id, args.operation_id, args.job_intent_sha256
+    )
+    from .native_update import Updates
+
     result = Updates(args.registry).apply(
         args.instance_id, args.operation_id, job_intent_sha256=args.job_intent_sha256
     )

@@ -89,8 +89,10 @@ worker（`native_update_job.main()`）在**取得任何锁、读取任何包状�
 
 ```
 run_start 缺失或绑定不符:
-    任何 systemd 观察 → dispatch_unknown（保持现状，不可判定）
-    理由：无法区分「从未开始」与「跑完被清空」
+    保持既有映射不变（unit failed → job_failed_requires_review,
+                      unit 活跃 → job_in_progress,
+                      unit not-found / 不可达 → dispatch_unknown）
+    理由：历史事务没有该记录，新增归属不得回溯降级原本可判定的状态
 
 run_start 存在且 job_intent_sha256 == 当前 intent 摘要:
     systemd failed              → job_failed_requires_review
@@ -99,6 +101,8 @@ run_start 存在且 job_intent_sha256 == 当前 intent 摘要:
     systemd 不可达              → job_in_progress_unverified
     且 run_start.boot_id != boot → 追加标记 prior_boot_execution=true
 ```
+
+> 订正（实施时发现）：本节初稿曾写「run_start 缺失 → 一律 dispatch_unknown」，这是错的。第 273 节实测确认，现有实现本来就把 `unit failed` 判为 `job_failed_requires_review`。若按初稿实现，所有历史事务会被静默降级为 unknown，属于回归。实际实现保持既有映射，**只让 not-found 与不可达两类从 unknown 中分离出来**。
 
 关键点：**新增的 `job_completed_no_unit_evidence` 仍然不授予 retry**。它只表示「这次派发确实开始过，且当前没有 unit 证据」，供管理员进入显式对账，而非自动重放。
 

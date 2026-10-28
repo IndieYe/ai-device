@@ -2274,3 +2274,53 @@ container build --platform linux/amd64 \
 
 ### 关系说明
 `device-qual-systemd-amd64-probe:rebuild`（第 274 节临时重建）与本次的 `device-qual-systemd-amd64:probe` 均为不复现原镜像的重建品，但功能等价已由上述探测脚本验证。原镜像未被恢复，其历史证据（第 273 节及更早）仍指向已不存在的制品。
+
+
+## 277. 实施 run-start 归属证据（设计稿第 1—3 步）
+
+按 `docs/native-job-run-attribution-design.md` 实施前三步，第 4 步（管理员显式对账入口）按设计建议暂不实施。
+
+### 新增证据
+`native_update_job.py` 新增 `_read_boot_id` / `_boot_id` / `_record_run_start` / `_read_run_start`。
+
+worker 在 `main()` 中**先写** `.job-run-start.json`，再做任何 apply 相关工作：
+
+```json
+{"schema_version":1,"state":"job_run_started","job_intent_sha256":"<64hex>",
+ "boot_id":"<uuid>","pid":<int>,"started_at_ms":<int>}
+```
+
+- 用既有 `helper._save_new`（fsync → hardlink no-replace → fsync dir）写一次，永不覆盖。
+- 已存在即 `duplicate start refused`，保护「同一次派发只启动一次」。
+- 写入前校验当前 job-intent 摘要与派发侧传入的 `--job-intent-sha256` 一致，防止证据在半路被换掉。
+- 不触碰 job-intent 的封闭键集（5 处精确比对），因此既有 `describe`/`close`/`retire` 全部不受影响。
+
+### observe_job 状态映射
+`run_start` 缺失时**保持既有映射不变**（这是实施中纠正的设计错误，见下）。`run_start` 存在且绑定一致时：
+
+| 观察 | 状态 |
+| --- | --- |
+| unit failed | `job_failed_requires_review` |
+| unit 活跃 | `job_in_progress` |
+| unit not-found | `job_completed_no_unit_evidence` |
+| systemctl 不可达 | `job_in_progress_unverified` |
+| 无 apply-intent（任意上述情形） | `job_started_without_mutation` |
+| boot_id 与当前不同 | 追加 `prior_boot_execution=true` |
+
+全部 `retry_allowed=false`、`fence_retained=true`；`recover_job` 前置条件未改，新状态均不进入其成功路径。
+
+### 实施中发现并修正的两个问题
+
+1. **设计稿 4.3 有错。** 初稿写「run_start 缺失 → 一律 dispatch_unknown」，但现有实现本来就把 `unit failed` 判为 `job_failed_requires_review`（第 273 节实测）。按初稿实现会让**所有历史事务静默降级**为 unknown，属回归。实现改为保持既有映射，只把 not-found 与不可达两类从 unknown 中分离。已在设计稿就地订正。
+2. **`main()` 的 import 顺序是真缺陷。** 原 `from .native_update import Updates` 在 run-start 之前；容器实测中因镜像缺 `packaging` 直接抛 `ModuleNotFoundError`，run-start 根本没写。已把该 import 移到 run-start 之后，并补回归测试锁住顺序。
+
+### 验证
+- 单测 **95 项** job 模块（含 run-start 记录/拒绝/形状/boot_id/特殊文件/状态映射/import 顺序）。
+- 完整回归 **1455 passed, 16 skipped**（`20261028-164627`），ruff 通过。
+- 真实 systemd 容器端到端：worker 在 apply 前被 SIGKILL → `run_start_written=true`、`apply_intent_written=false`、状态 `job_started_without_mutation`、`retry_allowed=false`、`fence_retained=true`；重复启动被拒。日志 `20261028-164456`。容器已删除并复核不存在。
+
+### 仍然成立的边界
+- run-start 只证明「开始过」，不证明包变更成功，也不证明进程正常退出。
+- 没有 run-start 的历史事务不会得到新结论，仍按旧映射处理，不回填。
+- `prior_boot_execution=true` 时观察仅供参考，不构成收口依据。
+- 未实现管理员显式对账入口；`job_completed_no_unit_evidence` 等新状态目前只读。
