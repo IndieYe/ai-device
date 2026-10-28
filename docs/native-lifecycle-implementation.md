@@ -3059,3 +3059,26 @@ if arg and tonumber(arg[2]) and tonumber(arg[2]) > 0 then return end
 - 升级路径本身仍被 `%pretrans` 拒绝，`%preun` 修复当前不可达，属于前瞻性防御。
 - DEB `prerm` 存在同类问题（无参数分支），但 dpkg 传的是 `upgrade` 字符串而非数字，修复方式不能照搬，且未验证。
 - 未验证放开 `%pretrans` 后的完整升级语义（新版本目录、旧 release 清理、实例切换）。
+
+## 297. sc6 制品复验
+
+### 制品
+`build/native-packages-p1-sc6/ai-device-native-client-0.2.2-1.x86_64.rpm`
+106369010 字节，`b8dd11232736f1af65d063f81b5d8e9653a4574ca22d9658500dfe6db2c6e07a`。
+包内 `%preun` 第 13 行为 `if arg and tonumber(arg[2]) and tonumber(arg[2]) > 0 then return end`。
+
+### 验收（隔离 Rocky 9 systemd，`rpm -i` 不加 `--nodeps`）
+| 场景 | 行号 | 结果 |
+| --- | --- | --- |
+| 有实例 `rpm -e` | `%preun:25`（registry 分支） | rc=1 拒绝，payload 完好 |
+| 临时移走 registry 记录，unit 仍在 | `%preun:32`（unit 分支） | rc=1 拒绝 |
+| unregister 后 `rpm -e` | — | rc=0，payload 删除 |
+| unregister 的 enable 链接清理 | — | 移除 1 个，wants absent |
+| 卸包后 venv | — | 3.13.17 |
+| 卸包后 systemd | — | active，实例映射 6 段，包引用 0 |
+
+两个守卫分支分别在第 25、32 行触发，行号不同，说明不是同一条分支反复命中。移走 registry 记录是隔离测试手段，不是产品恢复路径。
+
+### 边界
+- 升级路径仍被 `%pretrans` 拒绝，`%preun` 的 `arg[2]` 分支在产品升级场景中不可达，属前瞻防御。
+- DEB `prerm` 同类问题未修（dpkg 传 `upgrade` 字符串，修法不同）。
