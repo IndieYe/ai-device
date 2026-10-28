@@ -2118,3 +2118,10 @@ job/update 定向 164 passed；完整回归 1358 passed / 16 skipped、ruff 通�
 `_prepared` 在既有可信路径检查后、读取批准 JSON 或计算 prepared 摘要前，要求 prepared 与 approved 均为普通文件，避免 FIFO 等特殊文件令读取阻塞或目录被误作记录。apply、reconcile、recover 的共同预校验因此在 metadata 查询前拒绝这些异常；文件检查与后续读取仍依赖管理员维护 registry 及祖先稳定，不是对恶意并发替换的 OS 沙箱。记录不删除，合法行为和生产门禁不变。
 
 定向 199 项通过；完整 1393 passed / 16 skipped、ruff 通过（`20261028-124844-755aeb.log`）。隔离 Linux 在真实路径检查下验证 prepared FIFO、approved 目录在 metadata 前拒绝（`20261028-124836-676aa3.log`），包与 helper 为替身，容器已删除。未构建新包或证明真实查询后代收口；旧包和冻结 snapshot 不自动更新。
+
+
+## 269. job 证据在 unit 查询前校验并拒绝异常文件
+
+`native_update_job` 增加统一证据读取：job intent、关闭回执、apply intent、outcome、sender 与 job recovery 回执均以 `lexists` 区分缺失，已有条目须可信且为普通文件，断链/链接/目录/FIFO 保留并拒绝。`observe_job` 在执行 systemd 状态查询前完成这些校验；outcome 存在但 sender 缺失时明确拒绝，不再把它当作未执行。job intent 缺失现返回明确错误而非底层 `FileNotFoundError`。该顺序只覆盖本入口的读取，不把状态查询当作执行收口，也不放行重试、退休或恢复。
+
+定向 212 项通过；完整 1406 passed / 16 skipped、ruff 通过（`20261028-125942-00a8f8.log`）。隔离 Linux 验证断链 outcome 与目录 sender 在 unit 查询前拒绝（`20261028-125927-5c1111.log`）；隔离中首次夹具身份字段不全、后代写入未显式关闭文件分别导致断言失败（`20261028-125703-c29a98`、`20261028-125902-a295c1`），已修正夹具并重跑，不据此声称产品行为已验证。真实 systemd 外部 job、旧快照和持久终态恢复仍未闭环，生产门禁不变。

@@ -12,7 +12,7 @@ cp "$3" "$B/lib/python3.13/site-packages/device_runtime/native_helper.py"
 cp "$4" "$B/lib/python3.13/site-packages/device_runtime/native_update.py"
 cp "$5" "$B/lib/python3.13/site-packages/device_runtime/native_update_job.py"
 "$B/bin/python3.13" -I -B - <<'PY'
-import os, subprocess, sys, tempfile, time
+import hashlib, json, os, subprocess, sys, tempfile, time
 from contextlib import contextmanager
 from pathlib import Path
 from device_runtime import native_helper as h, native_update as u, native_update_job as job
@@ -143,6 +143,22 @@ with tempfile.TemporaryDirectory(prefix='device-prep-fence-',dir='/root') as d:
         else: raise AssertionError('nonregular preparation evidence accepted')
         assert os.path.lexists(bad)
     print('NONREGULAR_PREPARATION_EVIDENCE_REFUSED_BEFORE_METADATA')
+    for suffix,kind in [('.outcome.json','dangling'),('.sender.json','directory')]:
+        case=root/('job-evidence-'+kind); case.mkdir(mode=0o700)
+        (case/'updates').mkdir(mode=0o700); case_stem=case/'updates/5-probe--one'
+        case_stem.with_suffix('.prepared.json').write_text('{}')
+        case_digest=h._digest(case_stem.with_suffix('.prepared.json'))
+        case_stem.with_suffix('.approved.json').write_text(json.dumps({'prepared_sha256':case_digest,'approved_by_uid':0}))
+        case_unit='ai-device-package-'+hashlib.sha256(str(case_stem).encode()).hexdigest()+'.service'
+        case_stem.with_suffix('.job-intent.json').write_text(json.dumps({'unit':case_unit,'instance_id':'probe','operation_id':'one','prepared_sha256':case_digest,'runtime_snapshot_sha256':'snapshot'}))
+        bad=case_stem.with_suffix(suffix)
+        if kind=='dangling': bad.symlink_to(case/'missing')
+        else: bad.mkdir(mode=0o700)
+        try: job.observe_job(type('M',(),{'registry':case})(),'probe','one',runner=lambda *a,**k: (_ for _ in ()).throw(AssertionError('unit query before evidence')))
+        except job.JobError as exc: assert 'job evidence' in str(exc) or 'execution evidence without apply intent' in str(exc)
+        else: raise AssertionError('invalid job evidence accepted')
+        assert os.path.lexists(bad)
+    print('NONREGULAR_JOB_EVIDENCE_REFUSED_BEFORE_UNIT_QUERY')
     class JobManager:
         packages=u.Debian()
         registry=registry
@@ -162,7 +178,7 @@ for mode in ('parent-waits', 'parent-exits'):
 pid=os.fork()
 if pid==0:
  time.sleep(2)
- open(sys.argv[2],'w').write('finished')
+ with open(sys.argv[2],'w') as stream: stream.write('finished')
  os._exit(0)
 if sys.argv[1]=='parent-waits': time.sleep(10)
 '''

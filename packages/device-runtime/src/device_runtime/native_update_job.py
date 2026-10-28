@@ -7,6 +7,7 @@ administrator dispatch_job uses systemd-run; it never enables boot startup.
 import hashlib
 import json
 import os
+import stat
 from pathlib import Path
 
 from . import native_bootstrap as bootstrap
@@ -152,9 +153,8 @@ def _prepare_dispatch_locked(manager, instance_id, operation_id, binding, stem):
     elif path.is_symlink():
         raise JobError("invalid job intent path; action refused")
     manager._prepared(binding, stem)
-    if path.exists():
-        helper._trusted(path)
-        intent = json.loads(path.read_bytes())
+    intent = _read_job_evidence(path)
+    if intent is not None:
         snapshot = stem.with_suffix(".bootstrap")
         bootstrap.validate_snapshot(snapshot)
         expected = {
@@ -350,9 +350,9 @@ def close_before_apply(manager, instance_id, operation_id):
             "fence_retained": True,
         }
         marker = stem.with_suffix(".job-closed.json")
-        if os.path.lexists(marker):
-            helper._trusted(marker)
-            if not helper._same_json(json.loads(marker.read_bytes()), receipt):
+        previous = _read_job_evidence(marker)
+        if previous is not None:
+            if not helper._same_json(previous, receipt):
                 raise JobError("close evidence differs")
             # A prior link may have succeeded while its directory fsync failed.
             # Do not report a durable close until this retry syncs the entry.
@@ -366,6 +366,21 @@ def close_before_apply(manager, instance_id, operation_id):
 def _require_proven_retirement_fence():
     """Do not publish retirement until close durability is independently proven."""
     raise JobError("job retirement disabled: close durability unproven")
+
+
+def _read_job_evidence(path):
+    """Read an existing regular evidence file; absence differs from junk."""
+    if not os.path.lexists(path):
+        return None
+    try:
+        helper._trusted(path)
+        if not stat.S_ISREG(path.lstat().st_mode):
+            raise JobError("job evidence must be a regular file")
+        return json.loads(path.read_bytes())
+    except helper.HelperError as exc:
+        raise JobError("job evidence is not trusted") from exc
+    except OSError as exc:
+        raise JobError("job evidence is unavailable") from exc
 
 
 def retire_closed_job(manager, instance_id, operation_id):
@@ -420,8 +435,9 @@ def observe_job(manager, instance_id, operation_id, *, runner=None):
     helper._trusted(directory, directory=True)
     stem = directory / f"{len(instance_id)}-{instance_id}--{operation_id}"
     path = stem.with_suffix(".job-intent.json")
-    helper._trusted(path)
-    intent = json.loads(path.read_bytes())
+    intent = _read_job_evidence(path)
+    if intent is None:
+        raise JobError("job intent evidence missing")
     expected_unit = (
         "ai-device-package-" + hashlib.sha256(str(stem).encode()).hexdigest() + ".service"
     )
@@ -449,6 +465,17 @@ def observe_job(manager, instance_id, operation_id, *, runner=None):
         "fence_retained": True,
         "unit_observation": None,
     }
+    apply_intent = _read_job_evidence(stem.with_suffix(".apply-intent.json"))
+    outcome = None
+    sender = None
+    if apply_intent is not None:
+        outcome = _read_job_evidence(stem.with_suffix(".outcome.json"))
+        if outcome is not None:
+            sender = _read_job_evidence(stem.with_suffix(".sender.json"))
+            if sender is None:
+                raise JobError("job outcome evidence lacks sender evidence")
+    elif any(os.path.lexists(stem.with_suffix(suffix)) for suffix in (".sender.json", ".outcome.json")):
+        raise JobError("job execution evidence without apply intent")
     try:
         result = runner(
             [
@@ -484,11 +511,7 @@ def observe_job(manager, instance_id, operation_id, *, runner=None):
                     report["state"] = "job_failed_requires_review"
     except (OSError, subprocess.SubprocessError):
         pass
-    apply_path = stem.with_suffix(".apply-intent.json")
-    outcome_path = stem.with_suffix(".outcome.json")
-    if os.path.lexists(apply_path):
-        helper._trusted(apply_path)
-        apply_intent = json.loads(apply_path.read_bytes())
+    if apply_intent is not None:
         expected_apply = {
             "prepared_sha256": prepared_digest,
             "runtime_snapshot_sha256": intent.get("runtime_snapshot_sha256"),
@@ -501,12 +524,7 @@ def observe_job(manager, instance_id, operation_id, *, runner=None):
         if not helper._same_json(apply_intent, expected_apply):
             raise JobError("job apply evidence differs")
         report["apply_intent_present"] = True
-        if outcome_path.exists():
-            helper._trusted(outcome_path)
-            outcome = json.loads(outcome_path.read_bytes())
-            sender_path = stem.with_suffix(".sender.json")
-            helper._trusted(sender_path)
-            sender = json.loads(sender_path.read_bytes())
+        if outcome is not None:
             if (
                 not helper._same_json(outcome.get("intent"), apply_intent)
                 or not helper._same_json(sender.get("intent"), apply_intent)
@@ -528,8 +546,6 @@ def observe_job(manager, instance_id, operation_id, *, runner=None):
             report["state"] = "package_outcome_recorded"
             report["outcome"] = outcome
     else:
-        if any(os.path.lexists(stem.with_suffix(suffix)) for suffix in (".sender.json", ".outcome.json")):
-            raise JobError("job execution evidence without apply intent")
         report["apply_intent_present"] = False
     return report
 
@@ -576,9 +592,9 @@ def recover_job(manager, instance_id, operation_id, *, runner=None):
             "fence_retained": True,
         }
         path = stem.with_suffix(".job-recovery.json")
-        if path.exists():
-            helper._trusted(path)
-            if not helper._same_json(json.loads(path.read_bytes()), receipt):
+        previous = _read_job_evidence(path)
+        if previous is not None:
+            if not helper._same_json(previous, receipt):
                 raise JobError("job recovery evidence changed")
         else:
             helper._save_new(path, receipt)

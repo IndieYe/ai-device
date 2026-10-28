@@ -698,7 +698,7 @@ def test_observe_missing_journal_never_initializes(tmp_path, monkeypatch):
     monkeypatch.setattr(job.helper, "_trusted", lambda *a, **kw: None)
     registry = tmp_path / "manager"
     registry.mkdir()
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(job.JobError, match="job intent evidence missing"):
         job.observe_job(SimpleNamespace(registry=registry), "probe", "one")
     assert list(registry.iterdir()) == []
 
@@ -1003,3 +1003,81 @@ def test_dispatch_default_denied_before_update_directory_or_binding(tmp_path, mo
     with pytest.raises(job.JobError, match='new dispatch disabled'):
         job.dispatch_job(manager, 'probe', 'one', runner=lambda *a, **kw: pytest.fail('job ran'))
     assert not (registry / 'updates').exists()
+
+
+
+
+@pytest.mark.parametrize("suffix", [".apply-intent.json", ".outcome.json", ".sender.json"])
+@pytest.mark.parametrize("kind", ["dangling", "symlink", "directory", "fifo"])
+def test_observe_job_rejects_nonregular_evidence(tmp_path, monkeypatch, suffix, kind):
+    import os
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(job.helper, "_trusted", lambda *a, **kw: None)
+    directory = tmp_path / "updates"
+    directory.mkdir()
+    stem = directory / "5-probe--one"
+    stem.with_suffix(".job-intent.json").write_text("{}")
+    path = stem.with_suffix(suffix)
+    path.unlink(missing_ok=True)
+    if kind == "dangling":
+        path.symlink_to(directory / "missing")
+    elif kind == "symlink":
+        path.symlink_to(stem.with_suffix(".job-intent.json"))
+    elif kind == "directory":
+        path.mkdir()
+    else:
+        os.mkfifo(path)
+    with pytest.raises(job.JobError):
+        job.observe_job(
+            SimpleNamespace(registry=tmp_path),
+            "probe",
+            "one",
+            runner=lambda *a, **k: pytest.fail("unit query"),
+        )
+    assert os.path.lexists(path)
+
+
+def test_observe_job_outcome_without_sender_refused(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(job.helper, "_trusted", lambda *a, **kw: None)
+    directory = tmp_path / "updates"
+    directory.mkdir()
+    stem = directory / "5-probe--one"
+    prepared = {"metadata": {"Package": "fixture", "Version": "2", "Architecture": "amd64"}}
+    stem.with_suffix(".prepared.json").write_text(json.dumps(prepared))
+    digest = job.helper._digest(stem.with_suffix(".prepared.json"))
+    stem.with_suffix(".approved.json").write_text(
+        json.dumps({"prepared_sha256": digest, "approved_by_uid": 0})
+    )
+    stem.with_suffix(".job-intent.json").write_text(
+        json.dumps(
+            {
+                "unit": "ai-device-package-"
+                + job.hashlib.sha256(str(stem).encode()).hexdigest()
+                + ".service",
+                "instance_id": "probe",
+                "operation_id": "one",
+                "prepared_sha256": digest,
+                "runtime_snapshot_sha256": "snapshot",
+            }
+        )
+    )
+    stem.with_suffix(".apply-intent.json").write_text(
+        json.dumps(
+            {
+                "prepared_sha256": digest,
+                "runtime_snapshot_sha256": "snapshot",
+                "target_package": {"name": "fixture", "version": "2", "architecture": "amd64"},
+            }
+        )
+    )
+    stem.with_suffix(".outcome.json").write_text("{}")
+    with pytest.raises(job.JobError, match="lacks sender evidence"):
+        job.observe_job(
+            SimpleNamespace(registry=tmp_path),
+            "probe",
+            "one",
+            runner=lambda *a, **k: pytest.fail("unit query"),
+        )
