@@ -1736,3 +1736,70 @@ def test_query_supervisor_unknown_blocks_recovery_without_writes(update):
         manager.recover('probe', 'one')
     assert {p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()} == before
     assert marker.read_bytes() == b'unknown' and packages.calls == 1
+
+
+@pytest.mark.parametrize('kind', ['file', 'dangling_symlink'])
+@pytest.mark.parametrize('action', ['prepare', 'approve'])
+def test_supervisor_unknown_blocks_prepare_and_approval_before_writes(update, kind, action, monkeypatch):
+    manager, packages, _, package = update
+    marker = manager.registry / 'query-supervisor.intent.json'
+    if kind == 'file':
+        marker.write_bytes(b'unknown')
+    else:
+        marker.symlink_to('missing')
+    updates = manager.registry / 'updates'
+    before = {p.name: p.read_bytes() for p in updates.iterdir() if p.is_file()}
+    monkeypatch.setattr(packages, 'metadata', lambda *_: pytest.fail('metadata called despite unknown intent'))
+    if action == 'prepare':
+        call = lambda: manager.prepare('probe', 'two', package, sha256=nh._digest(package), version='2')
+    else:
+        call = lambda: manager.approve('probe', 'one', prepared_sha256=nh._digest(updates / '5-probe--one.prepared.json'))
+    with pytest.raises(nu.UpdateError, match='query supervisor intent remains unknown'):
+        call()
+    assert {p.name: p.read_bytes() for p in updates.iterdir() if p.is_file()} == before
+    assert os.path.lexists(marker)
+
+
+def test_supervisor_unknown_blocks_signed_prepare_before_authentication(signed_update, monkeypatch):
+    manager, _, _, _, _ = signed_update
+    marker = manager.registry / 'query-supervisor.intent.json'
+    marker.write_bytes(b'unknown')
+    before = sorted(p.name for p in (manager.registry / 'updates').iterdir())
+    monkeypatch.setattr(nu.nc, 'verify_release', lambda *a, **kw: pytest.fail('signature verification ran'))
+    with pytest.raises(nu.UpdateError, match='query supervisor intent remains unknown'):
+        signed_prepare(signed_update)
+    assert sorted(p.name for p in (manager.registry / 'updates').iterdir()) == before
+    assert marker.read_bytes() == b'unknown'
+
+
+def test_signed_prepare_rechecks_supervisor_intent_between_phases(signed_update, monkeypatch):
+    manager, _, _, _, _ = signed_update
+    marker = manager.registry / 'query-supervisor.intent.json'
+    original = manager.prepare
+
+    def inject_between_phases(*args, **kwargs):
+        marker.write_bytes(b'new unknown')
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(manager, 'prepare', inject_between_phases)
+    with pytest.raises(nu.UpdateError, match='query supervisor intent remains unknown'):
+        signed_prepare(signed_update)
+    assert marker.read_bytes() == b'new unknown'
+    assert not (manager.registry / 'updates/5-probe--signed.prepared.json').exists()
+    assert not (manager.registry / 'updates/5-probe--signed.approved.json').exists()
+
+
+def test_prepare_holds_package_shared_lock_during_metadata(update, monkeypatch):
+    manager, packages, _, package = update
+    original = packages.metadata
+    seen = []
+
+    def metadata(path):
+        with pytest.raises(nh.HelperError, match='still executing'), nh.package_lease(manager.registry, exclusive=True):
+            pytest.fail('supervisor publisher entered during update prepare')
+        seen.append(True)
+        return original(path)
+
+    monkeypatch.setattr(packages, 'metadata', metadata)
+    manager.prepare('probe', 'two', package, sha256=nh._digest(package), version='2')
+    assert seen == [True]

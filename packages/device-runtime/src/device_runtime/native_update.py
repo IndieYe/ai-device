@@ -194,6 +194,18 @@ class Updates:
         with self.helper._lease(instance_id):
             yield self._transaction_locked(instance_id, operation_id)
 
+    @contextmanager
+    def _preparation_transaction(self, instance_id, operation_id):
+        """Fence preparation writes and metadata queries against supervisor intent."""
+        nh._identifier(instance_id)
+        nh._identifier(operation_id)
+        try:
+            with self.helper._lease(instance_id), nh.package_lease(self.registry):
+                nh._assert_no_query_supervisor_intent(self.registry)
+                yield self._transaction_locked(instance_id, operation_id)
+        except nh.HelperError as exc:
+            raise UpdateError(str(exc)) from exc
+
     def _transaction_locked(self, instance_id, operation_id):
         """Initialize canonical update facts while the caller holds the instance lease.
 
@@ -233,7 +245,7 @@ class Updates:
         nh._trusted(package_path)
         if not package_path.is_file():
             raise UpdateError("package must be a regular administrator-owned file")
-        with self._transaction(instance_id, operation_id) as (binding, stem):
+        with self._preparation_transaction(instance_id, operation_id) as (binding, stem):
             if nh._digest(package_path) != sha256:
                 raise UpdateError("package digest differs")
             metadata = self.packages.metadata(package_path)
@@ -357,7 +369,7 @@ class Updates:
         envelope = nc._read_envelope(envelope_path)
         # Recheck binding under the instance lease; prepare() takes it again
         # after verification and compares the complete source evidence.
-        with self._transaction(instance_id, operation_id) as (binding, stem):
+        with self._preparation_transaction(instance_id, operation_id) as (binding, stem):
             active = nc._json((Path(binding["root"]) / "active.json").read_bytes())
             payload = nc.verify_release(
                 envelope,
@@ -393,7 +405,7 @@ class Updates:
         return result
 
     def approve(self, instance_id, operation_id, *, prepared_sha256):
-        with self._transaction(instance_id, operation_id) as (binding, stem):
+        with self._preparation_transaction(instance_id, operation_id) as (binding, stem):
             path = stem.with_suffix(".prepared.json")
             nh._trusted(path)
             if nh._digest(path) != prepared_sha256:
