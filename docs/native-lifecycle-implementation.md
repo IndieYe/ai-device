@@ -1823,3 +1823,12 @@ CLOEXEC 不阻止 fork 后、exec 前的继承，也不证明非并发代码、�
 一次性离线 Linux amd64/Rosetta 容器安装旧 bcb6ec5 包并覆盖当前 helper 源码，真实执行新监听循环：缺登记的 query、start 和重复 action 均返回固定拒绝、每次连接关闭，监听期间目录锁与文件锁均冲突，测试进程退出后可重新获取（`scripts/accept-native-query-listener-source.sh`、`20261028-092829-a6c6cf.log`）；容器已删除。该实验未注册实例或运行 systemd，不验证成功查询，也不是准确新包验收。
 
 监听器仍不证明受控监督、处理者代码、当前 invocation 或消息动作授权；旧生产 listener 和所有默认拒绝门禁不变。受控直接子进程创建、锁交接、故障回收和外部 job 终态仍未完成，P1 未完成。
+
+
+## 232. 内部凭据查询监听器准确包及真实实例验收
+
+以干净检查点 `2cd3c17baf64453c98bfd0f017883316ec88f472` 离线生成 Device wheel（SHA256 `c1218ed62b82428a735877684c826b596bafe81e3da0005479365ec84f368725`，`20261028-093147-0d059d.log`），34 个 Python 模块与提交逐字节一致（`20261028-093338-bd7d27.log`）。无网络构建未签名 DEB `build/native-packages-p1-2cd3c17/ai-device-native-client_0.2.2-1_amd64.deb`，105266880 字节，SHA256 `36b5ee9ddc3e43c85a7c4c6d3a25b43e2c82b5768ec655017bae03ba2242cbe4`（`20261028-093204-1f655d.log`）。
+
+一次性无网络 Linux amd64/Rosetta systemd 容器干净安装包并通过包内 uv 检查 17 项依赖；普通用户安装实例并真实登记测试 unit；测试专属子进程调用包内内部 `_serve_credential_queries`，真实 root socket 查询返回该实例 inactive，start 和重复 action 拒绝，设备 unit 保持 inactive/MainPID 0、无 start intent；监听期间双锁冲突，退出后可重新取得（`scripts/accept-native-query-listener-2cd3c17.sh`、`20261028-093357-b1c49e.log`）。构建及验收容器已删除并核实（`20261028-093428-7dd357.log`）。
+
+这是直接调用未接生产的内部监听器，不是受控启动、handler 身份、invocation、更新事务或失败恢复验收；没有实际启动 Device 服务。旧包和冻结 snapshot 不自动更新，生产门禁不变，P1 未完成。
