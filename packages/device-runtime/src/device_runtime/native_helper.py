@@ -949,9 +949,21 @@ def _daemon_anchor(registry):
 
 @contextmanager
 def _daemon_lease(registry):
-    registry = _path(registry)
-    with _daemon_anchor(registry), _daemon_file_lease(registry) as fd:
+    with _daemon_lease_pair(registry) as (_, fd):
         yield fd
+
+
+@contextmanager
+def _daemon_lease_pair(registry):
+    """Own both daemon lock descriptions for the lifetime of this context.
+
+    This internal interface does not prove locks remain held, authorize a
+    child or operation, or provide supervision. Callers must not unlock or
+    close the descriptors and must control every fork inheritance.
+    """
+    registry = _path(registry)
+    with _daemon_anchor(registry) as anchor, _daemon_file_lease(registry) as fd:
+        yield anchor, fd
 
 
 @contextmanager

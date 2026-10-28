@@ -917,6 +917,69 @@ def test_daemon_lease_exposes_owned_descriptor_and_closes_it(recovery):
         pass
 
 
+def test_daemon_lease_pair_exposes_both_descriptors_and_releases_on_error(recovery):
+    registry, _ = recovery
+    with pytest.raises(RuntimeError, match="caller failure"), nh._daemon_lease_pair(registry) as descriptors:
+        anchor, lease = descriptors
+        assert anchor != lease
+        assert os.fstat(anchor).st_ino == registry.stat().st_ino
+        assert os.fstat(lease).st_ino == (registry / "helper-daemon.lock").stat().st_ino
+        with pytest.raises(nh.HelperError, match="already active"), nh._daemon_anchor(registry):
+            pass
+        with pytest.raises(nh.HelperError, match="already active"), nh._daemon_file_lease(registry):
+            pass
+        raise RuntimeError("caller failure")
+    for fd in descriptors:
+        with pytest.raises(OSError):
+            os.fstat(fd)
+    with nh._daemon_lease_pair(registry):
+        pass
+
+
+def test_daemon_lease_pair_releases_anchor_if_file_lease_fails(recovery):
+    registry, _ = recovery
+    with nh._daemon_file_lease(registry):
+        with pytest.raises(nh.HelperError, match="already active"), nh._daemon_lease_pair(registry):
+            pass
+        with nh._daemon_anchor(registry):
+            pass
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork")
+def test_daemon_lease_pair_child_retains_both_after_parent_context_exits(recovery):
+    registry, _ = recovery
+    script = r'''
+import os, select, sys
+from pathlib import Path
+from device_runtime import native_helper as h
+h._trusted = lambda *a, **kw: None
+registry = Path(sys.argv[1])
+read_fd, write_fd = os.pipe()
+with h._daemon_lease_pair(registry):
+    child = os.fork()
+    if child == 0:
+        os.close(write_fd)
+        select.select([read_fd], [], [], 3)
+        os.close(read_fd)
+        os._exit(0)
+os.close(read_fd)
+try:
+    for acquire in (h._daemon_anchor, h._daemon_file_lease):
+        try:
+            with acquire(registry):
+                raise AssertionError("child did not retain a lock")
+        except h.HelperError as exc:
+            assert "already active" in str(exc)
+finally:
+    os.close(write_fd)
+    pid, status = os.waitpid(child, 0)
+    assert pid == child and os.waitstatus_to_exitcode(status) == 0
+with h._daemon_lease_pair(registry):
+    pass
+'''
+    subprocess.run([sys.executable, "-c", script, str(registry)], check=True, timeout=8)
+
+
 def test_daemon_lease_rejects_replaced_path_during_lock(recovery, monkeypatch):
     registry, _ = recovery
     lock_path = registry / "helper-daemon.lock"

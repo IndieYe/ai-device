@@ -1771,3 +1771,12 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 无网络一次性 Linux amd64/Rosetta 容器干净安装准确包，包内 uv 检查 17 项依赖；独立 bootstrap 模块与 wheel 一致。测试脚本自行 fork 有限寿命直接子进程、获取 pidfd 并通过已启用 SO_PASSCRED 的 SEQPACKET 发送随机挑战；包内观察组件接受正确记录但仅返回 observed_not_authorized，对错误挑战、后代发送、子进程提前退出、超时与附带 FD 均拒绝；进程均 wait 回收，FD 数量无净增（`20261028-085827-ff06b0.log`，`scripts/accept-native-child-handshake-e1ffb44.sh`）。构建和验收容器均已删除（`20261028-085844-9e9d3a.log`）。
 
 这是测试脚本自行管理 PID/pidfd、进程与通道的局部观察，不是生产监督器或锁交接；不证明就绪后存活、handler、消息动作、invocation 或外部 job 故障恢复，未开放任何生产门禁。旧包和 snapshot 不自动更新，P1 未完成。
+
+
+## 226. daemon 双锁内部所有权接口
+
+新增内部 `_daemon_lease_pair`，按既有目录→文件顺序获取并在上下文中返回两个描述符；原 `_daemon_lease` 继续只返回文件 FD，调用方与锁序不变。作用域正常或异常结束时两个 FD 关闭；文件锁获取失败时释放目录锁。新增 3 项回归包括调用方异常、部分获取失败、实际 fork 后父作用域退出而子保留两把锁及子退出后重新获取；Device 完整回归 `1272 passed, 16 skipped`（`20261028-090632-e18f6b.log`），修正测试静态写法后专项及 ruff 通过（`20261028-090808-bd82a6.log`）。
+
+一次性无网络 Linux amd64/Rosetta 容器使用 e1ffb44 DEB 并在容器内覆盖当前 `native_helper.py`，在 root 私有目录验证真实源码的双锁 fork 持有及释放（`20261028-090826-ee9c7e.log`）；这是源码覆盖实验而非准确新包验收，容器已删除。首次在 `/tmp` 因可信祖先检查正确拒绝，未进入 fork 阶段（`20261028-090805-6c551c.log`）。
+
+该接口并非监督器；持有 FD 或 inode 匹配不证明锁仍持有，任一共享 OFD 的 `LOCK_UN` 会影响其他持有者，后代继承也会拖延释放。调用方不得手动关闭/解锁，须控制所有 fork 继承，并依赖已确认的稳定 registry 管理前提。未接入受控启动、消息授权或任何新生产动作，P1 未完成。
