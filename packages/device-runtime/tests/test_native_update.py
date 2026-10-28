@@ -276,6 +276,44 @@ def test_apply_and_same_id_no_replay(update):
     assert packages.calls == 1 and (helper.root / "active.json").read_bytes() == old
 
 
+def test_existing_apply_observation_avoids_transaction_initialization(update, monkeypatch):
+    manager, packages, _, _ = update
+    manager.apply("probe", "one")
+    marker = manager.registry / "query-supervisor.intent.json"
+    marker.write_bytes(b"unknown")
+    directory = manager.registry / "updates"
+    before = {path.name: path.read_bytes() for path in directory.iterdir()}
+    seen = []
+    metadata, installed = packages.metadata, packages.installed
+    monkeypatch.setattr(packages, "metadata", lambda path: (seen.append("metadata"), metadata(path))[1])
+    monkeypatch.setattr(packages, "installed", lambda name: (seen.append("installed"), installed(name))[1])
+    monkeypatch.setattr(manager, "_transaction_locked", lambda *_: pytest.fail("initialized transaction"))
+    monkeypatch.setattr(nu.os, "fsync", lambda *_: pytest.fail("unexpected fsync"))
+    result = manager.apply("probe", "one")
+    assert result["apply_intent"] is not None and result["activated"] is False
+    assert seen == ["metadata", "installed"] and packages.calls == 1
+    assert marker.read_bytes() == b"unknown"
+    assert {path.name: path.read_bytes() for path in directory.iterdir()} == before
+
+
+def test_existing_apply_intent_disappearance_is_not_new_operation(update, monkeypatch):
+    manager, packages, _, _ = update
+    manager.apply("probe", "one")
+    intent = manager.registry / "updates/5-probe--one.apply-intent.json"
+    existing = manager._existing_transaction_locked
+
+    def disappear(*args):
+        result = existing(*args)
+        intent.unlink()
+        return result
+
+    monkeypatch.setattr(manager, "_existing_transaction_locked", disappear)
+    monkeypatch.setattr(manager, "_transaction_locked", lambda *_: pytest.fail("initialized transaction"))
+    with pytest.raises(nu.UpdateError, match="existing apply intent disappeared"):
+        manager.apply("probe", "one")
+    assert packages.calls == 1
+
+
 def test_reconcile_missing_directory_does_not_initialize(update, tmp_path, monkeypatch):
     manager, packages, helper, _ = update
     registry = tmp_path / "empty-registry"

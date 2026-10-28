@@ -195,6 +195,23 @@ class Updates:
             yield self._transaction_locked(instance_id, operation_id)
 
     @contextmanager
+    def _apply_transaction(self, instance_id, operation_id):
+        """Do not initialize a transaction for an already-started observation."""
+        nh._identifier(instance_id)
+        nh._identifier(operation_id)
+        with self.helper._lease(instance_id):
+            directory = self.registry / "updates"
+            stem = directory / f"{len(instance_id)}-{instance_id}--{operation_id}"
+            if stem.with_suffix(".apply-intent.json").exists():
+                binding, stem = self._existing_transaction_locked(instance_id, operation_id)
+                if not stem.with_suffix(".apply-intent.json").exists():
+                    raise UpdateError("existing apply intent disappeared")
+                yield binding, stem, True
+            else:
+                binding, stem = self._transaction_locked(instance_id, operation_id)
+                yield binding, stem, False
+
+    @contextmanager
     def _dispatch_transaction(self, instance_id, operation_id, *, require_new_fence):
         """Reject a new dispatch before creating the update transaction directory."""
         nh._identifier(instance_id)
@@ -236,6 +253,17 @@ class Updates:
             os.fsync(fd)
         # IDs permit '--'; length-prefix the first component so distinct
         # (instance, operation) pairs cannot alias the same transaction.
+        stem = directory / f"{len(instance_id)}-{instance_id}--{operation_id}"
+        return record, stem
+
+    def _existing_transaction_locked(self, instance_id, operation_id):
+        """Read existing transaction coordinates under the caller's instance lease."""
+        record = self.helper._binding(instance_id)
+        directory = self.registry / "updates"
+        try:
+            nh._trusted(directory, directory=True)
+        except FileNotFoundError as exc:
+            raise UpdateError("update transaction directory missing") from exc
         stem = directory / f"{len(instance_id)}-{instance_id}--{operation_id}"
         return record, stem
 
@@ -473,9 +501,11 @@ class Updates:
             raise UpdateError(str(exc)) from exc
 
     def apply(self, instance_id, operation_id, *, job_intent_sha256=None):
-        with self._transaction(instance_id, operation_id) as (binding, stem):
+        with self._apply_transaction(instance_id, operation_id) as (binding, stem, observing):
             started = stem.with_suffix(".apply-intent.json")
             outcome = stem.with_suffix(".outcome.json")
+            if observing and not started.exists():
+                raise UpdateError("existing apply intent disappeared")
             if started.exists():
                 value = self._prepared(binding, stem)
                 return self._observation(stem, value)
@@ -626,13 +656,7 @@ class Updates:
         nh._identifier(instance_id)
         nh._identifier(operation_id)
         with self.helper._lease(instance_id):
-            binding = self.helper._binding(instance_id)
-            directory = self.registry / "updates"
-            try:
-                nh._trusted(directory, directory=True)
-            except FileNotFoundError as exc:
-                raise UpdateError("update transaction directory missing") from exc
-            stem = directory / f"{len(instance_id)}-{instance_id}--{operation_id}"
+            binding, stem = self._existing_transaction_locked(instance_id, operation_id)
             return self._observation(stem, self._prepared(binding, stem))
 
     def recover(self, instance_id, operation_id, *, job_intent_sha256=None):

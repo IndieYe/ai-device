@@ -84,6 +84,29 @@ with tempfile.TemporaryDirectory(prefix='device-prep-fence-',dir='/root') as d:
     assert prepared.read_bytes()==before and not (registry/'updates/5-probe--one.approved.json').exists()
     assert marker.read_bytes()==b'unknown' and packages.calls==1
     print('PREPARE_METADATA_HOLDS_SH_AND_APPROVAL_REFUSES_WITHOUT_WRITES')
+    # Observe an independently prepared transaction; never remove the unknown marker.
+    observed=root/'observed'; observed.mkdir(mode=0o700); (observed/'probe.json').write_text('{}')
+    registry=observed; manager=u.Updates(registry,packages=packages,helper=Helper())
+    manager.prepare('probe','one',package,sha256=h._digest(package),version='2')
+    stem=registry/'updates/5-probe--one'
+    manager.approve('probe','one',prepared_sha256=h._digest(stem.with_suffix('.prepared.json')))
+    stem.with_suffix('.apply-intent.json').write_text('{}')
+    marker=registry/'query-supervisor.intent.json'; marker.write_bytes(b'unknown')
+    class ObservedPackages:
+        def __init__(self): self.calls=[]
+        def metadata(self,path): self.calls.append('metadata'); return {'Package':'ai-device-native-client','Version':'2','Architecture':'amd64'}
+        def installed(self,name): self.calls.append('installed'); return {'status':'fixture'}
+        def apply(self,*args,**kwargs): raise AssertionError('replayed package action')
+    observer=ObservedPackages(); manager.packages=observer
+    before={p.name:p.read_bytes() for p in stem.parent.iterdir()}
+    old_fsync=os.fsync
+    try:
+        os.fsync=lambda *_: (_ for _ in ()).throw(AssertionError('observation fsync'))
+        result=manager.apply('probe','one')
+    finally: os.fsync=old_fsync
+    assert result['apply_intent']=={} and observer.calls==['metadata','installed']
+    assert {p.name:p.read_bytes() for p in stem.parent.iterdir()}==before and marker.read_bytes()==b'unknown'
+    print('EXISTING_APPLY_OBSERVES_WITHOUT_DIRECTORY_INIT_OR_REPLAY')
     class JobManager:
         packages=u.Debian()
         registry=registry
