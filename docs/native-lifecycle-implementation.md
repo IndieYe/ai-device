@@ -1805,3 +1805,12 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 一次性离线 Linux amd64/Rosetta 容器干净安装准确包，包内 uv 检查 17 项依赖，独立 bootstrap 与 helper 模块均匹配 wheel；发布实际候选后，错误固定摘要拒绝且没有创建 socket，正确摘要通过原同进程入口执行实际候选，socket peer PID 与测试启动的子进程匹配，畸形请求拒绝；测试子进程终止并回收，构建与验收容器已删除（`scripts/accept-native-bootstrap-scope-bcb6ec5.sh`，`20261028-091833-60c489.log`）。
 
 该验证限于旧同进程入口，没有证明受控监督、实际消息处理者、持锁交接或动作授权，不开放生产门禁；P1 未完成。
+
+
+## 230. 凭据帧意外 FD 的原子 close-on-exec
+
+未接入生产的 `_receive_root_credential_frame` 现要求 Linux `MSG_CMSG_CLOEXEC`，在 `recvmsg` 接收 SCM_RIGHTS 时原子设置 close-on-exec；缺少该常量时直接拒绝，不退回接收后设置。原有意外描述符全部关闭、异常时继续清理及拒绝行为不变。测试在修改前确认新契约失败（`20261028-092156-82ce7c.log`），helper 及帧定向 `210 passed, 1 skipped`（`20261028-092216-c1fabb.log`），完整回归 `1276 passed, 16 skipped`（`20261028-092255-51fda8.log`），ruff 通过。
+
+一次性离线 Linux amd64/Rosetta 容器安装旧 bcb6ec5 包并仅在容器内覆盖当前源码，真实 SCM_RIGHTS 接收后、拒绝关闭前观察 FD_CLOEXEC，并启动 close_fds=False 的测试子进程核实 exec 后无法访问该 FD；接收器拒绝并无 FD 净增（`scripts/accept-native-credential-cloexec-source.sh`、`20261028-092252-7e86c0.log`）。测试容器已删除；此为源码覆盖实验，非准确新包验收。
+
+CLOEXEC 不阻止 fork 后、exec 前的继承，也不证明非并发代码、直接子进程、消息处理者、持续锁或动作授权；现有生产 listener 不使用该候选接收器，生产门禁未改变。P1 未完成。

@@ -13,6 +13,7 @@ def linux_credentials(monkeypatch):
     monkeypatch.setattr(helper.sys, "platform", "linux")
     monkeypatch.setattr(socket, "SO_PASSCRED", getattr(socket, "SO_PASSCRED", 16), raising=False)
     monkeypatch.setattr(socket, "SCM_CREDENTIALS", getattr(socket, "SCM_CREDENTIALS", 2), raising=False)
+    monkeypatch.setattr(socket, "MSG_CMSG_CLOEXEC", getattr(socket, "MSG_CMSG_CLOEXEC", 0x40000000), raising=False)
 
 
 class Connection:
@@ -37,6 +38,22 @@ def credential(pid=123, uid=0, gid=0):
 
 def part(data, *controls, flags=0):
     return data, list(controls), flags, None
+
+
+def test_credential_frame_receives_descriptors_atomically_close_on_exec(linux_credentials, monkeypatch):
+    monkeypatch.setattr(socket, "MSG_CMSG_CLOEXEC", 0x40000000, raising=False)
+    class Capture(Connection):
+        def recvmsg(self, *args):
+            assert len(args) == 3 and args[2] == socket.MSG_CMSG_CLOEXEC
+            return part(b'{}\n', credential())
+    data, identity = helper._receive_root_credential_frame(Capture([]), deadline=helper.time.monotonic() + 5)
+    assert data == b'{}\n' and identity == (123, 0, 0)
+
+
+def test_credential_frame_refuses_when_atomic_cloexec_is_unavailable(linux_credentials, monkeypatch):
+    monkeypatch.delattr(socket, "MSG_CMSG_CLOEXEC", raising=False)
+    with pytest.raises(helper.HelperError, match="credentials unavailable"):
+        helper._receive_root_credential_frame(Connection([]), deadline=helper.time.monotonic() + 5)
 
 
 def test_credential_frame_reassembles_only_same_root_sender(linux_credentials):

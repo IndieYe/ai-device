@@ -1096,7 +1096,7 @@ def _receive_root_credential_frame(connection, *, deadline):
     No business action or authorization is performed here.
     """
     if sys.platform != "linux" or not all(
-        hasattr(socket, name) for name in ("SO_PASSCRED", "SCM_CREDENTIALS", "SCM_RIGHTS")
+        hasattr(socket, name) for name in ("SO_PASSCRED", "SCM_CREDENTIALS", "SCM_RIGHTS", "MSG_CMSG_CLOEXEC")
     ):
         raise HelperError("per-message credentials unavailable")
     try:
@@ -1113,6 +1113,7 @@ def _receive_root_credential_frame(connection, *, deadline):
             chunk, controls, flags, _ = connection.recvmsg(
                 min(1024, MAX_REQUEST + 1 - len(data)),
                 socket.CMSG_SPACE(credential_size) + socket.CMSG_SPACE(256),
+                socket.MSG_CMSG_CLOEXEC,
             )
             # The kernel installs delivered SCM_RIGHTS even on rejected records.
             close_failed = False
