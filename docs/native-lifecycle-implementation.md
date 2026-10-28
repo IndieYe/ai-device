@@ -1850,3 +1850,10 @@ CLOEXEC 不阻止 fork 后、exec 前的继承，也不证明非并发代码、�
 修改前测试因入口/依赖尚缺失败（`20261028-094552-499682.log`）；握手及回收定向 `30 passed`（`20261028-094842-ca15a1.log`），完整回归在追加三个定向失败用例之前为 `1287 passed, 16 skipped`（`20261028-094720-70d853.log`），ruff 通过。一次性无网络 Linux amd64/Rosetta 容器安装旧 2cd3c17 DEB 并覆盖当前 bootstrap 源码，真实验证非子进程拒绝、存活和已退出直接子进程 pidfd 回收，父进程持双锁直到回收完成且作用域结束后可重新取得（`scripts/accept-native-child-reap-source.sh`、`20261028-094716-d2993f.log`）；容器已删除，非准确新包验收。
 
 此原语不创建子进程，不处理父进程死亡、后代、外部 systemd job、不可中断内核态或锁漂移，也不授权启动/恢复；超时意味着未知而非成功。生产门禁保持关闭，P1 未完成。
+
+
+## 235. 候选字节与门闩的隔离集成夹具
+
+一次性无网络 Linux amd64/Rosetta 容器安装旧 2cd3c17 DEB，仅在容器内覆盖当前 bootstrap 和 helper 源码。夹具发布实际候选，父进程执行 `_verified_helper_bytes` 获取已验证内存字节，持 daemon 双锁创建私有 SEQPACKET 和直接子进程；获取子进程 pidfd，以随机挑战及内核凭据通过 `_observe_child_handshake`，并断言收到 GO 前 socket 不存在。发送 GO 后，子进程从继承字节进入 `_verified_helper_modules` 并运行 `_serve_credential_queries_locked`；两把锁均冲突，start 请求拒绝，父进程通过 `_reap_direct_child_pidfd` 回收直接子进程，锁作用域结束后可重取。第二个子进程在握手后遇父端关闭而未收到 GO，正常退出并由 pidfd 回收，未创建 socket（`scripts/accept-native-gated-candidate-source.sh`、`20261028-095313-3c2e13.log`）；容器已删除。首次运行因夹具 PID 条件错误在安装前退出（`20261028-095204-d3bd7c.log`），修正后通过。
+
+这是源码覆盖的测试夹具，fork、门闩和清理均由夹具自行实现，不是生产监督器或准确新包验收；未覆盖父进程死亡、信号窗口、额外后代、监听器存活期约束、实际 handler 与 invocation 绑定或 systemd 外部 job。握手仅为观察，生产门禁与既有包保护不变，P1 未完成。
