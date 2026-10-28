@@ -2605,3 +2605,50 @@ worker 在 `main()` 中**先写** `.job-run-start.json`，再做任何 apply 相
 - 本轮只修「读取阻塞与类型混淆」，**不表示 P1 的身份绑定已验收通过**。需求文档该条还要求运行用户、权限、实例与服务绑定的端到端准确，以及真实包安装后的实际身份；这些未在本轮验证。
 - `_register` 其余读取（`marker_path` 经 `_trusted_marker`、`unit_path` 经 `_trusted`）已核查具备普通文件校验。
 - 容器镜像缺 `pydantic`/`packaging`，验证脚本只导入 `native_helper`，不覆盖 `Updates` 相关路径。
+
+
+## 287. 身份绑定端到端验收（真实包 + 真实登记）
+
+### 制品
+从提交 `76c4060` 构建，未签名开发包：
+
+| 项 | 值 |
+| --- | --- |
+| Device wheel | `1b21bad1ce29771d50b06e6a1c6bb7225d79973df121f84f3873c7b892378a67` |
+| Python 模块 | 34 个，与源码逐字节一致（本轮核对，0 处不符） |
+| DEB | `build/native-packages-p1-76c4060/ai-device-native-client_0.2.2-1_amd64.deb` |
+| DEB SHA256 | `7a427bebe4aa15357c5d4ab8fbf8abac9889a6488121adaf1aa525bca58f6208` |
+| DEB 大小 | 105277098 字节 |
+
+wheel 由 `uv build` 生成；payload 沿用 `ef7fa12` 的锁定依赖与运行时归档，仅替换 device wheel 并同步 `bundle/manifest.json` 与 `build-inputs.json` 中的 device 摘要。
+
+### 验收脚本
+`scripts/accept-native-identity-binding-76c4060.sh`，一次性无网络 amd64 容器，PID1 独立。
+
+流程：`dpkg -i` 装包 → 普通用户 uid 12345 用包内解释器建实例 → root 用包内 bootstrap 登记 → 核对工件身份 → 重复登记必须被拒。
+
+### 结果（`20261028-194332`）
+
+| 检查 | 结果 |
+| --- | --- |
+| 实例属主 == 指定账户 | ✅ uid 12345 |
+| 登记记录 uid == 账户 | ✅ 且 > 0 |
+| marker 绑定 uid == 账户 | ✅ schema_version 2 |
+| 登记记录 root 路径 | ✅ `/home/nativedev/instance` |
+| 凭证环境文件 0600 | ✅ |
+| registry 属主 root、非 world-writable | ✅ |
+| unit 文件存在、属主 root、普通文件 | ✅ |
+| 重复登记 | ✅ 拒绝（`native-managed instance requires the native lifecycle manager`）|
+
+安装侧另证：`install_payload` 拒绝 root 执行、要求包内解释器路径即 shebang、拒绝已存在实例。
+
+### 一个我自己的错误
+首版断言用 `mode & 0o022` 判「不可写」，把 0775 的 **group 可写**误判成世界可写，报出 `instance_not_world_writable: false`。实例目录 0775 且 group 就是账户自身组，这是合理的。已改为分别报告 world/group 位，并保留 `instance_mode` 原值。
+
+### 结论与边界
+需求 P1 的「运行用户、权限、实例和服务绑定准确」在**包安装 + 登记**链路上成立。
+
+但这一条**仍未整体判定通过**：
+- 只验证了 `.deb`；`.rpm` 未验。
+- 服务未启动（`service_started: false`、`enabled: false`），unit 只核对文件身份，**未验证 systemd 实际以该用户身份运行**。
+- 重复登记实际被生命周期管理器门禁拦下，而非登记逻辑自身判重——两者都拒绝，但原因不同，不能混为一谈。
