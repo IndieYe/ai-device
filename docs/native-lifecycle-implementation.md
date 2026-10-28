@@ -1946,3 +1946,8 @@ query-only、未接生产的监督候选在直接子回收结果未知时，不�
 在第245节真实注册、实际 query handler 加两代有限寿命 systemctl 替身的隔离场景中，对监督父进程发送 pidfd SIGKILL：handler 父死亡观察线程使 handler 退出，但两代替身仍存活，同时原 daemon 双锁可被重新取得。随后显式释放替身并用 pidfd 确认退出，专属容器已删除（`scripts/accept-native-query-handler-tree-source.sh` 的 `DEVICE_SUPERVISOR_MODE=crash`，`20261028-105304-b78b28.log`）。旧 DEB 加源码覆盖，未执行真实 systemctl 或 Device。
 
 因此第243—245节仅保护存活的监督者，锁空闲、直接 handler 已退出或 subreaper 标志均不能证明树已停止；监督者崩溃时后代收养者变化，必须设计持久未知围栏、所有相关入口一致拒绝及管理员可核验恢复，且考虑 fsync 发布不确定和宿主重启。现有生产 start/job/recovery/包围栏保持关闭；不能自动删除标记或靠杀未知 PID 解锁。此实验不证明实际 systemctl 派生同类后代或发生真实生产故障。
+
+
+## 247. 查询中间后代先退出的收养时序
+
+扩展第245节真实 query handler 与两代测试替身场景：监督停止并回收 handler 后，通过已持 pidfd 仅终止明确的中间替身，确认孙进程仍存活；通过 `/proc/<grandchild>/status` 观察其 PPid 已变为监督者，双锁仍不可重取。显式释放孙进程后观察退出，监督正常结束、双锁重取（`DEVICE_SUPERVISOR_MODE=intermediate-exit`，`20261028-105641-cf9bd4.log`）。一次性无网络容器已删除；真实 systemctl、外部 job、父监督崩溃恢复及持久围栏不在实验范围，生产门禁不变。

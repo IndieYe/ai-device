@@ -62,12 +62,13 @@ b._supervise_candidate_queries(sys.argv[1],"candidate",registry=sys.argv[2],sock
   assert ready.exists() and grand.exists(), 'real query did not start test worker tree'
   fds=[os.pidfd_open(int(path.read_text())) for path in (handler,ready,grand)]
   mode=os.environ.get('DEVICE_SUPERVISOR_MODE','unknown-wait')
-  assert mode in ('unknown-wait','crash')
+  assert mode in ('unknown-wait','crash','intermediate-exit')
+  if mode=='intermediate-exit': allow.touch()
   p.send_signal(signal.SIGKILL if mode=='crash' else signal.SIGTERM)
   poll=select.poll(); poll.register(fds[0],select.POLLIN); assert poll.poll(5000),'handler still running'
   if mode=='crash':
    assert p.wait(timeout=5)==-signal.SIGKILL
-  else:
+  elif mode=='unknown-wait':
    end=time.monotonic()+5
    while not failed.exists() and p.poll() is None and time.monotonic()<end: time.sleep(.02)
    assert failed.exists(), 'adopted wait error not injected'
@@ -82,6 +83,22 @@ b._supervise_candidate_queries(sys.argv[1],"candidate",registry=sys.argv[2],sock
     try:
      with lease(registry): raise AssertionError('lease missing during handler descendants')
     except h.HelperError as exc: assert 'already active' in str(exc)
+  if mode=='intermediate-exit':
+   signal.pidfd_send_signal(fds[1],signal.SIGKILL)
+   poll=select.poll(); poll.register(fds[1],select.POLLIN); assert poll.poll(5000),'intermediate did not exit'
+   poll=select.poll(); poll.register(fds[2],select.POLLIN); assert not poll.poll(0),'grandchild did not survive'
+   status=Path('/proc')/grand.read_text()/'status'
+   end=time.monotonic()+5
+   while time.monotonic()<end:
+    ppid=next(line for line in status.read_text().splitlines() if line.startswith('PPid:')).split()[1]
+    if int(ppid)==p.pid: break
+    time.sleep(.02)
+   assert int(ppid)==p.pid, 'grandchild not adopted by supervisor'
+   time.sleep(.2); assert p.poll() is None, 'supervisor exited while grandchild alive'
+   for lease in (h._daemon_anchor,h._daemon_file_lease):
+    try:
+     with lease(registry): raise AssertionError('lease released before adopted grandchild exited')
+    except h.HelperError as exc: assert 'already active' in str(exc)
   release.touch()
   for fd in fds[1:]:
    poll=select.poll(); poll.register(fd,select.POLLIN); assert poll.poll(5000),'worker did not exit'
@@ -93,9 +110,12 @@ b._supervise_candidate_queries(sys.argv[1],"candidate",registry=sys.argv[2],sock
     except h.HelperError as exc: assert 'already active' in str(exc)
    allow.touch()
    assert p.wait(timeout=10)!=0, 'unknown wait reported normal stop'
+  elif mode=='intermediate-exit':
+   assert p.wait(timeout=10)==0, 'supervisor did not reap surviving grandchild'
   with h._daemon_lease_pair(registry): pass
   assert not list(registry.glob('op-probe-*.json'))
   if mode=='unknown-wait': print('REAL_QUERY_HANDLER_MULTIGENERATION_UNKNOWN_WAIT_HOLDS_LEASE_UNTIL_REAPED')
+  if mode=='intermediate-exit': print('INTERMEDIATE_EXIT_GRANDCHILD_REPARENTED_LOCK_HELD')
  finally:
   release.touch()
   allow.touch()
