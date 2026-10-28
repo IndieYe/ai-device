@@ -2652,3 +2652,50 @@ wheel 由 `uv build` 生成；payload 沿用 `ef7fa12` 的锁定依赖与运行�
 - 只验证了 `.deb`；`.rpm` 未验。
 - 服务未启动（`service_started: false`、`enabled: false`），unit 只核对文件身份，**未验证 systemd 实际以该用户身份运行**。
 - 重复登记实际被生命周期管理器门禁拦下，而非登记逻辑自身判重——两者都拒绝，但原因不同，不能混为一谈。
+
+
+## 288. systemd 运行时身份验收
+
+### 目的
+第 287 节只核对了 unit 文件的身份声明，服务未启动。本轮在隔离 systemd PID1 容器中真实启动 unit，核对进程的实际运行身份。
+
+脚本 `scripts/accept-native-unit-runtime-identity-76c4060.sh`，用同一 DEB（`7a427beb…`）。
+
+### 过程中发现：服务首次启动失败
+只写 `PRIVATE` 与 `DEVICE_SERVER_URL` 时，unit 进入 `activating/auto-restart`，`ExecMainStatus=2`。手工以该用户执行 `./run client` 得到：
+
+```
+device-runtime: ValueError: configuration or runtime unavailable; see installation and state-directory requirements
+```
+
+根因：`cli.py` 的 client 分支要求 `--token-env` 指定的环境变量（默认 `DEVICE_RUNTIME_TOKEN`）存在且长度 ≥ 16，否则 `ValueError`。而 `installation.py` 构造 client argv 时不传 `--token-env`，unit 只挂 `EnvironmentFile`。**EnvironmentFile 里没有该 token 就启动失败。**
+
+这不是身份绑定缺陷，而是「未配对时服务无法启动」的预期边界——P2 才做在线配对。但要注意两点：
+1. `cli.py` 把该 `ValueError` 吞成泛化文案「configuration or runtime unavailable」，**管理员拿不到「缺 token」这个具体原因**。
+2. 自动重启会让失败表现为无限 `auto-restart` 循环，日志还拿不到（无 journal），排查成本高。
+
+在 EnvironmentFile 内补 `DEVICE_RUNTIME_TOKEN`（32 位）后，服务 `active/running`。**本轮未改产品代码**：这是配对流程缺失，不是本阶段应修的门禁。
+
+### 验收结果（`20261028-200015`，干净容器)
+
+| 检查 | 结果 |
+| --- | --- |
+| `ActiveState` / `SubState` | ✅ `active` / `running` |
+| `MainPID` | ✅ 188 |
+| unit 声明 `User` / `Group` | ✅ 数值 12345 / 12345 |
+| `/proc/<pid>` 实际 uid / gid | ✅ 12345 / 12345 |
+| 进程非 root | ✅ |
+| `WorkingDirectory` 与实际 cwd | ✅ 均为 `/home/nativedev/instance` |
+| `NoNewPrivileges` | ✅ 1 |
+| `ControlGroup` | ✅ `/system.slice/ai-device-client-dev1.service` |
+
+补充组 `100 12345`，`Uid`/`Gid` 四个字段（real/effective/saved/fs）全为 12345。
+
+### 结论与边界
+「systemd 以注册用户身份运行 unit」在 `.deb` + 真实登记 + 真实启动链路上成立，且是**进程实测**，不是读 unit 文件推断。
+
+仍未覆盖：
+- `.rpm` 的同一链路。
+- 配对完成后带真实凭证的长期运行行为。
+- 重启后自启（`enabled: false`，未做 `enable` 验收）。
+- 泛化错误文案问题已记录但未修。
