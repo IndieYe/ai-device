@@ -397,6 +397,7 @@ def publish_managed_helper_candidate(registry, source, version):
     # Existing administrator-provisioned directory only; no implicit setup.
     helper._trusted(candidates, directory=True)
     with helper.package_lease(registry, exclusive=True):
+        helper._assert_no_query_supervisor_intent(registry)
         result = publish_helper_candidate(source, candidates, version)
         if read_helper_candidate(candidates, version) != result:
             raise BootstrapError("candidate publication verification differs")

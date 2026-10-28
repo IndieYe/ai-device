@@ -1,6 +1,7 @@
 import fcntl
 import json
 import os
+import socket
 import stat
 import subprocess
 import sys
@@ -763,6 +764,51 @@ def test_deploy_helper_no_start_and_no_replace(deployment):
     assert unit.read_text() == content
 
 
+@pytest.mark.parametrize("candidate", [False, True])
+@pytest.mark.parametrize("marker_kind", ["file", "dangling_symlink"])
+def test_deploy_helper_unknown_supervisor_refused_before_unit_write(deployment, monkeypatch, candidate, marker_kind):
+    from device_runtime import native_bootstrap as bootstrap
+
+    registry = deployment["registry"]
+    registry.mkdir()
+    (registry / "package-manager.execution.lock").touch(mode=0o600)
+    marker = registry / "query-supervisor.intent.json"
+    if marker_kind == "file":
+        marker.write_bytes(b"unknown")
+    else:
+        marker.symlink_to("missing")
+    options = dict(deployment)
+    if candidate:
+        fixed = registry.parent / "bootstrap"
+        python = fixed / "bin/python3.13"
+        python.parent.mkdir(parents=True)
+        python.write_text("fixture")
+        python.chmod(0o755)
+        monkeypatch.setattr(bootstrap, "TRUSTED_HELPER_BOOTSTRAP", fixed)
+        options.update(bootstrap_python=python, candidate_version="release-1")
+    with pytest.raises(nh.HelperError, match="query supervisor intent remains unknown"):
+        nh.deploy_helper(**options)
+    assert not list(deployment["unit_dir"].iterdir())
+    assert not deployment["runtime_dir"].exists()
+    assert os.path.lexists(marker)
+
+
+def test_deploy_helper_holds_package_lease_through_unit_publication(deployment, monkeypatch):
+    original_link = os.link
+    observed = []
+
+    def checked_link(source, target, *args, **kwargs):
+        if Path(target).name == "ai-device-native-helper.service":
+            with pytest.raises(nh.HelperError, match="still executing"), nh.package_lease(deployment["registry"]):
+                pytest.fail("publisher entered during deployment")
+            observed.append(True)
+        return original_link(source, target, *args, **kwargs)
+
+    monkeypatch.setattr(os, "link", checked_link)
+    nh.deploy_helper(**deployment)
+    assert observed == [True]
+
+
 def test_deploy_candidate_unit_requires_fixed_bootstrap_and_verified_candidate(deployment, monkeypatch):
     from device_runtime import native_bootstrap as bootstrap
 
@@ -902,6 +948,85 @@ def test_recover_socket_daemon_lock_blocks(recovery):
     registry, path = recovery
     with nh._daemon_lease(registry), pytest.raises(nh.HelperError, match="already active"):
         nh.recover_socket(registry, path)
+
+
+@pytest.mark.parametrize("marker_kind", ["file", "dangling_symlink"])
+def test_recover_socket_unknown_supervisor_preserves_endpoint(recovery, marker_kind):
+    registry, path = recovery
+    with socket.socket(socket.AF_UNIX) as server:
+        server.bind(str(path))
+    before = path.lstat()
+    marker = registry / "query-supervisor.intent.json"
+    if marker_kind == "file":
+        marker.write_bytes(b"unknown")
+    else:
+        marker.symlink_to("missing")
+    with pytest.raises(nh.HelperError, match="query supervisor intent remains unknown"):
+        nh.recover_socket(registry, path)
+    after = path.lstat()
+    assert (before.st_dev, before.st_ino) == (after.st_dev, after.st_ino)
+    assert os.path.lexists(marker)
+
+
+def test_recover_socket_holds_package_lease_through_unlink(recovery, monkeypatch):
+    registry, path = recovery
+    with socket.socket(socket.AF_UNIX) as server:
+        server.bind(str(path))
+    # The socket's uid is the test process rather than root on non-root hosts.
+    real_lstat = Path.lstat
+
+    def root_socket(self, *args, **kwargs):
+        info = real_lstat(self, *args, **kwargs)
+        if self == path:
+            values = list(info)
+            values[4] = 0
+            return os.stat_result(values)
+        return info
+
+    original_unlink = Path.unlink
+
+    def check_unlink(self, *args, **kwargs):
+        if self == path:
+            with pytest.raises(nh.HelperError, match="still executing"), nh.package_lease(registry, exclusive=True):
+                pytest.fail("exclusive publisher entered during socket recovery")
+        return original_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "lstat", root_socket)
+    monkeypatch.setattr(Path, "unlink", check_unlink)
+    assert nh.recover_socket(registry, path)["removed"] is True
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("marker_kind", ["file", "dangling_symlink"])
+def test_serve_refuses_unknown_supervisor_before_listen(recovery, monkeypatch, marker_kind):
+    registry, path = recovery
+    marker = registry / "query-supervisor.intent.json"
+    if marker_kind == "file":
+        marker.write_bytes(b"unknown")
+    else:
+        marker.symlink_to("missing")
+    calls = []
+    monkeypatch.setattr(nh, "_serve", lambda *args, **kwargs: calls.append((args, kwargs)))
+    with pytest.raises(nh.HelperError, match="query supervisor intent remains unknown"):
+        nh.serve(registry, path, group=1)
+    assert not calls and not path.exists() and os.path.lexists(marker)
+
+
+def test_serve_holds_daemon_lease_after_unknown_check(recovery, monkeypatch):
+    registry, path = recovery
+    calls = []
+
+    def observe(given_registry, given_path, *, group):
+        calls.append((given_registry, given_path, group))
+        with pytest.raises(nh.HelperError, match="already active"), nh._daemon_lease_pair(registry):
+            pytest.fail("query supervisor entered while server held daemon lease")
+        # A long-lived server does not monopolize the package lease.
+        with nh.package_lease(registry, exclusive=True):
+            pass
+
+    monkeypatch.setattr(nh, "_serve", observe)
+    nh.serve(registry, path, group=1)
+    assert calls == [(registry, path, 1)]
 
 
 def test_daemon_lease_exposes_owned_descriptor_and_closes_it(recovery):

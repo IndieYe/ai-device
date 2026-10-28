@@ -298,3 +298,5 @@ job worker 执行前与显式恢复共用完整意图检查，在实例事务和
 未接生产的 query-only 监督候选在包 EX 内持久发布 `query-supervisor.intent.json` 后转持包 SH；现有源码的新 start、register/recover-registration、包 apply 和 recover 在对应包锁内遇到该条目时拒绝，原有 query 与既有 apply 的只读观察不因此自动授权动作。标记可能代表崩溃或正常结束后未退休的未知状态，目前没有自动退休或管理员恢复协议，不能删除标记绕过。
 
 该保护只覆盖更新后的上述源码入口；旧 helper、bootstrap、冻结 snapshot 和其他入口不自动受保护，不能据锁空闲、可见意图或收养回执证明完整树、外部 job 或持久终态。生产派发、恢复、包保护及原有其他围栏保持不变，详见实施记录第250—251节。
+
+当前源码普通 daemon 启动、管理员 socket 恢复、候选发布和 helper unit 部署也在对应锁内检查监督意图并拒绝；socket 恢复保留原 endpoint，部署持包锁至 unit 发布。既有锁序和管理员维护前提仍适用。候选的旧冻结代码及执行验证阶段不因新源码自动受保护；具体覆盖和实验边界见实施记录第252节。

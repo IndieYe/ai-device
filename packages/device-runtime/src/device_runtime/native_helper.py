@@ -309,28 +309,40 @@ def deploy_helper(*, bootstrap_python, registry, unit_dir, runtime_dir, group, c
     _trusted(unit_dir, directory=True)
     if runtime_dir.parent != RUNTIME_ROOT:
         raise HelperError("runtime directory must be directly beneath /run")
+    if type(group) is not int or group < 0:
+        raise HelperError("explicit socket group required")
     unit = unit_dir / "ai-device-native-helper.service"
     if unit.exists() or unit.is_symlink():
         raise HelperError("helper unit already exists; explicit reconciliation required")
-    candidate_sha256 = None
     if candidate_version is not None:
         from . import native_bootstrap
 
         if python != native_bootstrap.TRUSTED_HELPER_BOOTSTRAP / "bin/python3.13":
             raise HelperError("independent bootstrap required for candidate deployment")
-        _trusted(registry, directory=True)
-        with package_lease(registry, exclusive=True, existing=True):
+    if not registry.exists() and candidate_version is None:
+        _trusted(registry.parent, directory=True)
+        registry.mkdir(mode=0o755)
+    _trusted(registry, directory=True)
+    with package_lease(registry, exclusive=True, existing=candidate_version is not None):
+        _assert_no_query_supervisor_intent(registry)
+        candidate_sha256 = None
+        if candidate_version is not None:
             evidence = native_bootstrap.read_helper_candidate(registry / "bootstrap-candidates", candidate_version)
             candidate_sha256 = evidence["snapshot_sha256"]
+        return _deploy_helper_locked(python, registry, unit_dir, runtime_dir, group, candidate_version, candidate_sha256)
+
+
+def _deploy_helper_locked(python, registry, unit_dir, runtime_dir, group, candidate_version, candidate_sha256):
+    """Publish the unit while the caller holds the exclusive package lease."""
+    unit = unit_dir / "ai-device-native-helper.service"
     content = render_helper_unit(
         bootstrap_python=python, registry=registry, socket_path=runtime_dir / "helper.sock",
         group=group, candidate_version=candidate_version, candidate_sha256=candidate_sha256,
     )
-    for directory in (registry, runtime_dir):
-        if not directory.exists():
-            _trusted(directory.parent, directory=True)
-            directory.mkdir(mode=0o755)
-        _trusted(directory, directory=True)
+    if not runtime_dir.exists():
+        _trusted(runtime_dir.parent, directory=True)
+        runtime_dir.mkdir(mode=0o755)
+    _trusted(runtime_dir, directory=True)
     # RuntimeDirectory is managed by systemd across host boots. Preserve sockets
     # across daemon failures: never silently unlink an unknown existing endpoint.
     content = content.replace(
@@ -1009,7 +1021,8 @@ def recover_socket(registry, socket_path):
         raise HelperError("socket recovery requires Linux administrator identity")
     socket_path = _path(socket_path)
     _trusted(socket_path.parent, directory=True)
-    with _daemon_lease(registry):
+    with _daemon_lease(registry), package_lease(registry):
+        _assert_no_query_supervisor_intent(registry)
         try:
             before = socket_path.lstat()
         except FileNotFoundError:
@@ -1038,6 +1051,11 @@ def serve(registry, socket_path, *, group):
     if sys.platform != "linux" or os.geteuid() != 0:
         raise HelperError("helper daemon requires Linux administrator identity")
     with _daemon_lease(registry):
+        # A participating query supervisor also takes the daemon lease first.
+        # Once checked under the package lease, retaining the daemon lease
+        # prevents publication for the entire lifetime of this server.
+        with package_lease(registry):
+            _assert_no_query_supervisor_intent(registry)
         _serve(registry, socket_path, group=group)
 
 

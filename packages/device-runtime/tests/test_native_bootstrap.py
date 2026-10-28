@@ -414,6 +414,25 @@ def test_managed_candidate_refuses_busy_lock(runtime):
     assert not (registry / "bootstrap-candidates/v1").exists()
 
 
+@pytest.mark.parametrize("marker_kind", ["file", "dangling_symlink"])
+def test_managed_candidate_refuses_unknown_supervisor_before_publication(runtime, marker_kind, monkeypatch):
+    source, destination = runtime
+    registry = destination.parent
+    candidates = registry / "bootstrap-candidates"
+    candidates.mkdir()
+    marker = registry / "query-supervisor.intent.json"
+    if marker_kind == "file":
+        marker.write_bytes(b"unknown")
+    else:
+        marker.symlink_to("missing")
+    calls = []
+    monkeypatch.setattr(bootstrap, "publish_helper_candidate", lambda *args: calls.append(args))
+    with pytest.raises(bootstrap.helper.HelperError, match="query supervisor intent remains unknown"):
+        bootstrap.publish_managed_helper_candidate(registry, source, "v1")
+    assert not calls and list(candidates.iterdir()) == []
+    assert os.path.lexists(marker)
+
+
 def test_verified_helper_candidate_executes_checked_bytes(runtime, monkeypatch):
     import hashlib
     import sys

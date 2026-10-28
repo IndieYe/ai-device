@@ -1985,3 +1985,12 @@ query-only、未接生产的监督候选在直接子回收结果未知时，不�
 隔离 Linux 受控交错确认：发布方持 EX 期间 SH 获取失败；发布后降 SH，参与方持 SH 检查到意图并拒绝；反向持 SH 时发布方 EX 获取失败（`20261028-112601-8583c9.log`）。真实注册的 query 监督父 SIGKILL 后，两代替身仍存活，当前源码 helper 使用受控只读 adapter 的新 start 被拒绝，未写 start intent、未调用 start（`20261028-112413-a76aa3.log`）。单元测试覆盖登记拒绝前不创建管理锁、apply/recover 不增加事务记录及包动作、只读 query 保留；完整 1321 passed / 16 skipped、ruff 通过（`20261028-112437-ab1ac3.log`）；专属容器已删除。锁转换和注入试验不证明掉电持久性。
 
 此为**部分入口的源码收紧**：旧 helper/bootstrap、旧冻结 snapshot 不自动接入，普通生产 daemon 启动、其他更新/部署/退休路径和原生包钩子仍须逐项审计及覆盖；当前意图无 durable 终态和管理员恢复入口，正常停止也阻断后续动作。不得删除意图绕过，不以本阶段为跨入口闭环或生产许可，原有 start/job/recovery/包门禁保持关闭。
+
+
+## 252. 新源码 daemon、部署、发布和 socket 恢复的未知意图围栏
+
+当前源码普通 `serve` 按 daemon 双锁→package SH 获取，锁内拒绝任意可见 query-supervisor intent；释放 package SH 后持续持 daemon 双锁运行，遵守同一 daemon 锁协议的监督者不能在此期间发布意图。`recover_socket` 按相同顺序持有双锁与 package SH，检查意图后贯穿 socket 核验、unlink 和目录 fsync；有未知意图时原 socket 保留。`publish_managed_helper_candidate` 在 package EX 内、任何候选写入前检查意图。`deploy_helper` 对新旧两种 unit 在 package EX 内检查意图，并将锁持至 unit 的 no-replace 发布及目录 fsync；候选部署使用已有锁文件，新建普通登记目录只在可信父目录下建立，不意味着启动或授权。断链符号链接同样视为未知，检查不解析或退休记录。
+
+定向测试 342 passed / 1 skipped；最新完整回归 1334 passed / 16 skipped，ruff 通过（`20261028-113858-b8c4b7.log`）。一次性隔离 Linux 使用旧 DEB 加当前源码覆盖、真实 socket 和跨进程文件锁，确认拒绝四个入口、socket/意图保留、daemon 持锁时另一进程无法获取监督者锁（`20261028-113853-116f32.log`）；服务监听循环为替身，未启动 Device/systemd，容器按授权删除。首次新增测试因缺导入失败、部署重构测试因缺局部变量失败，修正后重跑通过。
+
+此措施仅覆盖当前源码参与者，非完整生产封锁：`run_verified_helper_candidate` 在进入冻结候选自身 `serve` 前先执行候选验证，旧 snapshot 中的 `serve` 不会自动获得新检查；验证导入可派生后代，不能凭 daemon 锁空闲或 socket 不存在证明树已收口。已经运行的旧进程、包钩子、其他退休/更新入口、持久终态与管理员恢复仍需审计。DEB/RPM 覆盖保护和所有原有拒绝门禁不放宽；不得删除意图绕过。
