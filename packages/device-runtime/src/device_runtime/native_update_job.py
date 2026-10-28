@@ -457,8 +457,6 @@ def _read_run_start(path, intent_sha256):
         "state",
         "job_intent_sha256",
         "boot_id",
-        "pid",
-        "started_at_ms",
     }:
         raise JobError("job run evidence shape differs")
     if value["state"] != "job_run_started" or type(value["schema_version"]) is not int:
@@ -567,26 +565,11 @@ def observe_job(manager, instance_id, operation_id, *, runner=None):
                     report["state"] = "job_failed_requires_review"
     except (OSError, subprocess.SubprocessError):
         pass
-    if run_start is not None:
-        # The dispatch is now attributable: it demonstrably started. Only now can
-        # a missing unit or an unreachable systemctl be told apart from "never
-        # began". Every branch below still forbids retry and keeps the fence.
-        fields = report["unit_observation"] or {}
-        if report["state"] == "dispatch_unknown":
-            if not fields:
-                report["state"] = "job_in_progress_unverified"
-            elif fields.get("LoadState") != "loaded":
-                report["state"] = "job_completed_no_unit_evidence"
-        if apply_intent is None and report["state"] in (
-            "job_completed_no_unit_evidence",
-            "job_in_progress_unverified",
-            "job_in_progress",
-            "job_failed_requires_review",
-        ):
-            # Started but produced no apply intent: nothing proves the package
-            # database was untouched, so recovery stays refused.
-            report["state"] = "job_started_without_mutation"
-        report["prior_boot_execution"] = run_start["boot_id"] != _boot_id()
+    if run_start is not None and report["state"] == "dispatch_unknown":
+        # The dispatch is attributable: it demonstrably started. A vanished unit
+        # is therefore explainable instead of being an indistinguishable unknown.
+        # Still no retry, and the fence stays.
+        report["state"] = "job_completed_no_unit_evidence"
     if apply_intent is not None:
         expected_apply = {
             "prepared_sha256": prepared_digest,
@@ -677,17 +660,12 @@ def recover_job(manager, instance_id, operation_id, *, runner=None):
         return receipt
 
 
-def _read_boot_id():
-    """Raw kernel boot identity; a seam so tests never touch the global filesystem."""
+def _boot_id():
+    """Kernel boot identity, used only to mark records from an earlier boot."""
     try:
-        return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        value = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
     except OSError as exc:
         raise JobError("boot identity unavailable") from exc
-
-
-def _boot_id():
-    """Validated boot identity, used to tell executions apart across reboots."""
-    value = _read_boot_id()
     if not re.fullmatch(
         r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", value
     ):
@@ -706,8 +684,6 @@ def _record_run_start(registry, instance_id, operation_id, intent_sha256):
     This proves only that execution began. It never proves the package change
     succeeded, and it grants no retry.
     """
-    import time
-
     helper._identifier(instance_id)
     helper._identifier(operation_id)
     if not isinstance(intent_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", intent_sha256):
@@ -731,8 +707,6 @@ def _record_run_start(registry, instance_id, operation_id, intent_sha256):
         "state": "job_run_started",
         "job_intent_sha256": intent_sha256,
         "boot_id": _boot_id(),
-        "pid": os.getpid(),
-        "started_at_ms": int(time.time() * 1000),
     }
     try:
         helper._save_new(stem.with_suffix(".job-run-start.json"), value)

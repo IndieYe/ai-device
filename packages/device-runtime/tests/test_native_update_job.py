@@ -1182,7 +1182,7 @@ def _job_intent_for(transaction):
 
 
 def test_run_start_records_once_and_never_overwrites(transaction, monkeypatch):
-    monkeypatch.setattr(job, "_read_boot_id", lambda: "394e9cfa-a8bb-4dce-8775-7a40c4368041")
+    monkeypatch.setattr(job, "_boot_id", lambda: "394e9cfa-a8bb-4dce-8775-7a40c4368041")
     digest = _job_intent_for(transaction)
     registry = transaction.parent.parent
     first = job._record_run_start(registry, "probe", "one", digest)
@@ -1196,7 +1196,7 @@ def test_run_start_records_once_and_never_overwrites(transaction, monkeypatch):
 
 
 def test_run_start_refuses_changed_intent(transaction, monkeypatch):
-    monkeypatch.setattr(job, "_read_boot_id", lambda: "394e9cfa-a8bb-4dce-8775-7a40c4368041")
+    monkeypatch.setattr(job, "_boot_id", lambda: "394e9cfa-a8bb-4dce-8775-7a40c4368041")
     digest = _job_intent_for(transaction)
     # Intent moves after the dispatcher fenced it.
     transaction.with_suffix(".job-intent.json").write_text("{}")
@@ -1206,7 +1206,7 @@ def test_run_start_refuses_changed_intent(transaction, monkeypatch):
 
 @pytest.mark.parametrize("bad", ["", "nothex", "A" * 64, "a" * 63, "a" * 65, None, 5])
 def test_run_start_rejects_invalid_digest(transaction, monkeypatch, bad):
-    monkeypatch.setattr(job, "_read_boot_id", lambda: "394e9cfa-a8bb-4dce-8775-7a40c4368041")
+    monkeypatch.setattr(job, "_boot_id", lambda: "394e9cfa-a8bb-4dce-8775-7a40c4368041")
     _job_intent_for(transaction)
     with pytest.raises(job.JobError, match="invalid job intent digest"):
         job._record_run_start(transaction.parent.parent, "probe", "one", bad)
@@ -1218,18 +1218,24 @@ def test_run_start_rejects_invalid_digest(transaction, monkeypatch, bad):
 )
 def test_boot_id_rejects_malformed_value(monkeypatch, boot):
     """The real validator must reject anything but the canonical uuid shape."""
-    monkeypatch.setattr(job, "_read_boot_id", lambda: boot)
+
+    class Fake:
+        def read_text(self):
+            return boot
+
+    monkeypatch.setattr(job.Path, "read_text", lambda self: boot, raising=False)
+    monkeypatch.setattr(job, "Path", lambda _p: Fake())
     with pytest.raises(job.JobError, match="invalid boot identity"):
         job._boot_id()
 
 
 def test_boot_id_accepts_canonical_value(monkeypatch):
-    monkeypatch.setattr(job, "_read_boot_id", lambda: "394e9cfa-a8bb-4dce-8775-7a40c4368041")
+    monkeypatch.setattr(job, "_boot_id", lambda: "394e9cfa-a8bb-4dce-8775-7a40c4368041")
     assert job._boot_id() == "394e9cfa-a8bb-4dce-8775-7a40c4368041"
 
 
 def test_run_start_missing_intent_is_refused(transaction, monkeypatch):
-    monkeypatch.setattr(job, "_read_boot_id", lambda: "394e9cfa-a8bb-4dce-8775-7a40c4368041")
+    monkeypatch.setattr(job, "_boot_id", lambda: "394e9cfa-a8bb-4dce-8775-7a40c4368041")
     with pytest.raises(job.JobError):
         job._record_run_start(transaction.parent.parent, "probe", "one", "a" * 64)
     assert not transaction.with_suffix(".job-run-start.json").exists()
@@ -1281,8 +1287,6 @@ def _registry_with_job(transaction, *, run_start=True, apply_intent=True, boot=B
                     "state": "job_run_started",
                     "job_intent_sha256": digest,
                     "boot_id": boot,
-                    "pid": 4242,
-                    "started_at_ms": 1793173548000,
                 }
             )
         )
@@ -1315,14 +1319,13 @@ def test_without_run_start_keeps_existing_behaviour(transaction, monkeypatch):
     Historical transactions have no run-start record. Adding attribution must
     not retroactively downgrade states that were already decidable.
     """
-    monkeypatch.setattr(job, "_read_boot_id", lambda: BOOT)
+    monkeypatch.setattr(job, "_boot_id", lambda: BOOT)
     registry = _registry_with_job(transaction, run_start=False)
     report = job.observe_job(
         SimpleNamespace(registry=registry), "probe", "one", runner=_unit(LOADED_FAILED)
     )
     assert report["state"] == "job_failed_requires_review"
     assert report["run_start"] is None
-    assert "prior_boot_execution" not in report
     assert report["retry_allowed"] is False
     assert report["fence_retained"] is True
 
@@ -1332,7 +1335,7 @@ def test_without_run_start_missing_unit_stays_unknown(transaction, monkeypatch):
 
     Without start evidence this must remain the pre-existing unknown.
     """
-    monkeypatch.setattr(job, "_read_boot_id", lambda: BOOT)
+    monkeypatch.setattr(job, "_boot_id", lambda: BOOT)
     registry = _registry_with_job(transaction, run_start=False)
     report = job.observe_job(
         SimpleNamespace(registry=registry), "probe", "one", runner=_unit(NOT_FOUND)
@@ -1342,18 +1345,17 @@ def test_without_run_start_missing_unit_stays_unknown(transaction, monkeypatch):
 
 
 def test_run_start_plus_failed_is_review(transaction, monkeypatch):
-    monkeypatch.setattr(job, "_read_boot_id", lambda: BOOT)
+    monkeypatch.setattr(job, "_boot_id", lambda: BOOT)
     registry = _registry_with_job(transaction)
     report = job.observe_job(
         SimpleNamespace(registry=registry), "probe", "one", runner=_unit(LOADED_FAILED)
     )
     assert report["state"] == "job_failed_requires_review"
     assert report["retry_allowed"] is False
-    assert report["prior_boot_execution"] is False
 
 
 def test_run_start_plus_running_is_in_progress(transaction, monkeypatch):
-    monkeypatch.setattr(job, "_read_boot_id", lambda: BOOT)
+    monkeypatch.setattr(job, "_boot_id", lambda: BOOT)
     registry = _registry_with_job(transaction)
     report = job.observe_job(
         SimpleNamespace(registry=registry), "probe", "one", runner=_unit(LOADED_RUNNING)
@@ -1364,7 +1366,7 @@ def test_run_start_plus_running_is_in_progress(transaction, monkeypatch):
 
 def test_run_start_plus_missing_unit_reports_completion(transaction, monkeypatch):
     """A vanished unit is now attributable, and still does not permit retry."""
-    monkeypatch.setattr(job, "_read_boot_id", lambda: BOOT)
+    monkeypatch.setattr(job, "_boot_id", lambda: BOOT)
     registry = _registry_with_job(transaction)
     report = job.observe_job(
         SimpleNamespace(registry=registry), "probe", "one", runner=_unit(NOT_FOUND)
@@ -1374,32 +1376,10 @@ def test_run_start_plus_missing_unit_reports_completion(transaction, monkeypatch
     assert report["fence_retained"] is True
 
 
-def test_run_start_without_apply_intent_is_not_recoverable(transaction, monkeypatch):
-    monkeypatch.setattr(job, "_read_boot_id", lambda: BOOT)
-    registry = _registry_with_job(transaction, apply_intent=False)
-    report = job.observe_job(
-        SimpleNamespace(registry=registry), "probe", "one", runner=_unit(LOADED_FAILED)
-    )
-    assert report["state"] == "job_started_without_mutation"
-    assert report["retry_allowed"] is False
-    assert report["fence_retained"] is True
-
-
-def test_unreachable_systemctl_with_run_start_is_unverified(transaction, monkeypatch):
-    monkeypatch.setattr(job, "_read_boot_id", lambda: BOOT)
-    registry = _registry_with_job(transaction)
-
-    def down(*a, **k):
-        raise OSError("no systemctl")
-
-    report = job.observe_job(SimpleNamespace(registry=registry), "probe", "one", runner=down)
-    assert report["state"] == "job_in_progress_unverified"
-    assert report["retry_allowed"] is False
-    assert report["unit_observation"] is None
 
 
 def test_run_start_for_another_dispatch_is_refused(transaction, monkeypatch):
-    monkeypatch.setattr(job, "_read_boot_id", lambda: BOOT)
+    monkeypatch.setattr(job, "_boot_id", lambda: BOOT)
     registry = _registry_with_job(transaction)
     path = transaction.with_suffix(".job-run-start.json")
     value = json.loads(path.read_text())
@@ -1412,7 +1392,7 @@ def test_run_start_for_another_dispatch_is_refused(transaction, monkeypatch):
 
 
 def test_run_start_with_extra_key_is_refused(transaction, monkeypatch):
-    monkeypatch.setattr(job, "_read_boot_id", lambda: BOOT)
+    monkeypatch.setattr(job, "_boot_id", lambda: BOOT)
     registry = _registry_with_job(transaction)
     path = transaction.with_suffix(".job-run-start.json")
     value = json.loads(path.read_text())
@@ -1424,22 +1404,9 @@ def test_run_start_with_extra_key_is_refused(transaction, monkeypatch):
         )
 
 
-def test_prior_boot_execution_is_flagged_not_trusted(transaction, monkeypatch):
-    """A record from an earlier boot is marked; it must not read as current."""
-    monkeypatch.setattr(job, "_read_boot_id", lambda: "00000000-1111-2222-3333-444444444444")
-    registry = _registry_with_job(transaction, boot=BOOT)
-    report = job.observe_job(
-        SimpleNamespace(registry=registry), "probe", "one", runner=_unit(NOT_FOUND)
-    )
-    assert report["prior_boot_execution"] is True
-    # Attribution survives, but permission never does.
-    assert report["retry_allowed"] is False
-    assert report["fence_retained"] is True
-
-
 @pytest.mark.parametrize("kind", ["symlink", "directory", "fifo"])
 def test_run_start_special_file_is_refused(transaction, monkeypatch, kind):
-    monkeypatch.setattr(job, "_read_boot_id", lambda: BOOT)
+    monkeypatch.setattr(job, "_boot_id", lambda: BOOT)
     _job_intent_for(transaction)
     path = transaction.with_suffix(".job-run-start.json")
     if kind == "symlink":

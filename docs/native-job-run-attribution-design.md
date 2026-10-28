@@ -141,15 +141,20 @@ run_start 存在且 job_intent_sha256 == 当前 intent 摘要:
 
 ## 5. 对状态机的影响
 
-新增状态（全部 `retry_allowed=false`, `fence_retained=true`）：
+> 实施后精简（见实施记录第 278 节）：本节初稿列出的三个新状态中，只有
+> `job_completed_no_unit_evidence` 保留。`job_in_progress_unverified`、
+> `job_started_without_mutation` 以及 `prior_boot_execution` 标记在实施中确认
+> **没有任何生产消费方**，属于过度设计，已全部移除。实际改动只有一条规则：
+> run_start 存在且 state 仍为 dispatch_unknown 时，改为
+> `job_completed_no_unit_evidence`。
+
+新增状态（`retry_allowed=false`, `fence_retained=true`）：
 
 | 新状态 | 触发 | 允许动作 |
 | --- | --- | --- |
-| `job_completed_no_unit_evidence` | run-start 匹配 + unit 消失 | 仅显式对账，不得自动重放 |
-| `job_started_without_mutation` | run-start 匹配 + 无 apply-intent | 仅标记，不得恢复 |
-| `job_in_progress_unverified` | run-start 匹配 + systemctl 不可达 | 保持等待 |
+| `job_completed_no_unit_evidence` | run-start 匹配 + unit 消失 | 仅观察，不得自动重放 |
 
-三个新状态都**不进入** `recover_job` 的成功路径；`recover_job` 的既有前置条件（`apply_intent_present` 且 unit 终态满足）保持不变。
+该状态**不进入** `recover_job` 的成功路径；`recover_job` 的既有前置条件（`apply_intent_present` 且 unit 终态满足）保持不变。
 
 ## 6. 迁移与兼容
 

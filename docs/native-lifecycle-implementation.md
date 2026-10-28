@@ -2324,3 +2324,35 @@ worker 在 `main()` 中**先写** `.job-run-start.json`，再做任何 apply 相
 - 没有 run-start 的历史事务不会得到新结论，仍按旧映射处理，不回填。
 - `prior_boot_execution=true` 时观察仅供参考，不构成收口依据。
 - 未实现管理员显式对账入口；`job_completed_no_unit_evidence` 等新状态目前只读。
+
+
+## 278. 精简第 277 节：移除无消费方的状态与字段
+
+第 277 节首版引入了三个新状态和两个记录字段，事后核查发现它们**没有任何生产消费方**（`rg` 全仓只有定义与自证测试）：
+
+- `job_in_progress_unverified`
+- `job_started_without_mutation`
+- `prior_boot_execution`
+- 记录字段 `pid`、`started_at_ms`
+
+这些是设计的想象产物，不是需求。已全部移除。
+
+### 现在的最小实现
+- run-start 记录只保留 `schema_version` / `state` / `job_intent_sha256` / `boot_id` 四个字段。
+- 观察侧只增加一条规则：`run_start` 存在且 `state` 仍为 `dispatch_unknown` 时，改为 `job_completed_no_unit_evidence`。
+- 其余映射与第 273 节实测的既有行为完全一致，不做任何扩展。
+
+### 净变化（相对第 276 节提交）
+- 产品代码 `native_update_job.py`：**−26 行**（8 增 34 删）
+- 测试：+20 / −53
+
+即最终实现比引入前更短。
+
+### 复验
+- 完整回归 **1452 passed, 16 skipped**（`20261028-165736`），ruff 通过。
+- 真实 systemd：worker 在 apply 前被杀 → `run_start_written=true`、`apply_intent_written=false`、`state=job_completed_no_unit_evidence`、`retry_allowed=false`、`fence_retained=true`；重复启动仍被拒。日志 `20261028-165843`。容器已删除并复核不存在。
+
+### 保留的复杂度及其理由
+- `_boot_id` 的格式校验：boot_id 参与「记录是否来自本次启动」的判断，格式错误必须拒绝而非猜测。
+- duplicate-start 拒绝：`_save_new` 的 no-replace 语义天然提供，几乎零成本，且防止同一次派发被启动两次。
+- intent 摘要复核：防止 run-start 与 task intent 错配，是这条证据成立的前提，不能省。

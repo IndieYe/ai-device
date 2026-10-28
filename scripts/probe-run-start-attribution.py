@@ -127,7 +127,6 @@ def case_killed_before_apply(operation):
         "state": before["state"],
         "retry_allowed": before["retry_allowed"],
         "fence_retained": before["fence_retained"],
-        "prior_boot_execution": before.get("prior_boot_execution"),
         "worker_stderr": (err or "").strip()[-400:],
     }
 
