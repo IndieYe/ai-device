@@ -130,6 +130,112 @@ def _require_proven_job_fence():
     raise JobError("new dispatch disabled: helper job-fence compatibility unproven")
 
 
+def _prepare_dispatch_locked(manager, instance_id, operation_id, binding, stem):
+    """Prepare under caller-held instance lease; never invoke the external job.
+
+    Private coordination primitive, not an authorization or proof of lock
+    ownership. The caller must use the canonical transaction and release it
+    before requesting systemd. Production remains default-deny.
+    """
+    import sys
+
+    from . import native_update as update
+
+    if sys.platform != "linux" or os.geteuid() != 0:
+        raise JobError("Linux administrator required")
+    if not isinstance(manager.packages, update.Debian):
+        raise JobError("only Debian production adapter can dispatch")
+    manager._prepared(binding, stem)
+    path = stem.with_suffix(".job-intent.json")
+    if path.exists():
+        helper._trusted(path)
+        intent = json.loads(path.read_bytes())
+        snapshot = stem.with_suffix(".bootstrap")
+        bootstrap.validate_snapshot(snapshot)
+        expected = {
+            "schema_version": 1,
+            "state": "job_dispatch_intent",
+            "close_protocol": "package-lease-v1",
+            "unit": "ai-device-package-" + hashlib.sha256(str(stem).encode()).hexdigest()
+            + ".service",
+            "instance_id": instance_id,
+            "operation_id": operation_id,
+            "prepared_sha256": helper._digest(stem.with_suffix(".prepared.json")),
+            "runtime_snapshot_sha256": helper._digest(snapshot / "snapshot.json"),
+        }
+        if intent != expected or type(intent.get("schema_version")) is not int:
+            raise JobError("recorded job intent differs from current transaction")
+        return {
+            "state": "dispatch_already_recorded",
+            "intent": intent,
+            "replayed": False,
+        }, None
+    _require_proven_job_fence()
+    with manager._apply_lease(manager.registry / "package-manager"):
+        if any(stem.parent.glob("*.apply-intent.json")) or helper._pending_package_jobs(
+            stem.parent
+        ):
+            raise JobError("existing package transaction blocks dispatch")
+        snapshot = stem.with_suffix(".bootstrap")
+        bootstrap.snapshot_runtime(Path(sys.base_prefix), snapshot)
+        # Never launch an old seed which lacks this exact worker implementation.
+        package = snapshot / "runtime/lib/python3.13/site-packages/device_runtime"
+        # These checks are a necessary subset, not proof of the whole worker
+        # dependency closure or authorization to dispatch.
+        for module in (
+            "native_update.py", "native_update_job.py", "native_helper.py", "management_lock.py"
+        ):
+            if helper._digest(package / module) != helper._digest(
+                Path(__file__).with_name(module)
+            ):
+                raise JobError("snapshot worker code differs from dispatch implementation")
+        _require_matching_worker_python_sources(package, Path(__file__).parent)
+        unit = (
+            "ai-device-package-" + hashlib.sha256(str(stem).encode()).hexdigest() + ".service"
+        )
+        intent = {
+            "schema_version": 1,
+            "state": "job_dispatch_intent",
+            "close_protocol": "package-lease-v1",
+            "unit": unit,
+            "instance_id": instance_id,
+            "operation_id": operation_id,
+            "prepared_sha256": helper._digest(stem.with_suffix(".prepared.json")),
+            "runtime_snapshot_sha256": helper._digest(snapshot / "snapshot.json"),
+        }
+        helper._save_new(path, intent)
+        digest = helper._digest(path)
+        python = snapshot / "runtime/bin/python3.13"
+        argv = [
+            "/usr/bin/systemd-run",
+            "--unit=" + unit,
+            "--service-type=oneshot",
+            "--property=Restart=no",
+            "--property=RemainAfterExit=yes",
+            "--property=TimeoutStartSec=infinity",
+            "--property=TimeoutStopSec=infinity",
+            "--property=KillMode=process",
+            "--property=SendSIGKILL=no",
+            "--property=UMask=0077",
+            "--",
+            str(python),
+            "-I",
+            "-B",
+            "-m",
+            "device_runtime.native_update_job",
+            "--registry",
+            str(manager.registry),
+            "--instance-id",
+            instance_id,
+            "--operation-id",
+            operation_id,
+            "--job-intent-sha256",
+            digest,
+        ]
+
+    return None, (argv, digest, unit)
+
+
 def dispatch_job(manager, instance_id, operation_id, *, runner=None):
     """Explicit administrator dispatch, once only, without waiting for execution.
 
@@ -147,93 +253,12 @@ def dispatch_job(manager, instance_id, operation_id, *, runner=None):
         raise JobError("only Debian production adapter can dispatch")
     runner = runner or subprocess.run
     with manager._transaction(instance_id, operation_id) as (binding, stem):
-        manager._prepared(binding, stem)
-        path = stem.with_suffix(".job-intent.json")
-        if path.exists():
-            helper._trusted(path)
-            intent = json.loads(path.read_bytes())
-            snapshot = stem.with_suffix(".bootstrap")
-            bootstrap.validate_snapshot(snapshot)
-            expected = {
-                "schema_version": 1,
-                "state": "job_dispatch_intent",
-                "close_protocol": "package-lease-v1",
-                "unit": "ai-device-package-" + hashlib.sha256(str(stem).encode()).hexdigest()
-                + ".service",
-                "instance_id": instance_id,
-                "operation_id": operation_id,
-                "prepared_sha256": helper._digest(stem.with_suffix(".prepared.json")),
-                "runtime_snapshot_sha256": helper._digest(snapshot / "snapshot.json"),
-            }
-            if intent != expected or type(intent.get("schema_version")) is not int:
-                raise JobError("recorded job intent differs from current transaction")
-            return {
-                "state": "dispatch_already_recorded",
-                "intent": intent,
-                "replayed": False,
-            }
-        _require_proven_job_fence()
-        with manager._apply_lease(manager.registry / "package-manager"):
-            if any(stem.parent.glob("*.apply-intent.json")) or helper._pending_package_jobs(
-                stem.parent
-            ):
-                raise JobError("existing package transaction blocks dispatch")
-            snapshot = stem.with_suffix(".bootstrap")
-            bootstrap.snapshot_runtime(Path(sys.base_prefix), snapshot)
-            # Never launch an old seed which lacks this exact worker implementation.
-            package = snapshot / "runtime/lib/python3.13/site-packages/device_runtime"
-            # These checks are a necessary subset, not proof of the whole worker
-            # dependency closure or authorization to dispatch.
-            for module in (
-                "native_update.py", "native_update_job.py", "native_helper.py", "management_lock.py"
-            ):
-                if helper._digest(package / module) != helper._digest(
-                    Path(__file__).with_name(module)
-                ):
-                    raise JobError("snapshot worker code differs from dispatch implementation")
-            _require_matching_worker_python_sources(package, Path(__file__).parent)
-            unit = (
-                "ai-device-package-" + hashlib.sha256(str(stem).encode()).hexdigest() + ".service"
-            )
-            intent = {
-                "schema_version": 1,
-                "state": "job_dispatch_intent",
-                "close_protocol": "package-lease-v1",
-                "unit": unit,
-                "instance_id": instance_id,
-                "operation_id": operation_id,
-                "prepared_sha256": helper._digest(stem.with_suffix(".prepared.json")),
-                "runtime_snapshot_sha256": helper._digest(snapshot / "snapshot.json"),
-            }
-            helper._save_new(path, intent)
-            digest = helper._digest(path)
-            python = snapshot / "runtime/bin/python3.13"
-            argv = [
-                "/usr/bin/systemd-run",
-                "--unit=" + unit,
-                "--service-type=oneshot",
-                "--property=Restart=no",
-                "--property=RemainAfterExit=yes",
-                "--property=TimeoutStartSec=infinity",
-                "--property=TimeoutStopSec=infinity",
-                "--property=KillMode=process",
-                "--property=SendSIGKILL=no",
-                "--property=UMask=0077",
-                "--",
-                str(python),
-                "-I",
-                "-B",
-                "-m",
-                "device_runtime.native_update_job",
-                "--registry",
-                str(manager.registry),
-                "--instance-id",
-                instance_id,
-                "--operation-id",
-                operation_id,
-                "--job-intent-sha256",
-                digest,
-            ]
+        existing, prepared = _prepare_dispatch_locked(
+            manager, instance_id, operation_id, binding, stem
+        )
+        if existing is not None:
+            return existing
+        argv, digest, unit = prepared
 
     # Persisted intent fences the gap after releasing leases, before dispatch.
     try:

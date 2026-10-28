@@ -105,27 +105,36 @@ def test_dispatch_records_once_without_replay(transaction, monkeypatch, lost):
 
     @contextmanager
     def lease(*a):
-        held.append(True)
+        assert held == ["instance"]
+        held.append("package")
         try:
             yield
         finally:
-            held.pop()
+            assert held.pop() == "package"
 
     @contextmanager
     def txn(*a):
-        yield {}, transaction
+        held.append("instance")
+        try:
+            yield {}, transaction
+        finally:
+            assert held.pop() == "instance"
+
+    def prepared(*a):
+        assert held == ["instance"]
+        return {}
 
     manager = SimpleNamespace(
         packages=update.Debian(),
         registry=transaction.parent.parent,
         _transaction=txn,
-        _prepared=lambda *a: {},
+        _prepared=prepared,
         _apply_lease=lease,
     )
     calls = []
 
     def runner(argv, **kw):
-        assert not held, "release package lease before independent worker starts"
+        assert not held, "release instance and package leases before independent worker starts"
         calls.append(argv)
         if lost:
             raise subprocess.TimeoutExpired(argv, 30)
@@ -144,6 +153,124 @@ def test_dispatch_records_once_without_replay(transaction, monkeypatch, lost):
     assert calls[0][0] == "/usr/bin/systemd-run"
     assert "--property=Restart=no" in calls[0]
     assert "--property=RemainAfterExit=yes" in calls[0]
+
+
+def test_locked_dispatch_preparation_remains_default_deny(transaction, monkeypatch):
+    from types import SimpleNamespace
+
+    from device_runtime import native_update as update
+
+    monkeypatch.setattr(job.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(__import__("sys"), "platform", "linux")
+    manager = SimpleNamespace(
+        packages=update.Debian(),
+        registry=transaction.parent.parent,
+        _prepared=lambda *args: None,
+        _apply_lease=lambda *args: pytest.fail("package lease before default deny"),
+    )
+    before = {p: p.read_bytes() for p in transaction.parent.iterdir() if p.is_file()}
+    with pytest.raises(job.JobError, match="new dispatch disabled"):
+        job._prepare_dispatch_locked(manager, "probe", "one", {}, transaction)
+    assert {p: p.read_bytes() for p in before} == before
+    assert not transaction.with_suffix(".job-intent.json").exists()
+
+
+def test_locked_dispatch_preparation_does_not_reenter_transaction_or_run_job(transaction, monkeypatch):
+    import subprocess
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from device_runtime import native_update as update
+
+    monkeypatch.setattr(job.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(__import__("sys"), "platform", "linux")
+    transaction.with_suffix(".apply-intent.json").unlink()
+    monkeypatch.setattr(job, "_require_proven_job_fence", lambda: None)
+    monkeypatch.setattr(job.bootstrap, "snapshot_runtime", lambda *args: {})
+    monkeypatch.setattr(job, "_require_matching_worker_python_sources", lambda *args: None)
+    real_digest = job.helper._digest
+
+    def digest(path):
+        if path.name in ("native_update.py", "native_update_job.py", "native_helper.py", "management_lock.py"):
+            return "same-worker-bytes"
+        return real_digest(path)
+
+    monkeypatch.setattr(job.helper, "_digest", digest)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("job ran inside lease"))
+    events = []
+
+    @contextmanager
+    def lease(*args):
+        events.append("package acquired")
+        try:
+            yield
+        finally:
+            events.append("package released")
+
+    manager = SimpleNamespace(
+        packages=update.Debian(),
+        registry=transaction.parent.parent,
+        _transaction=lambda *args: pytest.fail("instance transaction reacquired"),
+        _prepared=lambda *args: events.append("prepared checked"),
+        _apply_lease=lease,
+    )
+    existing, prepared = job._prepare_dispatch_locked(manager, "probe", "one", {}, transaction)
+    assert existing is None
+    argv, digest_value, unit = prepared
+    assert argv[0] == "/usr/bin/systemd-run"
+    assert digest_value == real_digest(transaction.with_suffix(".job-intent.json"))
+    assert "--unit=" + unit in argv
+    assert events == ["prepared checked", "package acquired", "package released"]
+    recorded, retry = job._prepare_dispatch_locked(manager, "probe", "one", {}, transaction)
+    assert recorded["state"] == "dispatch_already_recorded"
+    assert recorded["replayed"] is False and retry is None
+    assert events == ["prepared checked", "package acquired", "package released", "prepared checked"]
+
+
+def test_locked_dispatch_preparation_uses_real_instance_and_package_leases(transaction, monkeypatch):
+    import subprocess
+
+    from device_runtime import native_update as update
+
+    monkeypatch.setattr(job.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(__import__("sys"), "platform", "linux")
+    transaction.with_suffix(".apply-intent.json").unlink()
+    registry = transaction.parent.parent
+    manager = update.Updates(registry, packages=update.Debian())
+    monkeypatch.setattr(manager.helper, "_binding", lambda _: {})
+    monkeypatch.setattr(manager, "_prepared", lambda *args: None)
+    monkeypatch.setattr(job, "_require_proven_job_fence", lambda: None)
+    monkeypatch.setattr(job.bootstrap, "snapshot_runtime", lambda *args: {})
+    monkeypatch.setattr(job, "_require_matching_worker_python_sources", lambda *args: None)
+    real_digest = job.helper._digest
+
+    def digest(path):
+        if path.name in ("native_update.py", "native_update_job.py", "native_helper.py", "management_lock.py"):
+            return "same-worker-bytes"
+        return real_digest(path)
+
+    monkeypatch.setattr(job.helper, "_digest", digest)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("external process ran"))
+    real_save = job.helper._save_new
+
+    def save_with_competitors(path, value):
+        with pytest.raises(job.helper.HelperError, match="instance management busy"), manager.helper._lease("probe"):
+            pass
+        with (
+            pytest.raises(job.helper.HelperError, match="package or start sender still executing"),
+            job.helper.package_lease(registry),
+        ):
+            pass
+        real_save(path, value)
+
+    monkeypatch.setattr(job.helper, "_save_new", save_with_competitors)
+    with manager._transaction("probe", "one") as (binding, stem):
+        existing, prepared = job._prepare_dispatch_locked(manager, "probe", "one", binding, stem)
+        assert existing is None and prepared is not None
+        with pytest.raises(job.helper.HelperError, match="instance management busy"), manager.helper._lease("probe"):
+            pass
+    with manager.helper._lease("probe"), job.helper.package_lease(registry):
+        assert transaction.with_suffix(".job-intent.json").is_file()
 
 
 @pytest.mark.parametrize("failure_stage", ["file", "directory"])

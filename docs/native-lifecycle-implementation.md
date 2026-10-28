@@ -1687,3 +1687,12 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 无网络一次性 Linux 容器干净安装 DEB，包内 uv 检查 17 项依赖，普通 UID 12345 核对安装模块与 wheel 字节一致；在包内实际 `install_payload` 注入可用空间 0 或查询抛错，均在缺失父目录创建前拒绝；恢复真实查询后干净安装成功，重复安装拒绝且 active 不变（`20261028-081410-923792.log`，脚本 `scripts/accept-native-install-space-9c0b218.sh`）。构建及验收容器均 `--rm`，核对已回收（`20261028-081426-da3185.log`）。
 
 空间不足与查询异常是函数级注入，非真实磁盘满或配额测试；未验 CLI 子进程或真实主机。预检只是 bundle 复制大小必要下界，不保证完整安装空间或恢复。旧包不自动更新，生产门禁不变，P1 尚未完成。
+
+
+## 216. job 派发锁内准备与外部调用分离
+
+将 `dispatch_job` 的实例事务内准备提取至私有 `_prepare_dispatch_locked`：复核已批准事务与既有同 ID intent，保留生产新派发默认拒绝；实际持包锁时检查冲突、建立 snapshot 与 durable intent 并形成固定参数。原公开入口在退出实例事务后才调用 systemd-run，既有响应丢失 unknown 与同 ID 不重派行为不变。私有入口内部再次检查 Linux 管理员与 Debian 适配器，不持有或验证调用者的实例锁，未接入 helper 消息；不能凭返回参数授权或证明执行。
+
+新增定向测试检查默认拒绝不写 intent、不获取包锁，隔离替身允许下锁内准备不重取实例事务、不启动外部进程、已有 intent 不重派；使用生产 `_transaction`、`Helper._lease` 和 `package_lease` 的真实独立文件描述符，验证 intent 保存时实例与包锁均拒绝竞争，事务退出后可重新取得（`20261028-082016-6c70ee.log`，更新/job 定向 150 通过）。既有派发测试额外跟踪实例→包锁顺序，验证 runner 仅在两锁释放后调用。完整 1220 通过、16 跳过（`20261028-082041-cb2c75.log`），ruff 与 diff 检查通过。
+
+真实锁测试为同进程独立 open，绑定、批准、snapshot 与生产门禁使用替身；不证明跨进程、实际 systemd、持锁身份、受控 handler/消息/invocation 或崩溃恢复。新准确包尚未构建验收，旧 helper 和 snapshot 不自动更新；生产派发、worker、恢复与覆盖保护不变，P1 未完成。
