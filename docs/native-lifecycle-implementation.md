@@ -2699,3 +2699,35 @@ device-runtime: ValueError: configuration or runtime unavailable; see installati
 - 配对完成后带真实凭证的长期运行行为。
 - 重启后自启（`enabled: false`，未做 `enable` 验收）。
 - 泛化错误文案问题已记录但未修。
+
+
+## 289. unit 启用与重启自启验收
+
+### 目的
+第 288 节服务虽运行，但 `enabled=false`，自启未验。这是需求 P1「干净机器可靠安装和本机启动」的直接验收项。
+
+脚本 `scripts/accept-native-unit-enable-reboot-76c4060.sh`，两阶段：阶段 1 安装/登记/enable/启动；阶段 2 在**容器真实 stop+start 之后**核对自启。
+
+### 前提事实
+产品代码的 `register` 只写 unit 文件，`_register` 返回恒为 `enabled: false`、`started: false`，不执行 `systemctl enable`。所以 enable 是管理员显式步骤，脚本里单独执行，未改产品行为。
+
+### 阶段 1（`20261028-200945`）
+`systemctl is-enabled` 初次为 `disabled` → `systemctl enable` 创建 multi-user.target.wants 符号链接 → 变 `enabled`；启动后 `active/running`，MainPID 203，User/Group 12345。
+
+### 阶段 2（`20261028-201053`）
+容器 stop 后 start（新 PID1，`is-system-running=degraded`），**未执行任何 start 命令**，unit 自行恢复：
+
+| 检查 | 结果 |
+| --- | --- |
+| UnitFileState | `enabled` |
+| ActiveState / SubState | `active` / `running` |
+| MainPID | 38（新启动，与阶段 1 的 203 不同）|
+| /proc uid | 12345，非 root |
+| cwd | `/home/nativedev/instance` |
+
+MainPID 变化证明是重启后的新进程，不是旧进程残留。
+
+### 结论与边界
+「安装 → 登记 → enable → 重启自启 → 以注册用户运行」在 `.deb` 链路上成立。
+
+未覆盖：`.rpm` 同一链路；`uninstall` 是否清除 enable 符号链接；真实设备重启（仅容器 PID1 重启）。
