@@ -26,6 +26,13 @@
 现有 `Updates._transaction_locked` 可在调用方已持有规范实例锁时，复用相同的 ID 检查、绑定读取、updates 目录可信检查及 registry 目录 fsync，生成无歧义 stem；原 `_transaction` 在持锁后调用它。该私有初始化也不证明调用方持锁或消息来源；须全程持有与 helper 共用的真实实例租约，不能接收消息自报的绑定或路径。局部测试将它与 `_prepare_dispatch_locked` 串联，但尚未接入生产消息或建立受控身份。
 
 这是受控交接的内部结构准备，不是新增授权或可直接使用的 socket 接口。调用者必须持有真实、正确实例事务并提供由该事务生成的绑定和 stem；此私有函数自身无法证明持锁、绑定来源、受控代码、逐消息身份或 invocation。不得把返回的 argv 或 intent 作为已授权或已执行证明；在启动身份、锁交接、逐消息身份及外部 job 生命周期故障矩阵通过前，不能接入 handler 或移除默认拒绝。
+
+
+### 未接入生产监听器的逐段凭据接收组件
+
+`native_helper._receive_root_credential_frame` 是私有接收组件，按单连接单帧逐次 `recvmsg` 检查相同 root PID/UID/GID、有界长度、截断和绝对 deadline；拒绝附带描述符时关闭已交付 FD。它只观察发送字节的内核凭据，不解析业务动作、不调用 handler、不建立受控监督或 invocation 身份、不授权 dispatch；当前 `_serve` 不调用它，原有 socket 协议和权限语义未变。
+
+监听器必须在任何数据排队之前启用 `SO_PASSCRED`，接收端当前开关检查不能追溯证明这一时序；调用方须在成功或失败后关闭连接，不能处理第二帧。进程存活、PID namespace、消息发送者与 handler 执行者、代码身份及持久事务的一致性均须另外证明，不能凭接收结果开启生产 job 门禁。
 ## 线性化与状态
 
 - `PREPARED`：已经验证来源、准备和 root 批准；不意味着许可派发。

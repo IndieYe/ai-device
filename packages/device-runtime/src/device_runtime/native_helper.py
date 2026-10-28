@@ -5,6 +5,7 @@ package activation or automatic replay. Run the daemon via its dedicated root un
 """
 
 import argparse
+import array
 import errno
 import fcntl
 import hashlib
@@ -1072,6 +1073,70 @@ def _serve(registry, socket_path, *, group):
                     connection.sendall(json.dumps(response).encode() + b"\n")
                 except OSError:
                     pass  # A lost response must not cause the action to replay.
+
+
+def _receive_root_credential_frame(connection, *, deadline):
+    """Observe one root-sent frame; not a handler, code, or invocation proof.
+
+    The listener must enable SO_PASSCRED before any data can be queued. This
+    function cannot verify that historical precondition. The caller owns the
+    connection and must close it after this single frame, including on failure.
+    No business action or authorization is performed here.
+    """
+    if sys.platform != "linux" or not all(
+        hasattr(socket, name) for name in ("SO_PASSCRED", "SCM_CREDENTIALS", "SCM_RIGHTS")
+    ):
+        raise HelperError("per-message credentials unavailable")
+    try:
+        if connection.getsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED) != 1:
+            raise HelperError("per-message credentials not enabled")
+        data = bytearray()
+        sender = None
+        credential_size = struct.calcsize("3i")
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise HelperError("request deadline exceeded")
+            connection.settimeout(remaining)
+            chunk, controls, flags, _ = connection.recvmsg(
+                min(1024, MAX_REQUEST + 1 - len(data)),
+                socket.CMSG_SPACE(credential_size) + socket.CMSG_SPACE(256),
+            )
+            # The kernel installs delivered SCM_RIGHTS even on rejected records.
+            close_failed = False
+            for level, kind, payload in controls:
+                if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+                    descriptors = array.array("i")
+                    descriptors.frombytes(payload[:len(payload) - len(payload) % descriptors.itemsize])
+                    for fd in descriptors:
+                        try:
+                            os.close(fd)
+                        except OSError:
+                            close_failed = True
+            if close_failed:
+                raise HelperError("cannot close unexpected descriptors")
+            if flags & (socket.MSG_CTRUNC | socket.MSG_TRUNC) or not chunk:
+                raise HelperError("truncated or incomplete request")
+            if len(controls) != 1:
+                raise HelperError("one sender credential required")
+            level, kind, payload = controls[0]
+            if level != socket.SOL_SOCKET or kind != socket.SCM_CREDENTIALS or len(payload) != credential_size:
+                raise HelperError("invalid sender credential")
+            identity = struct.unpack("3i", payload)
+            if identity[0] <= 0 or identity[1] != 0 or (sender is not None and sender != identity):
+                raise HelperError("sender changed or is not root")
+            sender = identity
+            data.extend(chunk)
+            if len(data) > MAX_REQUEST:
+                raise HelperError("request too large")
+            if b"\n" in data:
+                if not data.endswith(b"\n") or data.count(b"\n") != 1:
+                    raise HelperError("trailing or multiple request frames")
+                if time.monotonic() >= deadline:
+                    raise HelperError("request deadline exceeded")
+                return bytes(data), sender
+    except OSError as exc:
+        raise HelperError("credential frame receive failed") from exc
 
 
 @contextmanager

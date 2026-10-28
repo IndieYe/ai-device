@@ -1723,3 +1723,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 无网络隔离 systemd 容器安装惰性旧包夹具并解包准确 DEB，普通用户创建实例并登记；包内 update、job、helper 与 wheel 一致。真实 `_transaction` 持实例租约下，`_transaction_locked` 返回相同绑定与 stem，独立重取实例锁被拒绝；正常准备批准后，新生产 dispatch 默认拒绝且不创建 intent，人工匹配 intent 同 ID 只观察不重派；真实 systemd 启动 snapshot worker 被默认拒绝且无 apply/sender/outcome（`20261028-083105-6d8131.log`，`scripts/accept-native-worker-default-deny-e3ecbb6.sh`）。构建和验收容器已删除（`20261028-083131-3456bc.log`）。
 
 这是惰性旧包加新包解包的隔离夹具，不是干净安装或实际升级；同进程实例锁竞争不证明受控 handler、消息来源、生产 invocation、跨进程锁交接、外部进程树或崩溃恢复。门禁与覆盖保护不变，P1 未完成。
+
+
+## 220. 未接入生产的 root 消息逐段凭据接收组件
+
+新增私有 `native_helper._receive_root_credential_frame`：要求 Linux 和已启用的 `SO_PASSCRED`，逐段 `recvmsg` 检查唯一完整内核凭据、同一 root PID/UID/GID、有界单行帧及单调时钟整帧 deadline；缺失、混合、截断、未知控制数据、超长、多帧或异常拒绝。拒绝附带 `SCM_RIGHTS` 时关闭已交付 FD，某次关闭失败仍尝试余下 FD 并拒绝。调用者负责在所有结果后关闭连接；当前开关检查不能证明数据排队前已启用，后续 listener 必须显式保证。
+
+模拟测试覆盖分段、混合凭据、非 root、无/重复/畸形凭据、截断、大小、deadline、关闭失败和 FD 清理；定向 194 通过、1 跳过（`20261028-083538-3fb2e3.log`，最后三个补充用例前）；完整 1240 通过、16 跳过（`20261028-083650-a9805e.log`），ruff 与 diff 检查通过。新组件尚未接入 `_serve`，不解析动作、不调用 handler、不验证代码或 invocation、不授予派发权限；实际 Linux socket 和准确包验证另待记录。旧 helper/snapshot 不自动更新，生产门禁不变。
