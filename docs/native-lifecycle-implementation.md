@@ -2028,3 +2028,19 @@ query-only、未接生产的监督候选在直接子回收结果未知时，不�
 四个严格一次性 Linux 夹具的候选准备步骤显式以测试替身绕过受管发布默认门禁，范围仅该测试进程；不提供产品绕过选项。实际重跑 `accept-native-query-supervisor-source.sh`，验证正常停止不退休、验证期间停止与 fork/pidfd 故障回收（`20261028-115759-0f119e.log`）；重跑 `accept-native-query-handler-tree-source.sh` 的 crash 模式，观察监督父 SIGKILL 后后代仍活且锁可取，但当前源码新 start 和同候选重入因持久意图拒绝（`20261028-115816-c210d2.log`）。均为旧 DEB 源码覆盖、受控替身，并非真实 Device 服务或 systemd 外部 job 验收，两个一次性容器已删除。
 
 `accept-native-query-supervisor-descendant-source.sh` 和 `accept-native-supervisor-reap-failure-source.sh` 只调整了同样的夹具准备替身，尚未重新执行；其他使用受管候选发布或旧候选启动的历史脚本也尚未逐项调整、重跑。最新完整产品回归仍为第255节的 1348 passed / 16 skipped。不得将夹具替身当成生产授权，也不改变持久未知或其他关闭门禁。
+
+
+## 257. 重启后补验两个监督故障夹具
+
+服务恢复后核实 `ses-14204` 非私有、唯一 execution 指向任务、任务停止原因检查开关开启；原 Worktree 干净且 HEAD 与已保存检查点一致。补跑第256节中两个已调整但未执行的隔离夹具：`query-supervisor-descendant-source` 注入验证子进程的 success 和 fail 两种模式均通过（`20261028-120254-eb945d.log`、`20261028-120338-6aa333.log`）；`supervisor-reap-failure-source` 的 pidfd 和 gated 两种模式均通过（`20261028-120309-8a62ab.log`、`20261028-120352-384c15.log`）。四个一次性容器均删除并核对不存在。
+
+候选准备是明确标识的测试替身；验证阶段的派生子进程也为注入替身，现行 `_verified_helper_bytes` 只读文件。查询循环使用替代 worker，不代表实际外部 systemd job、持久终态、真实服务或掉电安全。其他依赖受管发布的历史脚本尚未全部调整或重跑，需按各自隔离约束逐个处理；生产候选门禁保持关闭。
+
+
+## 258. 新 start 初始查询前检查监督未知意图
+
+审计发现 `Helper.handle(start)` 原先在监督意图检查前先调用 `_snapshot`；真实 `Systemd.query` 会启动 `systemctl show` 子进程，即使之后拒绝 start 也已派生查询。现对没有既有同 ID intent 的新 start，在实例锁内取得 package SH、先检查 query 监督意图，再持锁执行初始查询；已有同 ID 的原操作观察仍按只读路径返回，不因本次收紧重放动作。原有发布 start intent 前的第二次包锁检查保留，不能将初次检查视为跨阶段授权。query/reconcile 保持原只读语义。
+
+定向测试 302 passed / 1 skipped；隔离 Linux 在真实登记后用受控适配器验证初始 start 查询期间 package EX 拒绝，并在真实私有监督 SIGKILL 后确认新 start 在调用查询和 sender 前拒绝（`20261028-120642-babec1.log`）；无真实 Device 服务启动，测试容器已删除。完整回归 1350 passed / 16 skipped、ruff 通过（`20261028-120655-1c3500.log`）。
+
+此收紧只在已发布意图时阻止新 start 的初始查询，并在查询调用期间阻止遵守包锁协议的意图发布；查询返回或超时后，其后代是否退出仍未证明，query/reconcile 和既有 ID 观察也可能产生查询子进程。旧 helper/snapshot 不自动生效；不得将锁空闲或本次检查作为进程树收口、恢复或生产授权，所有默认门禁保持关闭。

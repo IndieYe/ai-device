@@ -2189,10 +2189,38 @@ def test_query_supervisor_unknown_blocks_new_start_but_not_query(helper):
     marker.write_bytes(b'unknown')
     before = marker.read_bytes()
     assert service.handle(req('query'), peer_uid=record['uid'])['intent'] is None
+    adapter.calls.clear()
     with pytest.raises(nh.HelperError, match='query supervisor intent remains unknown'):
         service.handle(req('start'), peer_uid=record['uid'])
     assert marker.read_bytes() == before
     assert not (service.registry / 'op-probe-one.json').exists()
+    assert adapter.calls == []
+
+
+def test_new_start_holds_package_lock_during_initial_query(helper):
+    service, adapter, record = helper
+    original_query = adapter.query
+    observed = []
+
+    def query(unit):
+        with pytest.raises(nh.HelperError, match="still executing"), nh.package_lease(service.registry, exclusive=True):
+            pytest.fail("query supervisor published while initial start query ran")
+        observed.append(True)
+        return original_query(unit)
+
+    adapter.query = query
+    service.handle(req('start'), peer_uid=record['uid'])
+    assert observed
+
+
+def test_existing_start_observation_remains_readable_with_supervisor_intent(helper):
+    service, adapter, record = helper
+    service.handle(req('start'), peer_uid=record['uid'])
+    (service.registry / 'query-supervisor.intent.json').write_bytes(b'unknown')
+    adapter.calls.clear()
+    result = service.handle(req('start'), peer_uid=record['uid'])
+    assert result['replayed'] is False
+    assert any(action == 'query' for action, _ in adapter.calls)
     assert not any(action == 'start' for action, _ in adapter.calls)
 
 

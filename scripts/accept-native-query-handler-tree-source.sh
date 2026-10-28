@@ -21,6 +21,19 @@ from pathlib import Path
 from device_runtime import native_bootstrap as b, native_helper as h
 registry=Path('/var/lib/ai-device/manager')
 h.register(registry,Path('/etc/systemd/system'),instance_id='probe',root=Path('/home/probe/instance'),username='probe',environment_file='/etc/device-query-fixture.env')
+record=json.loads((registry/'probe.json').read_text())
+class LockProbe:
+ def query(self,unit):
+  try:
+   with h.package_lease(registry,exclusive=True): raise AssertionError('publisher entered during query')
+  except h.HelperError as exc: assert 'package or start sender still executing' in str(exc)
+  raise RuntimeError('fixture stops before any start')
+ def start(self,*args,**kwargs): raise AssertionError('fixture must not start')
+try: h.Helper(registry,adapter=LockProbe()).handle({'action':'start','instance_id':'probe','operation_id':'lockprobe'},peer_uid=0)
+except RuntimeError as exc: assert str(exc)=='fixture stops before any start'
+else: raise AssertionError('fixture query did not run')
+assert not (registry/'op-probe-lockprobe.json').exists()
+print('INITIAL_START_QUERY_HOLDS_PACKAGE_SH_BEFORE_INTENT')
 (registry/'bootstrap-candidates').mkdir(mode=0o700)
 # Test-only fixture preparation in the disposable container, never production authorization.
 b._require_proven_candidate_publication_fence=lambda: None
@@ -98,14 +111,13 @@ b._supervise_candidate_queries(sys.argv[1],"candidate",registry=sys.argv[2],sock
    record=json.loads((registry/'probe.json').read_text())
    class Adapter:
     def query(self,unit):
-     runner=record['root']+'/run'
-     return {'ActiveState':'inactive','SubState':'dead','MainPID':'0','Job':'','User':str(record['uid']),'Group':str(record['gid']),'FragmentPath':record['unit_path'],'ExecStart':'{ path='+runner+' ; argv[]='+runner+' client ; ignore_errors=no ; }'}
+     raise AssertionError('query called despite unknown supervisor')
     def start(self,*args,**kwargs): raise AssertionError('start called despite unknown supervisor')
    try: h.Helper(registry,adapter=Adapter()).handle({'action':'start','instance_id':'probe','operation_id':'aftercrash'},peer_uid=0)
    except h.HelperError as exc: assert 'query supervisor intent remains unknown' in str(exc)
    else: raise AssertionError('start was not fenced')
    assert not (registry/'op-probe-aftercrash.json').exists() and intent.read_bytes()==before
-   print('CRASH_INTENT_BLOCKS_NEW_HELPER_START_WITHOUT_ACTION')
+   print('CRASH_INTENT_BLOCKS_NEW_HELPER_START_BEFORE_QUERY_OR_ACTION')
    for fd in fds[1:]:
     still=select.poll(); still.register(fd,select.POLLIN); assert not still.poll(0),'descendant exited before retry'
    print('CRASH_INTENT_BLOCKS_SAME_CANDIDATE_RESTART_BEFORE_VALIDATION')

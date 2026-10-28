@@ -722,7 +722,16 @@ class Helper:
         if type(peer_uid) is not int or peer_uid not in (0, record["uid"]):
             raise HelperError("peer is not the registered owner")
         with self._lease(instance_id):
-            snapshot = self._snapshot(record)
+            intent_path = self.registry / f"op-{instance_id}-{operation_id}.json"
+            if action == "start" and not intent_path.exists():
+                # Query can launch a subprocess. Refuse a known supervisor
+                # intent before it, and prevent publication during this query.
+                # This does not prove that query descendants have exited.
+                with package_lease(self.registry):
+                    _assert_no_query_supervisor_intent(self.registry)
+                    snapshot = self._snapshot(record)
+            else:
+                snapshot = self._snapshot(record)
             result = {
                 "instance_id": instance_id,
                 "operation_id": operation_id,
@@ -847,7 +856,6 @@ class Helper:
                     else None
                 )
                 return result
-            intent_path = self.registry / f"op-{instance_id}-{operation_id}.json"
             result_path = self.registry / f"result-{instance_id}-{operation_id}.json"
             intent = {
                 "action": "start",
