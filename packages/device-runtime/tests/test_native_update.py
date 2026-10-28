@@ -505,6 +505,40 @@ def test_shared_start_sender_lease_blocks_package_apply(update):
     assert packages.calls == 0
 
 
+def test_locked_transaction_setup_matches_normal_transaction_and_does_not_relock(update, monkeypatch):
+    manager, _helper, _packages, _package = update
+    real_helper = nh.Helper(manager.registry)
+    monkeypatch.setattr(real_helper, "_binding", lambda instance: {"instance_id": instance})
+    manager.helper = real_helper
+    with manager._transaction("a--b", "c") as normal:
+        with pytest.raises(nh.HelperError, match="instance management busy"), real_helper._lease("a--b"):
+            pass
+        locked = manager._transaction_locked("a--b", "c")
+        assert locked == normal
+        assert locked[1] == manager.registry / "updates/4-a--b--c"
+    with real_helper._lease("a--b"):
+        assert manager._transaction_locked("a--b", "c") == normal
+
+
+def test_locked_transaction_setup_fails_closed_when_registry_fsync_fails(update, monkeypatch):
+    manager, _helper, _packages, _package = update
+
+    def fail(_fd):
+        raise OSError("injected registry fsync failure")
+
+    monkeypatch.setattr(nu.os, "fsync", fail)
+    with pytest.raises(OSError, match="registry fsync failure"):
+        manager._transaction_locked("probe", "one")
+    assert not list((manager.registry / "updates").glob("*.job-intent.json"))
+
+
+@pytest.mark.parametrize("instance,operation", [("../probe", "one"), ("probe", "../one")])
+def test_locked_transaction_setup_rejects_invalid_identifiers(update, instance, operation):
+    manager, _helper, _packages, _package = update
+    with pytest.raises(nh.HelperError):
+        manager._transaction_locked(instance, operation)
+
+
 def test_transaction_key_has_no_separator_alias(update):
     manager, _, _, _ = update
     # These pairs had the same raw concatenation: a--b--c.

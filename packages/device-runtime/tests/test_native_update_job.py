@@ -264,7 +264,9 @@ def test_locked_dispatch_preparation_uses_real_instance_and_package_leases(trans
         real_save(path, value)
 
     monkeypatch.setattr(job.helper, "_save_new", save_with_competitors)
-    with manager._transaction("probe", "one") as (binding, stem):
+    with manager.helper._lease("probe"):
+        binding, stem = manager._transaction_locked("probe", "one")
+        assert stem == transaction
         existing, prepared = job._prepare_dispatch_locked(manager, "probe", "one", binding, stem)
         assert existing is None and prepared is not None
         with pytest.raises(job.helper.HelperError, match="instance management busy"), manager.helper._lease("probe"):

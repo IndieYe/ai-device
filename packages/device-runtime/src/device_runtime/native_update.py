@@ -192,18 +192,29 @@ class Updates:
         nh._identifier(operation_id)
         # Reuse helper instance lease: starts and update actions cannot overlap.
         with self.helper._lease(instance_id):
-            record = self.helper._binding(instance_id)
-            directory = self.registry / "updates"
-            directory.mkdir(mode=0o700, exist_ok=True)
-            nh._trusted(directory, directory=True)
-            # Persist the directory entry before an apply intent inside it can
-            # become the durable fence observed by the next helper process.
-            with nh._directory_fd(self.registry) as fd:
-                os.fsync(fd)
-            # IDs permit '--'; length-prefix the first component so distinct
-            # (instance, operation) pairs cannot alias the same transaction.
-            stem = directory / f"{len(instance_id)}-{instance_id}--{operation_id}"
-            yield record, stem
+            yield self._transaction_locked(instance_id, operation_id)
+
+    def _transaction_locked(self, instance_id, operation_id):
+        """Initialize canonical update facts while the caller holds the instance lease.
+
+        This private helper neither acquires nor proves ownership of the lease;
+        callers must use the canonical helper lease and hold it through use.
+        It does not authorize a helper action or external dispatch.
+        """
+        nh._identifier(instance_id)
+        nh._identifier(operation_id)
+        record = self.helper._binding(instance_id)
+        directory = self.registry / "updates"
+        directory.mkdir(mode=0o700, exist_ok=True)
+        nh._trusted(directory, directory=True)
+        # Persist the directory entry before an apply intent inside it can
+        # become the durable fence observed by the next helper process.
+        with nh._directory_fd(self.registry) as fd:
+            os.fsync(fd)
+        # IDs permit '--'; length-prefix the first component so distinct
+        # (instance, operation) pairs cannot alias the same transaction.
+        stem = directory / f"{len(instance_id)}-{instance_id}--{operation_id}"
+        return record, stem
 
     def prepare(
         self,

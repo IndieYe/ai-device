@@ -1705,3 +1705,12 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 无网络隔离 systemd 容器安装惰性旧包夹具并解包准确 DEB，普通用户创建实例、登记、准备和批准；包内 worker、update、helper 模块与 wheel 字节一致。未修改生产门禁时，实际 `dispatch_job` 对新 ID 在写 intent 或调用 runner 前拒绝；人工保存匹配 intent 后同 ID 返回只观察、不重派；以该 snapshot 在真实隔离 systemd 中执行 worker，新动作默认拒绝，intent 和 active 不变且不创建 apply intent/sender/outcome（`20261028-082437-ac97b5.log`；`scripts/accept-native-worker-default-deny-513fb1d.sh`）。构建与验收专用容器均已回收（`20261028-082459-f25563.log`）。
 
 这是旧包惰性夹具加新 DEB 解包，不是干净包安装或实际升级；人工 intent 不证明真实派发、受控 handler、逐消息身份、invocation、worker 进程树或崩溃恢复。生产门禁及覆盖保护不变，旧包与 snapshot 不自动更新，P1 未完成。
+
+
+## 218. 已持实例锁时的规范更新事务初始化
+
+将 `Updates._transaction` 中持锁后的 ID 校验、注册绑定读取、可信 updates 目录检查、registry 目录 fsync 与长度前缀 stem 计算提取为私有 `_transaction_locked`；原事务保留锁前 ID 校验、取得同一 helper 实例锁并调用该函数。未来受控 handler 已持该锁时可复用同一初始化，而不是重取锁或接收消息自报的绑定/路径；该函数不检查调用者确实持锁，也不授予动作权限，当前未接入新 handler。
+
+测试验证真实 helper 实例锁持有期间普通事务和锁内初始化返回相同绑定及无歧义 stem，锁不会重入；非法 ID 和 registry fsync 注入失败拒绝，不写 job intent。另一项测试在真实实例锁下串联 `_transaction_locked` 与 `_prepare_dispatch_locked`，并在 intent 保存时用独立 open 验证实例及包锁均冲突；绑定、准备、snapshot 和生产门禁使用替身，仅证明受测文件锁及流程。更新/job 定向 154 通过（`20261028-082658-c9d687.log`，串联调整前）；完整 1224 通过、16 跳过（`20261028-082724-16f6bf.log`），ruff 与 diff 检查通过。
+
+未证明跨进程运行身份、消息/handler 绑定、外部 job 终态或崩溃恢复；生产默认拒绝不变。新代码准确包尚未构建，旧包与冻结 snapshot 不自动更新，P1 未完成。
