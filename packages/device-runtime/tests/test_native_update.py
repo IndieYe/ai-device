@@ -314,6 +314,45 @@ def test_existing_apply_intent_disappearance_is_not_new_operation(update, monkey
     assert packages.calls == 1
 
 
+@pytest.mark.parametrize("kind", ["dangling", "symlink", "directory", "fifo"])
+def test_invalid_existing_apply_intent_rejected_before_metadata(update, monkeypatch, kind):
+    manager, packages, _, _ = update
+    intent = manager.registry / "updates/5-probe--one.apply-intent.json"
+    target = manager.registry / "safe-target"
+    target.write_bytes(b"unchanged")
+    if kind == "dangling":
+        intent.symlink_to(manager.registry / "missing")
+    elif kind == "symlink":
+        intent.symlink_to(target)
+    elif kind == "directory":
+        intent.mkdir()
+    else:
+        os.mkfifo(intent)
+    monkeypatch.setattr(packages, "metadata", lambda *_: pytest.fail("metadata called"))
+    monkeypatch.setattr(packages, "installed", lambda *_: pytest.fail("installed called"))
+    with pytest.raises(nu.UpdateError, match="existing apply intent"):
+        manager.apply("probe", "one")
+    assert os.path.lexists(intent) and target.read_bytes() == b"unchanged"
+    assert packages.calls == 0
+
+
+def test_apply_intent_appearing_during_initialization_refuses_before_metadata(update, monkeypatch):
+    manager, packages, _, _ = update
+    original = manager._transaction_locked
+    intent = manager.registry / "updates/5-probe--one.apply-intent.json"
+
+    def initialize(*args):
+        result = original(*args)
+        intent.write_bytes(b"unknown")
+        return result
+
+    monkeypatch.setattr(manager, "_transaction_locked", initialize)
+    monkeypatch.setattr(packages, "metadata", lambda *_: pytest.fail("metadata called"))
+    with pytest.raises(nu.UpdateError, match="intent appeared"):
+        manager.apply("probe", "one")
+    assert intent.read_bytes() == b"unknown" and packages.calls == 0
+
+
 def test_reconcile_missing_directory_does_not_initialize(update, tmp_path, monkeypatch):
     manager, packages, helper, _ = update
     registry = tmp_path / "empty-registry"

@@ -107,6 +107,17 @@ with tempfile.TemporaryDirectory(prefix='device-prep-fence-',dir='/root') as d:
     assert result['apply_intent']=={} and observer.calls==['metadata','installed']
     assert {p.name:p.read_bytes() for p in stem.parent.iterdir()}==before and marker.read_bytes()==b'unknown'
     print('EXISTING_APPLY_OBSERVES_WITHOUT_DIRECTORY_INIT_OR_REPLAY')
+    for op,kind in [('broken','dangling'),('link','symlink'),('pipe','fifo')]:
+        intent=registry/f'updates/5-probe--{op}.apply-intent.json'
+        if kind=='dangling': intent.symlink_to(registry/'missing')
+        elif kind=='symlink': intent.symlink_to(stem.with_suffix('.apply-intent.json'))
+        else: os.mkfifo(intent)
+        previous=list(observer.calls)
+        try: manager.apply('probe',op)
+        except u.UpdateError as exc: assert 'existing apply intent' in str(exc)
+        else: raise AssertionError('invalid apply intent accepted')
+        assert os.path.lexists(intent) and observer.calls==previous
+    print('INVALID_APPLY_INTENT_REFUSED_BEFORE_PACKAGE_QUERY')
     class JobManager:
         packages=u.Debian()
         registry=registry

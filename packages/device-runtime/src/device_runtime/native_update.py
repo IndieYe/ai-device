@@ -202,10 +202,8 @@ class Updates:
         with self.helper._lease(instance_id):
             directory = self.registry / "updates"
             stem = directory / f"{len(instance_id)}-{instance_id}--{operation_id}"
-            if stem.with_suffix(".apply-intent.json").exists():
+            if os.path.lexists(stem.with_suffix(".apply-intent.json")):
                 binding, stem = self._existing_transaction_locked(instance_id, operation_id)
-                if not stem.with_suffix(".apply-intent.json").exists():
-                    raise UpdateError("existing apply intent disappeared")
                 yield binding, stem, True
             else:
                 binding, stem = self._transaction_locked(instance_id, operation_id)
@@ -504,11 +502,19 @@ class Updates:
         with self._apply_transaction(instance_id, operation_id) as (binding, stem, observing):
             started = stem.with_suffix(".apply-intent.json")
             outcome = stem.with_suffix(".outcome.json")
-            if observing and not started.exists():
-                raise UpdateError("existing apply intent disappeared")
-            if started.exists():
+            if observing:
+                try:
+                    nh._trusted(started)
+                    if not stat.S_ISREG(started.lstat().st_mode):
+                        raise UpdateError("existing apply intent must be a regular file")
+                except FileNotFoundError as exc:
+                    raise UpdateError("existing apply intent disappeared") from exc
+                except nh.HelperError as exc:
+                    raise UpdateError("existing apply intent is not trusted") from exc
                 value = self._prepared(binding, stem)
                 return self._observation(stem, value)
+            if os.path.lexists(started):
+                raise UpdateError("apply intent appeared during transaction initialization")
             value = self._prepared_for_mutation(binding, stem)
             # One unresolved transaction per instance, including applied pending
             # activation. New IDs never bypass a failed/unknown transaction.
