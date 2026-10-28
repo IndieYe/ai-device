@@ -388,6 +388,28 @@ def test_reconcile_existing_transaction_does_not_initialize(update, monkeypatch)
     assert {path.name: path.read_bytes() for path in directory.iterdir()} == before
 
 
+@pytest.mark.parametrize("suffix", [".apply-intent.json", ".outcome.json", ".recovery.json"])
+@pytest.mark.parametrize("kind", ["dangling", "symlink", "directory", "fifo"])
+def test_reconcile_rejects_invalid_observation_evidence(update, monkeypatch, suffix, kind):
+    manager, packages, _, _ = update
+    path = (manager.registry / "updates/5-probe--one").with_suffix(suffix)
+    target = manager.registry / "observation-target"
+    target.write_bytes(b"unchanged")
+    if kind == "dangling":
+        path.symlink_to(manager.registry / "missing")
+    elif kind == "symlink":
+        path.symlink_to(target)
+    elif kind == "directory":
+        path.mkdir()
+    else:
+        os.mkfifo(path)
+    monkeypatch.setattr(packages, "installed", lambda *_: pytest.fail("installed query called"))
+    with pytest.raises(nu.UpdateError, match="update observation evidence"):
+        manager.reconcile("probe", "one")
+    assert os.path.lexists(path) and target.read_bytes() == b"unchanged"
+    assert packages.calls == 0
+
+
 @pytest.mark.parametrize(
     "mode,state",
     [

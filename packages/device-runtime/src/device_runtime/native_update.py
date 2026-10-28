@@ -644,7 +644,15 @@ class Updates:
     def _observation(self, stem, value):
         def read(suffix):
             path = stem.with_suffix(suffix)
-            return json.loads(path.read_text()) if path.exists() else None
+            if not os.path.lexists(path):
+                return None
+            try:
+                nh._trusted(path)
+                if not stat.S_ISREG(path.lstat().st_mode):
+                    raise UpdateError("update observation evidence must be a regular file")
+                return json.loads(path.read_text())
+            except nh.HelperError as exc:
+                raise UpdateError("update observation evidence is not trusted") from exc
 
         return {
             "prepared": value,

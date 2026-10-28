@@ -118,6 +118,19 @@ with tempfile.TemporaryDirectory(prefix='device-prep-fence-',dir='/root') as d:
         else: raise AssertionError('invalid apply intent accepted')
         assert os.path.lexists(intent) and observer.calls==previous
     print('INVALID_APPLY_INTENT_REFUSED_BEFORE_PACKAGE_QUERY')
+    evidence=root/'evidence'; evidence.mkdir(mode=0o700)
+    evidence_manager=u.Updates(evidence,packages=ObservationPackages(),helper=Helper())
+    for suffix,kind in [('.apply-intent.json','dangling'),('.outcome.json','symlink'),('.recovery.json','fifo')]:
+        case=evidence/kind; case.mkdir(mode=0o700); case_stem=case/'operation'
+        path=case_stem.with_suffix(suffix)
+        if kind=='dangling': path.symlink_to(case/'missing')
+        elif kind=='symlink': path.symlink_to(prepared)
+        else: os.mkfifo(path)
+        try: evidence_manager._observation(case_stem,{'metadata':{'Package':'fixture'},'instance_id':'probe'})
+        except u.UpdateError as exc: assert 'update observation evidence' in str(exc)
+        else: raise AssertionError('invalid observation evidence accepted')
+        assert os.path.lexists(path)
+    print('INVALID_OBSERVATION_EVIDENCE_REFUSED_BEFORE_INSTALLED_QUERY')
     class JobManager:
         packages=u.Debian()
         registry=registry
