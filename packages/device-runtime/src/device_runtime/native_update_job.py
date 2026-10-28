@@ -257,7 +257,9 @@ def dispatch_job(manager, instance_id, operation_id, *, runner=None):
     if not isinstance(manager.packages, update.Debian):
         raise JobError("only Debian production adapter can dispatch")
     runner = runner or subprocess.run
-    with manager._transaction(instance_id, operation_id) as (binding, stem):
+    with manager._dispatch_transaction(
+        instance_id, operation_id, require_new_fence=_require_proven_job_fence
+    ) as (binding, stem):
         existing, prepared = _prepare_dispatch_locked(
             manager, instance_id, operation_id, binding, stem
         )

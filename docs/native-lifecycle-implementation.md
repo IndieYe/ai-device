@@ -2062,3 +2062,10 @@ query-only、未接生产的监督候选在直接子回收结果未知时，不�
 `_prepare_dispatch_locked` 此前先调用 `_prepared`（可能启动包元数据工具）再检查新 job 的默认拒绝门禁。现对无既有 job intent 的请求先执行原有永拒门禁，再读取准备信息；存在断链或其他 symlink 的 intent 明确拒绝，避免把无效条目当作既有操作绕过。已有有效 job intent 的观察仍按既有准备校验和无重放路径处理。此改动只提前拒绝，不放开派发、恢复、退休或包操作。
 
 job/update 定向 164 passed；完整回归 1358 passed / 16 skipped、ruff 通过（`20261028-121705-b5c2c7.log`）。隔离 Linux 旧包加源码覆盖，在受控 manager 下确认新 job 于元数据调用和 intent 写入前拒绝（`20261028-121701-6a2951.log`）；未调用 systemd-run、未启动真实 Device 或包事务，容器已删除。调用方在进入该私有函数前的 `_transaction` 仍可能创建 updates 目录和检查绑定，此验证不声称其完全无文件副作用；旧 worker/snapshot 不自动更新。
+
+
+## 261. 新 job 拒绝前不初始化更新事务
+
+第260节的调用方在默认拒绝前会创建 updates 目录。现新增长期受实例锁保护的 dispatch 预检查事务：准确判断该 ID 的 job intent 不存在时先调用既有默认拒绝门禁，只有既有 intent 的观察或测试明确替身放行才初始化事务；原私有函数保留再次检查以防调用方绕过和交错。已存在的 intent 继续走既有核验和不重放逻辑，异常 symlink 仍拒绝。实例管理锁本身可能创建实例锁文件，因此不声称整个调用零文件副作用。
+
+隔离 Linux 用真实 `Updates` 和受控 helper，确认新 job 在 binding、updates 目录和 runner 前拒绝（`20261028-122040-1f79f9.log`）；未运行真实 systemd job，容器已删除。完整 1359 passed / 16 skipped、ruff 通过（`20261028-122044-911fb4.log`）；首次定向测试通过但 ruff 报新增测试导入分组，修正后完整重跑通过。更改只收紧默认拒绝，不能替代旧版本、并发进程树及持久终态协议。

@@ -33,6 +33,15 @@ with tempfile.TemporaryDirectory(prefix='device-prep-fence-',dir='/root') as d:
             except h.HelperError as exc: assert 'still executing' in str(exc)
             return {'Package':'ai-device-native-client','Version':'2','Architecture':'amd64'}
         def installed(self,name): return {'status':'fixture'}
+    nojob=root/'nojob'; nojob.mkdir(mode=0o700)
+    class NoBinding(Helper):
+        def _binding(self, instance_id): raise AssertionError('binding read before denial')
+    denied_manager=u.Updates(nojob,packages=u.Debian(),helper=NoBinding())
+    try: job.dispatch_job(denied_manager,'probe','new',runner=lambda *a,**k: (_ for _ in ()).throw(AssertionError('job ran')))
+    except job.JobError as exc: assert 'new dispatch disabled' in str(exc)
+    else: raise AssertionError('new dispatch accepted')
+    assert not (nojob/'updates').exists()
+    print('NEW_JOB_DENIED_BEFORE_UPDATE_DIRECTORY_OR_BINDING')
     packages=Packages(); manager=u.Updates(registry,packages=packages,helper=Helper())
     marker=registry/'query-supervisor.intent.json'; marker.symlink_to('missing')
     try: manager.prepare('probe','one',package,sha256=h._digest(package),version='2')

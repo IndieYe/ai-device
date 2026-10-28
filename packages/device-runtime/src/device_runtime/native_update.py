@@ -195,6 +195,17 @@ class Updates:
             yield self._transaction_locked(instance_id, operation_id)
 
     @contextmanager
+    def _dispatch_transaction(self, instance_id, operation_id, *, require_new_fence):
+        """Reject a new dispatch before creating the update transaction directory."""
+        nh._identifier(instance_id)
+        nh._identifier(operation_id)
+        with self.helper._lease(instance_id):
+            stem = self.registry / "updates" / f"{len(instance_id)}-{instance_id}--{operation_id}"
+            if not os.path.lexists(stem.with_suffix(".job-intent.json")):
+                require_new_fence()
+            yield self._transaction_locked(instance_id, operation_id)
+
+    @contextmanager
     def _preparation_transaction(self, instance_id, operation_id):
         """Fence preparation writes and metadata queries against supervisor intent."""
         nh._identifier(instance_id)

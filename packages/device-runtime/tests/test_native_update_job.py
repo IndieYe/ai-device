@@ -113,7 +113,7 @@ def test_dispatch_records_once_without_replay(transaction, monkeypatch, lost):
             assert held.pop() == "package"
 
     @contextmanager
-    def txn(*a):
+    def txn(*a, **kwargs):
         held.append("instance")
         try:
             yield {}, transaction
@@ -127,7 +127,7 @@ def test_dispatch_records_once_without_replay(transaction, monkeypatch, lost):
     manager = SimpleNamespace(
         packages=update.Debian(),
         registry=transaction.parent.parent,
-        _transaction=txn,
+        _transaction=txn, _dispatch_transaction=txn,
         _prepared=prepared,
         _apply_lease=lease,
     )
@@ -319,7 +319,7 @@ def test_dispatch_fsync_failure_never_calls_runner(transaction, monkeypatch, fai
     monkeypatch.setattr(job.helper, "_digest", digest)
 
     @contextmanager
-    def txn(*args):
+    def txn(*args, **kwargs):
         yield {}, transaction
 
     @contextmanager
@@ -328,7 +328,7 @@ def test_dispatch_fsync_failure_never_calls_runner(transaction, monkeypatch, fai
 
     manager = SimpleNamespace(
         packages=update.Debian(), registry=transaction.parent.parent,
-        _transaction=txn, _prepared=lambda *args: {}, _apply_lease=lease,
+        _transaction=txn, _dispatch_transaction=txn, _prepared=lambda *args: {}, _apply_lease=lease,
     )
     original_fsync = os.fsync
 
@@ -396,7 +396,7 @@ def test_dispatch_process_exit_after_durable_intent_does_not_replay(transaction,
         raise AssertionError("runner must not execute")
 
     @contextmanager
-    def txn(*args):
+    def txn(*args, **kwargs):
         yield {}, transaction
 
     @contextmanager
@@ -407,7 +407,7 @@ def test_dispatch_process_exit_after_durable_intent_does_not_replay(transaction,
     monkeypatch.setattr(job.helper, "_save_new", save_and_exit)
     manager = SimpleNamespace(
         packages=update.Debian(), registry=transaction.parent.parent,
-        _transaction=txn, _prepared=lambda *args: {}, _apply_lease=lease,
+        _transaction=txn, _dispatch_transaction=txn, _prepared=lambda *args: {}, _apply_lease=lease,
     )
     child = os.fork()
     if child == 0:
@@ -468,10 +468,10 @@ def test_recorded_dispatch_rejects_identity_or_evidence_drift(transaction, monke
     before = path.read_bytes()
 
     @contextmanager
-    def txn(*args):
+    def txn(*args, **kwargs):
         yield {}, transaction
 
-    manager = SimpleNamespace(packages=update.Debian(), _transaction=txn, _prepared=lambda *a: {})
+    manager = SimpleNamespace(packages=update.Debian(), _transaction=txn, _dispatch_transaction=txn, _prepared=lambda *a: {})
     calls = []
     with pytest.raises(job.JobError, match="recorded job intent differs"):
         job.dispatch_job(manager, "probe", "one", runner=lambda *a, **kw: calls.append(a))
@@ -510,7 +510,7 @@ def test_dispatch_process_exit_after_runner_begins_stays_recorded(transaction, m
         return original_digest(path)
 
     @contextmanager
-    def txn(*args):
+    def txn(*args, **kwargs):
         yield {}, transaction
 
     @contextmanager
@@ -520,7 +520,7 @@ def test_dispatch_process_exit_after_runner_begins_stays_recorded(transaction, m
     monkeypatch.setattr(job.helper, "_digest", digest)
     manager = SimpleNamespace(
         packages=update.Debian(), registry=transaction.parent.parent,
-        _transaction=txn, _prepared=lambda *args: {}, _apply_lease=lease,
+        _transaction=txn, _dispatch_transaction=txn, _prepared=lambda *args: {}, _apply_lease=lease,
     )
     marker = transaction.parent / "runner-started-test-marker"
     parent_pid = os.getpid()
@@ -560,7 +560,7 @@ def test_dispatch_rejected_by_real_shared_start_sender_lock(transaction, monkeyp
     registry = transaction.parent.parent
 
     @contextmanager
-    def txn(*args):
+    def txn(*args, **kwargs):
         yield {}, transaction
 
     @contextmanager
@@ -569,7 +569,7 @@ def test_dispatch_rejected_by_real_shared_start_sender_lock(transaction, monkeyp
             yield fd
 
     manager = SimpleNamespace(
-        packages=update.Debian(), registry=registry, _transaction=txn,
+        packages=update.Debian(), registry=registry, _transaction=txn, _dispatch_transaction=txn,
         _prepared=lambda *args: {}, _apply_lease=lease,
     )
     calls = []
@@ -739,13 +739,13 @@ def test_new_dispatch_fails_closed_without_cross_version_fence(transaction, monk
     transaction.with_suffix(".apply-intent.json").unlink()
 
     @contextmanager
-    def txn(*args):
+    def txn(*args, **kwargs):
         yield {}, transaction
 
     manager = SimpleNamespace(
         packages=update.Debian(),
         registry=transaction.parent.parent,
-        _transaction=txn,
+        _transaction=txn, _dispatch_transaction=txn,
         _prepared=lambda *args: {},
     )
     calls = []
@@ -781,13 +781,13 @@ def test_existing_job_observation_survives_dispatch_gate(transaction, monkeypatc
     transaction.with_suffix(".job-intent.json").write_text(json.dumps(intent))
 
     @contextmanager
-    def txn(*args):
+    def txn(*args, **kwargs):
         yield {}, transaction
 
     manager = SimpleNamespace(
         packages=update.Debian(),
         registry=transaction.parent.parent,
-        _transaction=txn,
+        _transaction=txn, _dispatch_transaction=txn,
         _prepared=lambda *args: {},
     )
     result = job.dispatch_job(
@@ -875,7 +875,7 @@ def test_dispatch_refuses_drift_in_snapshot_management_lock_before_intent(transa
     monkeypatch.setattr(job.helper, "_digest", digest)
 
     @contextmanager
-    def txn(*args):
+    def txn(*args, **kwargs):
         yield {}, transaction
 
     @contextmanager
@@ -884,7 +884,7 @@ def test_dispatch_refuses_drift_in_snapshot_management_lock_before_intent(transa
 
     manager = SimpleNamespace(
         packages=update.Debian(), registry=transaction.parent.parent,
-        _transaction=txn, _prepared=lambda *args: {}, _apply_lease=lease,
+        _transaction=txn, _dispatch_transaction=txn, _prepared=lambda *args: {}, _apply_lease=lease,
     )
     calls = []
     with pytest.raises(job.JobError, match="snapshot worker code differs"):
@@ -962,7 +962,7 @@ def test_dispatch_rejects_other_snapshot_source_drift_before_intent(transaction,
     (package / "native_candidate.py").write_text("# stale snapshot\n")
 
     @contextmanager
-    def txn(*args):
+    def txn(*args, **kwargs):
         yield {}, transaction
 
     @contextmanager
@@ -971,10 +971,35 @@ def test_dispatch_rejects_other_snapshot_source_drift_before_intent(transaction,
 
     manager = SimpleNamespace(
         packages=update.Debian(), registry=transaction.parent.parent,
-        _transaction=txn, _prepared=lambda *args: {}, _apply_lease=lease,
+        _transaction=txn, _dispatch_transaction=txn, _prepared=lambda *args: {}, _apply_lease=lease,
     )
     calls = []
     with pytest.raises(job.JobError, match="snapshot worker Python source tree differs"):
         job.dispatch_job(manager, "probe", "one", runner=lambda *a, **k: calls.append(a))
     assert not calls and not transaction.with_suffix(".job-intent.json").exists()
     assert not transaction.with_suffix(".job-dispatch.json").exists()
+
+
+def test_dispatch_default_denied_before_update_directory_or_binding(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    from device_runtime import native_update as update
+
+    monkeypatch.setattr(job.os, 'geteuid', lambda: 0)
+    monkeypatch.setattr(__import__('sys'), 'platform', 'linux')
+    monkeypatch.setattr(job.helper, '_trusted', lambda *a, **kw: None)
+    registry = tmp_path / 'registry'
+    registry.mkdir()
+
+    class Helper:
+        @contextmanager
+        def _lease(self, instance_id):
+            yield
+
+        def _binding(self, instance_id):
+            pytest.fail('binding read before new dispatch was denied')
+
+    manager = update.Updates(registry, packages=update.Debian(), helper=Helper())
+    with pytest.raises(job.JobError, match='new dispatch disabled'):
+        job.dispatch_job(manager, 'probe', 'one', runner=lambda *a, **kw: pytest.fail('job ran'))
+    assert not (registry / 'updates').exists()
