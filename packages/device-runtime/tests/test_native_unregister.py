@@ -58,6 +58,34 @@ class _Adapter:
         return {"ActiveState": self.state["active"], "SubState": "dead", "MainPID": "0", "Job": ""}
 
 
+def test_unregister_removes_enable_links_for_this_unit(registered):
+    """A dangling .wants link would survive the erase guard as a ghost unit."""
+    registry, unit_dir, _root, _current = registered
+    wants = unit_dir / "multi-user.target.wants"
+    wants.mkdir()
+    link = wants / "ai-device-client-probe.service"
+    link.symlink_to(unit_dir / "ai-device-client-probe.service")
+    other = wants / "unrelated.service"
+    other.symlink_to(unit_dir / "unrelated.service")
+    result = nh.unregister(registry, unit_dir, instance_id="probe")
+    assert not link.exists() and not link.is_symlink()
+    assert other.is_symlink()
+    assert result["removed_enable_links"] == [str(link)]
+
+
+def test_unregister_ignores_links_that_target_another_unit(registered):
+    """Deletion follows the link name, never the target it points at."""
+    registry, unit_dir, _root, _current = registered
+    wants = unit_dir / "multi-user.target.wants"
+    wants.mkdir()
+    bait = wants / "ai-device-client-probe.service"
+    bait.symlink_to("/etc/passwd")
+    result = nh.unregister(registry, unit_dir, instance_id="probe")
+    assert result["removed_enable_links"] == []
+    assert bait.is_symlink()
+    assert not (unit_dir / "ai-device-client-probe.service").exists()
+
+
 @pytest.mark.parametrize("state", ["inactive", "failed"])
 def test_unregister_removes_only_registration_artifacts(registered, state):
     registry, unit_dir, root, current = registered

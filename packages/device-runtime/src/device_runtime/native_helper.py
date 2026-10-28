@@ -609,6 +609,31 @@ def _register(registry, unit_dir, *, instance_id, root, username, environment_fi
     }
 
 
+def _unlink_enable_links(unit_dir, unit_name):
+    """Remove enable links that point at the unit being deregistered.
+
+    Only ``.wants``/``.requires`` directories directly under the trusted unit
+    directory are considered, and a link is removed only when its target names
+    this exact unit. Symlinks are never followed while inspecting the tree, so a
+    link crafted elsewhere cannot redirect the deletion.
+    """
+    removed = []
+    for link_dir in sorted(unit_dir.glob("*.wants")) + sorted(unit_dir.glob("*.requires")):
+        if link_dir.is_symlink() or not link_dir.is_dir():
+            continue
+        candidate = link_dir / unit_name
+        if not candidate.is_symlink():
+            continue
+        target = os.readlink(candidate)
+        if os.path.basename(target) != unit_name:
+            continue
+        candidate.unlink()
+        with _directory_fd(link_dir) as directory_fd:
+            os.fsync(directory_fd)
+        removed.append(str(candidate))
+    return removed
+
+
 def unregister(registry, unit_dir, *, instance_id):
     """Remove one registration so the payload may be erased.
 
@@ -651,6 +676,10 @@ def unregister(registry, unit_dir, *, instance_id):
             if not unit_path.exists():
                 raise HelperError("registration unit is missing; explicit reconciliation required")
             _trusted(unit_path)
+            # Drop enable links before the unit itself. Removing the unit first
+            # would leave a dangling link under .wants/, which systemd reports as
+            # a not-found unit and which no later command can clean up.
+            removed_links = _unlink_enable_links(unit_dir, unit_name)
             # Remove the unit first: a leftover unit would keep the erase guard
             # closed, while a leftover record alone is still recoverable.
             unit_path.unlink()
@@ -664,6 +693,7 @@ def unregister(registry, unit_dir, *, instance_id):
         "unit": unit_name,
         "removed_unit": str(unit_path),
         "removed_record": str(record_path),
+        "removed_enable_links": removed_links,
         "data_preserved": True,
         "daemon_reload_required": True,
     }

@@ -2946,3 +2946,36 @@ CLI：`ai-device-native-helper unregister --registry --unit-dir --instance-id`�
 - 未实现多版本共存与激活协议；包守卫仍拒绝已有其他版本目录。
 - 解释器副本使每实例多占一份 runtime（用户已确认接受）。
 - 制品未签名，`development_build=true`。
+
+## 294. RPM 同链路验证与 unregister 悬空链接修复
+
+### RPM 链路验收
+用同一份 selfcontained3 源码另构建的 RPM（`ff9a2547…`）在隔离 Rocky 9 systemd 容器复现 DEB 全流程：
+
+| 步骤 | 结果 |
+| --- | --- |
+| `rpm -i`（**不加 `--nodeps`**） | 依赖满足，安装成功 |
+| 普通用户建实例 | shebang/venv 均指向实例内 runtime |
+| register + systemd start | active，uid 12345 |
+| unregister + `rpm -e` | 包记录消失、payload 目录删除 |
+| 卸包后 venv | `venv ok 3.13.17` |
+| 卸包后 systemd start | active，解释器 6 段映射来自实例，包引用 0 |
+
+之前"RPM 只能 `--nodeps` 安装"的结论源于当时的夹具缺依赖，不是包缺陷。
+
+### 缺陷：unregister 留下悬空 enable 链接
+`unregister` 删除 unit 文件但不 `disable`。若管理员事先 `systemctl enable` 过，`.wants/` 下的链接会保留，systemd 将其报告为 `not-found` 的 ghost unit，且后续无法用任何命令清理。
+
+修复：删除 unit 之前先移除指向该 unit 的 `.wants`/`.requires` 链接，顺序保证崩溃时留下"有 unit 但未启用"而非悬空链接。只处理 unit 目录下的直接子目录，只按链接名匹配，不跟随链接目标（避免用伪造链接重定向删除）。返回值新增 `removed_enable_links`。
+
+真实容器验证：wants 链接在 unregister 后被清除，`list-units` 无 ghost 单元，卸载守卫随后正常放行。
+
+### 顺带确认
+`register(recover=True)` 在 unregister 之后能成功重新登记同一实例。此前只验证过 fresh `register` 会被 marker 拒绝，未验证恢复路径可用。
+
+回归 1500—1502 passed / 17 skipped；两轮出现 `test_websocket`、`test_get_deadline_integration` 各一次失败，stash 对照与两文件单独连跑 2 轮均通过，判定为既有负载相关不稳定项，与本改动无调用关系。
+
+### 边界
+- RPM 验证使用挂载新代码覆盖容器内模块，不是新构建制品的验收。
+- 未验证 RPM 升级路径与 `%preun` 在真实升级中的行为。
+- ghost unit 之外的 enable 状态残留（如 preset 目录）未纳入清理。
