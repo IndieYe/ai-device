@@ -61,6 +61,50 @@ b._supervise_candidate_queries(sys.argv[1],"candidate",registry=sys.argv[2],sock
         assert not early.exists() and not marker.exists()
         with h._daemon_lease_pair(registry): pass
         print('STOP_DURING_VALIDATION_PREVENTS_FORK',flush=True)
+        for mode in ('signal-after-fork', 'child-pidfd-failure'):
+            endpoint2=Path(root)/(mode+'.sock'); receipt=Path(root)/(mode+'.receipt')
+            fault_code='''from device_runtime import native_bootstrap as b
+import os,signal,sys
+real_fork=os.fork
+real_pidfd_open=os.pidfd_open
+real_waitpid=os.waitpid
+real_waitid=os.waitid
+child=[None]
+def fork():
+    pid=real_fork()
+    if pid:
+        child[0]=pid
+        if sys.argv[6]=="signal-after-fork": os.kill(os.getpid(),signal.SIGTERM)
+    return pid
+def pidfd_open(pid,*args):
+    if sys.argv[6]=="child-pidfd-failure" and pid==child[0]: raise OSError("injected child pidfd failure")
+    return real_pidfd_open(pid,*args)
+def waitpid(pid,flags):
+    result=real_waitpid(pid,flags)
+    if result[0]==child[0]: open(sys.argv[5],"w").write(str(result[0]))
+    return result
+def waitid(kind,fd,flags):
+    result=real_waitid(kind,fd,flags)
+    if result is not None and not flags & os.WNOWAIT: open(sys.argv[5],"w").write(str(result.si_pid))
+    return result
+os.fork=fork
+os.pidfd_open=pidfd_open
+os.waitpid=waitpid
+os.waitid=waitid
+try:
+    b._supervise_candidate_queries(sys.argv[1],"candidate",registry=sys.argv[2],socket_path=sys.argv[3],group=0,expected_snapshot_sha256=sys.argv[4])
+except b.BootstrapError:
+    if child[0] is not None:
+        try: real_waitpid(child[0],os.WNOHANG)
+        except ChildProcessError: open(sys.argv[5],"w").write(str(child[0]))
+    raise
+'''
+            result=subprocess.run([sys.executable,'-I','-B','-c',fault_code,str(registry/'bootstrap-candidates'),str(registry),str(endpoint2),evidence['snapshot_sha256'],str(receipt),mode],capture_output=True,timeout=20)
+            assert result.returncode != 0,(mode,result.stdout,result.stderr)
+            assert receipt.exists() and int(receipt.read_text())>0,(mode,result.returncode,result.stderr)
+            assert not endpoint2.exists(),mode
+            with h._daemon_lease_pair(registry): pass
+            print('FORK_PIDFD_WINDOW_REAPED_'+mode.upper(),flush=True)
     finally:
         if p.poll() is None:
             p.kill(); p.wait(timeout=5)
