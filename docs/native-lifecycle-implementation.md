@@ -3013,3 +3013,49 @@ CLI：`ai-device-native-helper unregister --registry --unit-dir --instance-id`�
 - 制品未签名，`development_build=true`。
 - 未验证 RPM 升级路径（`rpm -U`）与 `%preun` 在升级中的行为。
 - DEB 未用同一源码重建，两包源码同源但制品未同步刷新。
+
+## 296. rpm -U 升级路径验证
+
+### 当前行为：升级被 %pretrans 安全拒绝
+有已登记实例时执行 `rpm -U` 到 Release 2：
+
+```
+error: lua script failed: [string "%pretrans(...)"]:3:
+  existing native installation: helper transaction required
+error: ...: install skipped
+error: ...: erase skipped
+```
+
+`--force --replacefiles --replacepkgs` 同样被拒。真实退出码为 1（管道中 `| head` 会掩盖成 0）。
+拒绝后系统完好：包仍为 R1、服务 active、解释器与 venv 可用、registry 与 unit 均在、`rpm -V` 通过。
+
+这是"仅全新安装"既定边界的直接结果，属于安全的失败，不是缺陷。
+
+### 缺陷：%preun 不区分升级与卸载
+RPM 约定 `%preun` 收到剩余包实例数，但原脚本完全不检查，守卫与缓存清理在任何 `%preun` 都会执行。
+当前被 `%pretrans` 兜住（不可达），一旦放开升级路径就会立即生效：升级时执行卸载守卫，并删除运行中实例的 `__pycache__`。
+
+### 实测出的参数语义（不照文档推断）
+- `arg[1]` 是脚本名 `"<lua>"`（字符串），**不是**计数
+- `arg[2]` 才是计数（数字）：升级 `1.0`，卸载 `0.0`
+
+前两次修改分别写错为 `arg[1] ~= "0"`（比较类型错误）和 `arg[1]` 数字比较（索引错误）。前者会导致卸载时也跳过守卫，静默破坏保护。
+
+最终实现：
+
+```lua
+if arg and tonumber(arg[2]) and tonumber(arg[2]) > 0 then return end
+```
+
+### 验证（探针包，隔离容器）
+| 场景 | arg[2] | 行为 | 结果 |
+| --- | --- | --- | --- |
+| 升级 1.0→2.0 | 1.0 | 跳过守卫 | 升级成功 |
+| `rpm -e` | 0.0 | 守卫执行并 `error()` | 拒绝卸载，包保留 |
+
+产品包（`build/native-packages-p1-sc6/`，106369010 字节）已构建，**守卫有效性尚未用该包复验**。
+
+### 边界
+- 升级路径本身仍被 `%pretrans` 拒绝，`%preun` 修复当前不可达，属于前瞻性防御。
+- DEB `prerm` 存在同类问题（无参数分支），但 dpkg 传的是 `upgrade` 字符串而非数字，修复方式不能照搬，且未验证。
+- 未验证放开 `%pretrans` 后的完整升级语义（新版本目录、旧 release 清理、实例切换）。

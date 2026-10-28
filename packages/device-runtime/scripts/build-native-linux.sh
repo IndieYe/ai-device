@@ -137,6 +137,13 @@ for _,path in ipairs(p) do
  if posix.stat(path) or posix.readlink(path) then error('existing native installation: helper transaction required') end
 end
 %preun -p <lua>
+-- rpm passes the number of package instances that will remain: 0 on a real
+-- erase, 1 or more on an upgrade. In a %preun lua script arg[1] is the script
+-- name ("<lua>") and arg[2] carries that count as a number, so index 2 and
+-- compare numerically. The guards below exist because erasing the payload
+-- would strand a registered instance; on an upgrade the new payload replaces
+-- this one in place, so neither the guards nor the cache sweep apply.
+if arg and tonumber(arg[2]) and tonumber(arg[2]) > 0 then return end
 -- Erasing the package deletes the payload and its bundled interpreter, so an
 -- existing instance would be left with a run script whose interpreter is gone
 -- (systemd then fails with 203/EXEC). Any state that indicates a live or
