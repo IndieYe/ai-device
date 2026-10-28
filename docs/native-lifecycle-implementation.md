@@ -1755,3 +1755,10 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 无网络隔离 systemd 容器干净安装准确 DEB，包内 uv 检查 17 项依赖，普通用户创建实例并登记；独立 bootstrap helper 与 wheel 字节相同。手动创建启用 SO_PASSCRED 的真实 Unix listener，以 root 消息触发私有 `_serve_credential_query_once`，实际调用 `Helper.handle` 和 systemd 查询，返回 inactive；start 和重复 action 字段被 handler 前拒绝、无 start intent，Device 仍 inactive/MainPID 0（`20261028-084846-52d399.log`，`scripts/accept-native-credential-query-55dca56.sh`）。构建及验收容器均已删除（`20261028-084903-241e80.log`）。
 
 该 listener/入口由验收脚本直接调用，并非生产 `_serve`；未证明 supervisor、处理者身份、invocation、状态变更动作或外部 job 终态与恢复。生产 job/worker/恢复门禁和包保护不变，旧环境不自动更新，P1 未完成。
+
+
+## 224. 未接入生产的受控子进程握手观察
+
+新增私有 `native_bootstrap._observe_child_handshake`：要求 Linux、已启用 `SO_PASSCRED` 的 SEQPACKET 和 32 字节挑战，对单条记录核对内核 PID/UID、挑战、截断及 deadline，接收前后观察 pidfd；拒绝附带描述符并关闭已交付 FD，关闭失败仍处理余下描述符。成功仅返回 `observed_not_authorized`，不创建进程、不获取 pidfd、不发挑战、不调用 handler、不授权 job。
+
+调用方仍须证明 PID 与 pidfd 属于受控直接子进程、监听在数据入队前启用凭据、挑战随机且不复用，并承担锁交接、子进程生命周期及失败清理；存活检查后仍可立即退出。当前没有生产调用点。模拟定向 53 通过（`20261028-085358-291115.log`，补充异常测试前），完整 1269 通过、16 跳过（`20261028-085428-c0892b.log`），ruff 与 diff 检查通过。准确包真实 Linux 父子进程验证另待完成；生产默认拒绝不变，P1 未完成。

@@ -4,13 +4,18 @@ The caller must hold the package transaction lease. Snapshots are deliberately
 never cleaned or repaired here. An incomplete directory remains blocked.
 """
 
+import array
 import hashlib
 import json
 import os
 import re
+import select
 import shutil
+import socket
 import stat
+import struct
 import sys
+import time
 from pathlib import Path
 
 from . import native_helper as helper
@@ -410,6 +415,73 @@ def inspect_helper_transition(registry, unit_dir, version):
             "protocol_compatibility_verified": False,
             "switch_allowed": False,
         }
+
+
+def _handshake_pidfd_alive(pidfd):
+    """Observe a pidfd now; this never reserves process lifetime."""
+    poller = select.poll()
+    poller.register(pidfd, select.POLLIN | select.POLLHUP | select.POLLERR)
+    return not poller.poll(0)
+
+
+def _observe_child_handshake(connection, pidfd, child_pid, challenge, *, deadline):
+    """Observe a direct child record on a caller-owned private SEQPACKET channel.
+
+    The caller must create the channel, enable SO_PASSCRED before data, fork a
+    single direct child, obtain its pidfd before releasing the child, and keep
+    both child and descriptors under its own lifecycle control. This function
+    cannot prove those preconditions or pidfd-to-PID correspondence. A matching
+    record is not a code, invocation, handler, or dispatch authorization.
+    """
+    if sys.platform != "linux" or not all(
+        hasattr(socket, name) for name in ("SO_PASSCRED", "SCM_CREDENTIALS", "SCM_RIGHTS")
+    ):
+        raise BootstrapError("child credential handshake unavailable")
+    if type(child_pid) is not int or child_pid <= 0 or not isinstance(challenge, bytes) or len(challenge) != 32:
+        raise BootstrapError("invalid child handshake inputs")
+    try:
+        if (
+            connection.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) != socket.SOCK_SEQPACKET
+            or connection.getsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED) != 1
+        ):
+            raise BootstrapError("unprepared child handshake channel")
+        if not _handshake_pidfd_alive(pidfd):
+            raise BootstrapError("child exited before handshake")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise BootstrapError("child handshake deadline exceeded")
+        connection.settimeout(remaining)
+        size = struct.calcsize("3i")
+        data, controls, flags, _ = connection.recvmsg(
+            65, socket.CMSG_SPACE(size) + socket.CMSG_SPACE(256), getattr(socket, "MSG_CMSG_CLOEXEC", 0)
+        )
+        close_failed = False
+        for level, kind, payload in controls:
+            if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+                descriptors = array.array("i")
+                descriptors.frombytes(payload[:len(payload) - len(payload) % descriptors.itemsize])
+                for fd in descriptors:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        close_failed = True
+        if close_failed:
+            raise BootstrapError("cannot close unexpected handshake descriptors")
+        if flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC) or len(controls) != 1:
+            raise BootstrapError("invalid child handshake record")
+        level, kind, payload = controls[0]
+        if level != socket.SOL_SOCKET or kind != socket.SCM_CREDENTIALS or len(payload) != size:
+            raise BootstrapError("invalid child handshake credential")
+        pid, uid, _gid = struct.unpack("3i", payload)
+        if pid != child_pid or uid != 0 or data != b"READY:" + challenge:
+            raise BootstrapError("child handshake differs")
+        if time.monotonic() >= deadline:
+            raise BootstrapError("child handshake deadline exceeded")
+        if not _handshake_pidfd_alive(pidfd):
+            raise BootstrapError("child exited during handshake")
+        return "observed_not_authorized"
+    except OSError as exc:
+        raise BootstrapError("child handshake failed") from exc
 
 
 def main():
