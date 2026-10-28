@@ -12,7 +12,7 @@ cp "$3" "$B/lib/python3.13/site-packages/device_runtime/native_helper.py"
 "$B/bin/python3.13" -I -B - <<'PY'
 import json,os,stat,subprocess,sys,tempfile
 from pathlib import Path
-from device_runtime import native_bootstrap as b
+from device_runtime import native_bootstrap as b, native_helper as h
 with tempfile.TemporaryDirectory(prefix='device-query-intent-',dir='/root') as root:
     root=Path(root); race=root/'race'; race.mkdir(mode=0o700)
     start=root/'go'; ready=[root/'ready1',root/'ready2']
@@ -55,6 +55,52 @@ except b.BootstrapError: sys.exit(3)
     try: b._publish_query_supervisor_intent(uncertain,run_id='e'*32,snapshot_sha256='d'*64)
     except b.BootstrapError: pass
     else: raise AssertionError('uncertain intent overwritten')
+    # Force the publication window between EX acquisition and durable publish.
+    fenced=root/'fenced'; fenced.mkdir(mode=0o700)
+    locked=root/'publisher-locked'; publish=root/'publish'; published=root/'published'; release=root/'release'
+    writer='''import fcntl,pathlib,sys,time
+from device_runtime import native_bootstrap as b, native_helper as h
+with h.package_lease(pathlib.Path(sys.argv[1]),exclusive=True) as fd:
+ pathlib.Path(sys.argv[2]).touch()
+ end=time.monotonic()+8
+ while not pathlib.Path(sys.argv[3]).exists() and time.monotonic()<end: time.sleep(.01)
+ assert pathlib.Path(sys.argv[3]).exists()
+ b._publish_query_supervisor_intent(pathlib.Path(sys.argv[1]),run_id='a'*32,snapshot_sha256='b'*64)
+ fcntl.flock(fd,fcntl.LOCK_SH|fcntl.LOCK_NB)
+ pathlib.Path(sys.argv[4]).touch()
+ end=time.monotonic()+8
+ while not pathlib.Path(sys.argv[5]).exists() and time.monotonic()<end: time.sleep(.01)
+ assert pathlib.Path(sys.argv[5]).exists()
+'''
+    p=subprocess.Popen([sys.executable,'-I','-B','-c',writer,str(fenced),str(locked),str(publish),str(published),str(release)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    try:
+        end=time.monotonic()+5
+        while not locked.exists() and p.poll() is None and time.monotonic()<end: time.sleep(.01)
+        assert locked.exists() and p.poll() is None
+        try:
+            with h.package_lease(fenced): raise AssertionError('SH acquired during publication')
+        except h.HelperError as exc: assert 'package or start sender still executing' in str(exc)
+        assert not (fenced/'query-supervisor.intent.json').exists()
+        publish.touch()
+        end=time.monotonic()+5
+        while not published.exists() and p.poll() is None and time.monotonic()<end: time.sleep(.01)
+        assert published.exists() and p.poll() is None
+        with h.package_lease(fenced):
+            try: h._assert_no_query_supervisor_intent(fenced)
+            except h.HelperError: pass
+            else: raise AssertionError('SH participant ignored published intent')
+        release.touch(); assert p.wait(timeout=5)==0
+    finally:
+        publish.touch(); release.touch()
+        if p.poll() is None: p.kill(); p.wait(timeout=5)
+    print('EX_PUBLISH_THEN_SH_CHECK_FENCES_BOTH_INTERLEAVINGS')
+    reverse=root/'reverse'; reverse.mkdir(mode=0o700)
+    with h.package_lease(reverse):
+        attempt=subprocess.run([sys.executable,'-I','-B','-c',
+            'from device_runtime import native_helper as h; import sys\nwith h.package_lease(sys.argv[1],exclusive=True): pass',str(reverse)],capture_output=True,timeout=5)
+        assert attempt.returncode!=0 and b'package or start sender still executing' in attempt.stderr
+        assert not (reverse/'query-supervisor.intent.json').exists()
+    print('EX_PUBLISHER_REFUSED_WHILE_START_SH_HELD')
 print('INTENT_NO_REPLACE_RACE_AND_FSYNC_UNKNOWN_RETAINED')
 print('LOCAL_FILESYSTEM_FIXTURE_NO_CRASH_DURABILITY_OR_CROSS_ENTRY_FENCE')
 PY

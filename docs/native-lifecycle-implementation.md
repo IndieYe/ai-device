@@ -1976,3 +1976,12 @@ query-only、未接生产的监督候选在直接子回收结果未知时，不�
 隔离真实 query handler + 两代替身：监督父 SIGKILL 后后代仍存活、daemon 与 package 锁可重取，但意图保留，同候选在验证前拒绝重启（`20261028-111205-b67ac8.log`）。实际监督入口注入文件 fsync、目录 fsync 故障时均不验证或启动，目录 fsync 失败留下的可见意图阻止重启（`20261028-111508-5f7fb8.log`）；正常停止不退休，fork 窗口回归通过（`20261028-111546-c12541.log`）。测试场景改为各自独立 registry，不删除意图复用状态；完整 1316 passed / 16 skipped，ruff 通过（`20261028-111559-9f4c61.log`），专属容器已删除。注入和进程 SIGKILL 均不证明真实掉电后目录持久性。
 
 此意图仅由私有候选自身消费；现有生产 daemon、安装/更新、包钩子和旧冻结 snapshot 未受该意图保护。发布后无持久终态和恢复契约，且旧代码可绕过，故不能声称跨入口围栏或恢复完成，既有生产 start/job/recovery/包保护保持关闭。下一步须在共同 package 锁及管理员维护前提下逐入口设计和验证守卫，审计旧快照，另行设计 durable 终态和管理员处置。
+
+
+## 251. 监督意图发布与当前源码的部分入口互斥
+
+发现第250节监督候选及 start 都以 package SH 操作时，start 可能在检查之后、意图发布之前执行；现调整为监督候选在 daemon 双锁后以 package EX 发布意图，发布成功后降为 SH 并持续持有。即便锁转换存在竞争间隙，参与协议的新代码在取得 package 锁后必须先检查已发布意图，存在任何文件或断链符号链接均按未知拒绝。start 在其包 SH 内、新 intent 发布和调用 sender 前检查；register/recover-registration 在包 SH 内、创建 management lock 前检查；新包 apply 与 recover 在包 EX 内检查。已有 apply intent 的只读观察及 query 保持可读，未绕开既有拒绝门禁。
+
+隔离 Linux 受控交错确认：发布方持 EX 期间 SH 获取失败；发布后降 SH，参与方持 SH 检查到意图并拒绝；反向持 SH 时发布方 EX 获取失败（`20261028-112601-8583c9.log`）。真实注册的 query 监督父 SIGKILL 后，两代替身仍存活，当前源码 helper 使用受控只读 adapter 的新 start 被拒绝，未写 start intent、未调用 start（`20261028-112413-a76aa3.log`）。单元测试覆盖登记拒绝前不创建管理锁、apply/recover 不增加事务记录及包动作、只读 query 保留；完整 1321 passed / 16 skipped、ruff 通过（`20261028-112437-ab1ac3.log`）；专属容器已删除。锁转换和注入试验不证明掉电持久性。
+
+此为**部分入口的源码收紧**：旧 helper/bootstrap、旧冻结 snapshot 不自动接入，普通生产 daemon 启动、其他更新/部署/退休路径和原生包钩子仍须逐项审计及覆盖；当前意图无 durable 终态和管理员恢复入口，正常停止也阻断后续动作。不得删除意图绕过，不以本阶段为跨入口闭环或生产许可，原有 start/job/recovery/包门禁保持关闭。

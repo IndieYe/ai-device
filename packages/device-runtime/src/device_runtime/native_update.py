@@ -435,6 +435,7 @@ class Updates:
     def _apply_lease(self, stem, *, existing=False):
         try:
             with nh.package_lease(self.registry, exclusive=True, existing=existing) as fd:
+                nh._assert_no_query_supervisor_intent(self.registry)
                 yield fd
         except nh.HelperError as exc:
             raise UpdateError(str(exc)) from exc

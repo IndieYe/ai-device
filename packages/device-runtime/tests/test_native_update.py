@@ -1708,3 +1708,31 @@ def test_retirement_rejects_incomplete_job_identity(update, drift):
         nh._assert_no_package_intent(manager.registry)
     assert [p.read_bytes() for p in (path, close_path, retire_path)] == before
     assert packages.calls == 0
+
+
+def test_query_supervisor_unknown_blocks_apply_without_writes(update):
+    manager, packages, _, _ = update
+    marker = manager.registry / 'query-supervisor.intent.json'
+    marker.write_bytes(b'unknown')
+    stem = manager.registry / 'updates/5-probe--one'
+    before = {p.name: p.read_bytes() for p in stem.parent.iterdir() if p.is_file()}
+    with pytest.raises(nu.UpdateError, match='query supervisor intent remains unknown'):
+        manager.apply('probe', 'one')
+    assert not stem.with_suffix('.apply-intent.json').exists()
+    assert not stem.with_suffix('.outcome.json').exists()
+    assert {p.name: p.read_bytes() for p in stem.parent.iterdir() if p.is_file()} == before
+    assert marker.read_bytes() == b'unknown' and packages.calls == 0
+
+
+def test_query_supervisor_unknown_blocks_recovery_without_writes(update):
+    manager, packages, _, _ = update
+    packages.mode = 'crash'
+    manager.apply('probe', 'one')
+    marker = manager.registry / 'query-supervisor.intent.json'
+    marker.write_bytes(b'unknown')
+    directory = manager.registry / 'updates'
+    before = {p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()}
+    with pytest.raises(nu.UpdateError, match='query supervisor intent remains unknown'):
+        manager.recover('probe', 'one')
+    assert {p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()} == before
+    assert marker.read_bytes() == b'unknown' and packages.calls == 1

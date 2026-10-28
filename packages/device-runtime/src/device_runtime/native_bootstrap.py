@@ -6,6 +6,7 @@ never cleaned or repaired here. An incomplete directory remains blocked.
 
 import array
 import ctypes
+import fcntl
 import hashlib
 import json
 import math
@@ -724,14 +725,20 @@ def _supervise_candidate_queries(candidates_dir, version, *, registry, socket_pa
     try:
         if stops & oldmask or stops & signal.sigpending():
             raise BootstrapError("query supervisor stop signal already pending or blocked")
-        # The package lease is nonblocking and held for the entire local tree.
-        # It is not a durable crash fence or proof that old code participates.
-        with helper._daemon_lease_pair(registry), helper.package_lease(registry), _exclusive_query_subreaper():
+        # Publication needs EX: a concurrent start checks intent under SH.
+        # Lock conversion need not be atomic: the published intent fences all
+        # participating readers even if another process acquires in the gap.
+        with (
+            helper._daemon_lease_pair(registry),
+            helper.package_lease(registry, exclusive=True) as package_fd,
+            _exclusive_query_subreaper(),
+        ):
             # Intentionally never retired here: this private candidate cannot
             # establish a durable terminal state or authorize another run.
             _publish_query_supervisor_intent(
                 registry, run_id=os.urandom(16).hex(), snapshot_sha256=expected_snapshot_sha256
             )
+            fcntl.flock(package_fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
             try:
                 contents = _verified_helper_bytes(candidates_dir, version, expected_snapshot_sha256)
             finally:

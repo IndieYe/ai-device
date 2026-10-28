@@ -223,6 +223,12 @@ def _assert_no_package_intent(registry):
         raise HelperError("package transaction blocks start; administrator recovery required")
 
 
+def _assert_no_query_supervisor_intent(registry):
+    """Caller holds package lease; any visible entry means unknown, not retired."""
+    if os.path.lexists(Path(registry) / "query-supervisor.intent.json"):
+        raise HelperError("query supervisor intent remains unknown; action refused")
+
+
 def _save_new(path, value, *, mode=0o600):
     data = json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
     # Hard-link publication provides no-replace semantics, even with other writers.
@@ -399,25 +405,23 @@ def register(registry, unit_dir, *, instance_id, root, username, environment_fil
     root = _path(root)
     registry = _path(registry)
     _trusted(registry, directory=True)
-    with (
-        package_lease(registry),
-        management_lease(root, registration=True, recovery=recover),
-        (root / ".installation.lock").open("rb") as lease,
-    ):
-        try:
-            fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise HelperError("instance is running or maintenance is active") from exc
-        _assert_no_package_intent(registry)
-        return _register(
-            registry,
-            unit_dir,
-            instance_id=instance_id,
-            root=root,
-            username=username,
-            environment_file=environment_file,
-            recover=recover,
-        )
+    with package_lease(registry):
+        _assert_no_query_supervisor_intent(registry)
+        with management_lease(root, registration=True, recovery=recover), (root / ".installation.lock").open("rb") as lease:
+            try:
+                fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise HelperError("instance is running or maintenance is active") from exc
+            _assert_no_package_intent(registry)
+            return _register(
+                registry,
+                unit_dir,
+                instance_id=instance_id,
+                root=root,
+                username=username,
+                environment_file=environment_file,
+                recover=recover,
+            )
 
 
 def _register(registry, unit_dir, *, instance_id, root, username, environment_file, recover=False):
@@ -887,6 +891,7 @@ class Helper:
                 self._execution_lease(instance_id) as execution_fd,
                 package_lease(self.registry) as package_fd,
             ):
+                _assert_no_query_supervisor_intent(self.registry)
                 _assert_no_package_intent(self.registry)
                 _save_new(intent_path, intent)
                 outcome = {"state": "already_active"}

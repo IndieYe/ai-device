@@ -2033,3 +2033,40 @@ def test_systemd_query_accepts_exact_fields_and_empty_job(monkeypatch):
     result = nh.Systemd().query("probe.service")
     assert result["Job"] == "" and result["MainPID"] == "123"
     assert calls[0][0][:3] == ["/usr/bin/systemctl", "show", "probe.service"]
+
+
+def test_query_supervisor_unknown_blocks_new_start_but_not_query(helper):
+    service, adapter, record = helper
+    marker = service.registry / 'query-supervisor.intent.json'
+    marker.write_bytes(b'unknown')
+    before = marker.read_bytes()
+    assert service.handle(req('query'), peer_uid=record['uid'])['intent'] is None
+    with pytest.raises(nh.HelperError, match='query supervisor intent remains unknown'):
+        service.handle(req('start'), peer_uid=record['uid'])
+    assert marker.read_bytes() == before
+    assert not (service.registry / 'op-probe-one.json').exists()
+    assert not any(action == 'start' for action, _ in adapter.calls)
+
+
+def test_query_supervisor_unknown_guard_rejects_dangling_symlink(tmp_path):
+    marker = tmp_path / 'query-supervisor.intent.json'
+    marker.symlink_to(tmp_path / 'missing')
+    with pytest.raises(nh.HelperError, match='query supervisor intent remains unknown'):
+        nh._assert_no_query_supervisor_intent(tmp_path)
+    assert marker.is_symlink()
+
+
+def test_query_supervisor_unknown_blocks_registration_before_management_file(tmp_path, monkeypatch):
+    registry = tmp_path / 'registry'
+    root = tmp_path / 'instance'
+    registry.mkdir()
+    root.mkdir()
+    marker = registry / 'query-supervisor.intent.json'
+    marker.write_bytes(b'unknown')
+    monkeypatch.setattr(nh.os, 'geteuid', lambda: 0)
+    monkeypatch.setattr(nh, '_trusted', lambda *_a, **_kw: None)
+    with pytest.raises(nh.HelperError, match='query supervisor intent remains unknown'):
+        nh.register(registry, tmp_path, instance_id='probe', root=root, username='fixture', environment_file='/tmp/env')
+    assert not (root / '.management.lock').exists()
+    assert not (root / nh.MARKER).exists()
+    assert marker.read_bytes() == b'unknown'

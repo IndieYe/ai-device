@@ -93,6 +93,17 @@ b._supervise_candidate_queries(sys.argv[1],"candidate",registry=sys.argv[2],sock
    retry=subprocess.run([sys.executable,'-I','-B','-c',retry_code,str(registry/'bootstrap-candidates'),str(registry),str(retry_socket),evidence['snapshot_sha256'],str(marker)],capture_output=True,timeout=10)
    assert retry.returncode!=0 and b'intent already exists' in retry.stderr
    assert not marker.exists() and not retry_socket.exists() and intent.read_bytes()==before
+   record=json.loads((registry/'probe.json').read_text())
+   class Adapter:
+    def query(self,unit):
+     runner=record['root']+'/run'
+     return {'ActiveState':'inactive','SubState':'dead','MainPID':'0','Job':'','User':str(record['uid']),'Group':str(record['gid']),'FragmentPath':record['unit_path'],'ExecStart':'{ path='+runner+' ; argv[]='+runner+' client ; ignore_errors=no ; }'}
+    def start(self,*args,**kwargs): raise AssertionError('start called despite unknown supervisor')
+   try: h.Helper(registry,adapter=Adapter()).handle({'action':'start','instance_id':'probe','operation_id':'aftercrash'},peer_uid=0)
+   except h.HelperError as exc: assert 'query supervisor intent remains unknown' in str(exc)
+   else: raise AssertionError('start was not fenced')
+   assert not (registry/'op-probe-aftercrash.json').exists() and intent.read_bytes()==before
+   print('CRASH_INTENT_BLOCKS_NEW_HELPER_START_WITHOUT_ACTION')
    for fd in fds[1:]:
     still=select.poll(); still.register(fd,select.POLLIN); assert not still.poll(0),'descendant exited before retry'
    print('CRASH_INTENT_BLOCKS_SAME_CANDIDATE_RESTART_BEFORE_VALIDATION')
