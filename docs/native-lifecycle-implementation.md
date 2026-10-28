@@ -2412,3 +2412,35 @@ worker 在 `main()` 中**先写** `.job-run-start.json`，再做任何 apply 相
 
 ### 边界
 这只保证异常类型一致，不改变任何判定结果：prepared 结构正常时行为与之前完全相同，畸形时仍被拒绝，且拒绝发生在任何包动作之前。
+
+
+## 281. 修复：其它 JSON 载体非对象时抛裸 AttributeError
+
+### 复现
+第 280 节只修了 prepared 的 `["metadata"][...]`。但 `observe_job` 还对 intent、outcome、sender 调用 `.get()`，这些载体同样只经「普通文件 + JSON 解析」校验。构造合法 JSON 的三类畸形（`20261028-172751`、`20261028-172825`）：
+
+| 载体 | 内容 | 原异常 |
+| --- | --- | --- |
+| job-intent | `[1,2]` | `AttributeError: 'list' object has no attribute 'get'` |
+| outcome | `[1,2]` | 同上 |
+| outcome | `"text"` | 同上 |
+| sender | `[1,2]` | 同上 |
+
+`outcome-is-list` 在没有合法 sender 时先撞上「lacks sender evidence」，说明原顺序掩盖了类型问题；补上合法 sender 后才暴露出 `outcome.get` 的 AttributeError。
+
+### 修复
+在 `observe_job` 中对 intent、apply-intent、outcome、sender 四处加 `isinstance(..., dict)` 检查，非对象抛 `JobError`。仅校验容器类型，不校验内部字段值域。
+
+### 已核查的其它读取点（不需要改）
+- `close_before_apply`：已有 `isinstance(intent, dict)`。
+- `_prepare_dispatch_locked`：用 `intent != expected` 整体比较，不依赖 `.get`。
+- `marker` / `job-recovery.json`：只用 `_same_json`，接受任意 JSON 值。
+- `describe_job`：同样有裸索引，但**无生产调用方**（`rg` 只命中自身与测试），暂不改，避免无消费方的扩散。
+
+### 验证
+- 容器复验：五例全部 `JobError`（`20261028-172842`）。
+- 新增参数化测试覆盖 intent/outcome/sender 三载体。
+- 完整回归 **1463 passed, 16 skipped**，ruff 通过（`20261028-173011`）。
+
+### 边界
+未做全局 schema 校验，也未验证字段级类型（如 `unit` 为 int 时仍会走到「identity differs」而非类型错误）。本轮只保证「非对象」不再逃出 `JobError` 契约。

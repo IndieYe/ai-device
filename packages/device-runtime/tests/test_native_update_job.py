@@ -1528,3 +1528,39 @@ def test_prepared_field_values_pass_through_unchanged(transaction, monkeypatch):
     monkeypatch.setattr(job, "_boot_id", lambda: BOOT)
     assert job._prepared_field({"metadata": {"Version": 2}}, "Version") == 2
     assert job._prepared_field({"metadata": {"Version": "2"}}, "Version") == "2"
+
+
+@pytest.mark.parametrize("carrier", ["intent", "outcome", "sender"])
+def test_malformed_non_object_evidence_raises_job_error(transaction, monkeypatch, carrier):
+    """Other evidence carriers must fail like prepared does, not as AttributeError.
+
+    A valid-JSON list passes json.loads but has no `.get`, so observe_job escaped
+    with AttributeError instead of the JobError that recover_job handles.
+    """
+    monkeypatch.setattr(job, "_boot_id", lambda: BOOT)
+    _job_intent_for(transaction)
+    approval = json.loads(transaction.with_suffix(".approved.json").read_text())
+    digest = approval["prepared_sha256"]
+    runtime = json.loads(transaction.with_suffix(".job-intent.json").read_text())[
+        "runtime_snapshot_sha256"
+    ]
+    apply_intent = {
+        "prepared_sha256": digest,
+        "runtime_snapshot_sha256": runtime,
+        "target_package": {"name": "f", "version": "2", "architecture": "amd64"},
+    }
+    transaction.with_suffix(".apply-intent.json").write_text(json.dumps(apply_intent))
+    if carrier in ("outcome", "sender"):
+        transaction.with_suffix(".outcome.json").write_text(json.dumps([1, 2]))
+        transaction.with_suffix(".sender.json").write_text(
+            json.dumps({"intent": apply_intent, "state": "sender_reaped", "returncode": 0})
+        )
+    if carrier == "intent":
+        transaction.with_suffix(".job-intent.json").write_text(json.dumps([1, 2]))
+    with pytest.raises(job.JobError, match="is not an object"):
+        job.observe_job(
+            SimpleNamespace(registry=transaction.parent.parent),
+            "probe",
+            "one",
+            runner=_unit(LOADED_FAILED),
+        )

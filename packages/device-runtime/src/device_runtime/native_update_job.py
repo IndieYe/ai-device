@@ -513,6 +513,8 @@ def observe_job(manager, instance_id, operation_id, *, runner=None):
     intent = _read_job_evidence(path)
     if intent is None:
         raise JobError("job intent evidence missing")
+    if not isinstance(intent, dict):
+        raise JobError("job intent evidence is not an object")
     expected_unit = (
         "ai-device-package-" + hashlib.sha256(str(stem).encode()).hexdigest() + ".service"
     )
@@ -550,11 +552,17 @@ def observe_job(manager, instance_id, operation_id, *, runner=None):
     outcome = None
     sender = None
     if apply_intent is not None:
+        if not isinstance(apply_intent, dict):
+            raise JobError("job apply evidence is not an object")
         outcome = _read_job_evidence(stem.with_suffix(".outcome.json"))
         if outcome is not None:
+            if not isinstance(outcome, dict):
+                raise JobError("job outcome evidence is not an object")
             sender = _read_job_evidence(stem.with_suffix(".sender.json"))
             if sender is None:
                 raise JobError("job outcome evidence lacks sender evidence")
+            if not isinstance(sender, dict):
+                raise JobError("job sender evidence is not an object")
     elif any(os.path.lexists(stem.with_suffix(suffix)) for suffix in (".sender.json", ".outcome.json")):
         raise JobError("job execution evidence without apply intent")
     try:
