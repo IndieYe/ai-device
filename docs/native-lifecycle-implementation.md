@@ -1762,3 +1762,12 @@ sender 完成证据和 recovery 的嵌套 intent 原字典比较也会把 `2.0` 
 新增私有 `native_bootstrap._observe_child_handshake`：要求 Linux、已启用 `SO_PASSCRED` 的 SEQPACKET 和 32 字节挑战，对单条记录核对内核 PID/UID、挑战、截断及 deadline，接收前后观察 pidfd；拒绝附带描述符并关闭已交付 FD，关闭失败仍处理余下描述符。成功仅返回 `observed_not_authorized`，不创建进程、不获取 pidfd、不发挑战、不调用 handler、不授权 job。
 
 调用方仍须证明 PID 与 pidfd 属于受控直接子进程、监听在数据入队前启用凭据、挑战随机且不复用，并承担锁交接、子进程生命周期及失败清理；存活检查后仍可立即退出。当前没有生产调用点。模拟定向 53 通过（`20261028-085358-291115.log`，补充异常测试前），完整 1269 通过、16 跳过（`20261028-085428-c0892b.log`），ruff 与 diff 检查通过。准确包真实 Linux 父子进程验证另待完成；生产默认拒绝不变，P1 未完成。
+
+
+## 225. 子进程握手观察准确 DEB Linux 验收
+
+从干净源码检查点 `e1ffb44c08b58bcfe4bebe17eec06bc14f4b8154` 离线构建未签名 DEB `build/native-packages-p1-e1ffb44/ai-device-native-client_0.2.2-1_amd64.deb`，105261666 字节，SHA256 `1e59690850fed8db58fe8c3784fadbd60368afcfb577fbbb67db5f1d59691813`；Device wheel SHA256 `0838a0a73a145d7bdb0009dec00f2a2379278937cd4184a968129b10d48e33b3`，34 个 Python 模块与提交逐字节一致（`20261028-085744-b8ec23.log`）。
+
+无网络一次性 Linux amd64/Rosetta 容器干净安装准确包，包内 uv 检查 17 项依赖；独立 bootstrap 模块与 wheel 一致。测试脚本自行 fork 有限寿命直接子进程、获取 pidfd 并通过已启用 SO_PASSCRED 的 SEQPACKET 发送随机挑战；包内观察组件接受正确记录但仅返回 observed_not_authorized，对错误挑战、后代发送、子进程提前退出、超时与附带 FD 均拒绝；进程均 wait 回收，FD 数量无净增（`20261028-085827-ff06b0.log`，`scripts/accept-native-child-handshake-e1ffb44.sh`）。构建和验收容器均已删除（`20261028-085844-9e9d3a.log`）。
+
+这是测试脚本自行管理 PID/pidfd、进程与通道的局部观察，不是生产监督器或锁交接；不证明就绪后存活、handler、消息动作、invocation 或外部 job 故障恢复，未开放任何生产门禁。旧包和 snapshot 不自动更新，P1 未完成。
