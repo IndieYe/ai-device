@@ -177,6 +177,19 @@ def _atomic(path, value):
     nh._save_new(path, value)
 
 
+def _read_regular(path, error):
+    """Read evidence that must be a regular file.
+
+    Several evidence paths live in the instance owner's tree while this module
+    runs as root. Opening a FIFO or device there blocks or reads without bound,
+    so validate the type before any byte is read.
+    """
+    info = nh._path(path).lstat()
+    if not stat.S_ISREG(info.st_mode):
+        raise UpdateError(error)
+    return Path(path).read_bytes()
+
+
 class Updates:
     def __init__(self, registry, *, packages=None, helper=None):
         if sys.platform != "linux" or os.geteuid() != 0:
@@ -407,7 +420,12 @@ class Updates:
         # Recheck binding under the instance lease; prepare() takes it again
         # after verification and compares the complete source evidence.
         with self._preparation_transaction(instance_id, operation_id) as (binding, stem):
-            active = nc._json((Path(binding["root"]) / "active.json").read_bytes())
+            active = nc._json(
+                _read_regular(
+                    Path(binding["root"]) / "active.json",
+                    "instance active pointer must be a regular file",
+                )
+            )
             payload = nc.verify_release(
                 envelope,
                 trusted_keys,
@@ -794,7 +812,9 @@ def main():
     if action == "prepare_signed":
         keys_path = nh._path(args["trusted_keys"])
         nh._trusted(keys_path)
-        args["trusted_keys"] = nc._json(keys_path.read_bytes())
+        args["trusted_keys"] = nc._json(
+            _read_regular(keys_path, "trusted keys must be a regular file")
+        )
     registry = args.pop("registry")
     try:
         print(json.dumps(getattr(Updates(registry), action)(**args), sort_keys=True))

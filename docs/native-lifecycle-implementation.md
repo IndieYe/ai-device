@@ -2508,3 +2508,36 @@ worker 在 `main()` 中**先写** `.job-run-start.json`，再做任何 apply 相
 
 ### 测试自伤记录
 新增的 fork 测试最初在非 root 下跑，`_trusted` 先以「administrator-owned non-writable path」拒绝，暴露的是权限门禁而非 FIFO 缺陷。已加 `os.geteuid() == 0` 跳过条件，并在容器中以 root 复验真实路径。
+
+
+## 284. 修复：prepare_signed / trusted_keys 读取普通用户可控文件时阻塞
+
+### 审计结果
+上一轮只堵了 `_digest`。本轮逐个检查 `native_update.py` 的 19 处直接 `read_text()`/`read_bytes()`：
+
+| 位置 | 前置校验 | 结论 |
+| --- | --- | --- |
+| `_verify_job_intent` | `_trusted` + 后续 `_digest` | `_digest` 已要求普通文件 |
+| `_observation.read` | `_trusted` + `S_ISREG` | 已安全 |
+| `_read_runtime_receipt` | `O_NOFOLLOW` + `fstat` + `S_ISREG` + 属主 | 已安全，且有读取上限 |
+| `installation.json`、`approved`、`recovery` 等 | 均在 root 属主 registry 下或经 `_digest` | 已安全 |
+| **`prepare_signed` 的 `active.json`** | **无** | **缺陷** |
+| **CLI `trusted_keys`** | 仅 `_trusted`（不拒绝 FIFO） | **缺陷** |
+
+关键是权限不对称：`active.json` 位于**实例属主（普通用户）**的 root 目录下，而 `prepare_signed` 以 root 运行。普通用户可把它换成 FIFO，root helper 随即阻塞。
+
+### 复现
+用既有 `signed_update` fixture 把 `active.json` 换成 FIFO，在子进程中调用 `prepare_signed`（`20261028-180519`）：**阻塞满 5 秒被 SIGKILL**，而非返回错误。修复后同一用例立即 `UpdateError`。
+
+### 修复
+新增 `_read_regular(path, error)`：先 `lstat` 验 `S_ISREG`，再读。`prepare_signed` 的 `active.json` 与 CLI 的 `trusted_keys` 改用它。
+
+### 验证
+- 单测：FIFO 立即拒绝（`1 passed, 0.07s`），另有 `_read_regular` 正反例。
+- 容器真 root 验证（`20261028-180910`）：uid 0 读取 uid 1000 目录下的 FIFO 被拒，普通文件正常。这一条验证了权限不对称本身——root 确实能 stat 并到达属主的 FIFO，只有类型检查在拦。
+- 完整回归 **1471 passed, 17 skipped**，ruff 通过（`20261028-180940`）。
+
+### 边界与自伤记录
+- 单测用 `monkeypatch` 把 `geteuid` 设为 0、`_trusted` 置空，实际以 uid 501 运行。它证明阻塞行为，**不证明真 root 下的权限路径**；后者由容器另行验证。二者不可互相替代。
+- 容器镜像缺 `packaging` 与 `pydantic`，`native_update` 无法导入。我一度想用自写同名函数「复现」，那等于测自己写的代码，已放弃；最终改为验证真实 `_digest` 与权限不对称事实，并如实标注 `_read_regular` 只由单测覆盖。
+- 仍有一处未覆盖：`native_prepare.py` 的 `active.json` 读取要求非 root 且目录属主是自己，风险低但同样没有 `S_ISREG` 前置检查，本轮未改。

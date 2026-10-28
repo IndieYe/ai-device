@@ -4,6 +4,7 @@ import os
 import stat
 import subprocess
 import sys
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -1975,3 +1976,71 @@ def test_apply_rechecks_supervisor_intent_after_prevalidation(update, monkeypatc
     stem = manager.registry / 'updates/5-probe--one'
     assert not stem.with_suffix('.apply-intent.json').exists()
     assert packages.calls == 0 and marker.read_bytes() == b'unknown'
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs POSIX FIFOs")
+def test_signed_prepare_refuses_fifo_active_pointer_without_blocking(signed_update, monkeypatch):
+    """active.json lives in the instance owner's tree but is read by root.
+
+    prepare_signed calls read_bytes() on it with no regular-file check, so an
+    owner-created FIFO blocks the root helper instead of being refused.
+    """
+    import signal
+
+    manager, package, envelope, receipt, home = signed_update
+    active = home.parent.parent / "active.json"
+    real_binding = manager.helper._binding
+    monkeypatch.setattr(
+        manager.helper, "_binding", lambda name: {**real_binding(name), "uid": receipt.stat().st_uid}
+    )
+    monkeypatch.setattr(nu.nc, "verify_release", lambda *a, **kw: {"package": {}})
+    monkeypatch.setattr(nu.nc, "prepare_candidate", lambda *a, **kw: {"release_sha256": "0" * 64})
+    monkeypatch.setattr(nu.core, "inspect_bundle", lambda _: {})
+
+    active.unlink()
+    os.mkfifo(active, 0o600)
+
+    pid = os.fork()
+    if pid == 0:  # pragma: no cover - child
+        try:
+            manager.prepare_signed(
+                "probe",
+                "signed",
+                package,
+                envelope_path=envelope,
+                trusted_keys={},
+                release_id="new",
+                runtime_receipt=receipt,
+                bootstrap_version="1",
+            )
+        except nu.UpdateError:
+            os._exit(21)
+        except BaseException:  # noqa: BLE001
+            os._exit(22)
+        os._exit(0)
+
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        done, status = os.waitpid(pid, os.WNOHANG)
+        if done:
+            assert os.waitstatus_to_exitcode(status) == 21
+            return
+        time.sleep(0.02)
+    os.kill(pid, signal.SIGKILL)
+    os.waitpid(pid, 0)
+    pytest.fail("prepare_signed blocked on FIFO active.json instead of refusing")
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs POSIX FIFOs")
+def test_read_regular_refuses_fifo(tmp_path):
+    """The shared evidence reader must reject non-regular files, not block."""
+    fifo = tmp_path / "keys.json"
+    os.mkfifo(fifo, 0o600)
+    with pytest.raises(nu.UpdateError, match="regular file"):
+        nu._read_regular(fifo, "trusted keys must be a regular file")
+
+
+def test_read_regular_returns_bytes(tmp_path):
+    path = tmp_path / "keys.json"
+    path.write_bytes(b'{"k":1}')
+    assert nu._read_regular(path, "trusted keys must be a regular file") == b'{"k":1}'
