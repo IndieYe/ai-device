@@ -187,7 +187,15 @@ def activate_candidate(root, release, *, stopped=False):
             root, active
         ):
             raise PreparationError("candidate was not prepared for this instance state")
-        promoted = lifecycle.activate_release(root, release, stopped=True)
+        # Reuse lifecycle's validation and publication, but never its public entry:
+        # activate_release takes install._lock, which routes through
+        # management_lease and rejects any instance carrying the native marker.
+        # This function already holds the native maintenance lease exclusively.
+        prepared = lifecycle._read(directory / "candidate.json")
+        checked = lifecycle._check_release(root, release, active["roles"])
+        if checked != prepared["candidate"]:
+            raise PreparationError("candidate installation record changed")
+        promoted = lifecycle._publish(root, checked)
         return {"state": "activated", **promoted}
 
 

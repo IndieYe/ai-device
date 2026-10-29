@@ -45,12 +45,19 @@ def instance(tmp_path, monkeypatch):
     candidate = {"release": "new", "roles": ["client"]}
     calls = []
 
-    def activate_release(root, release, *, stopped=False):
-        calls.append((str(root), release, stopped))
-        return {"release": release, "roles": ["client"]}
+    # The promotion reuses lifecycle's private helpers; stub only the pieces that
+    # would need a real built release and a real pointer file.
+    def check_release(root, release, roles, **kw):
+        record = json.loads((root / "releases" / release / "candidate.json").read_text())
+        return record["candidate"]
 
-    # Keep the real module for _release_id; only the promotion itself is faked.
-    monkeypatch.setattr(np.lifecycle, "activate_release", activate_release)
+    monkeypatch.setattr(np.lifecycle, "_check_release", check_release)
+
+    def publish(root, checked):
+        calls.append((str(root), checked["release"]))
+        return {"release": checked["release"], "roles": ["client"]}
+
+    monkeypatch.setattr(np.lifecycle, "_publish", publish)
     return root, binding, active, candidate, calls
 
 
@@ -106,7 +113,7 @@ def test_activation_promotes_prepared_release(instance):
 
     assert result["state"] == "activated"
     assert result["release"] == "new"
-    assert calls == [(str(root), "new", True)]
+    assert calls == [(str(root), "new")]
 
 
 def test_activation_accepts_dotted_release_names(instance):
@@ -128,3 +135,20 @@ def test_activation_accepts_dotted_release_names(instance):
 
     assert result["state"] == "activated"
     assert calls[0][1] == release
+
+
+def test_activation_does_not_route_through_management_lease(instance, monkeypatch):
+    """activate_release takes install._lock, which rejects any marked instance.
+
+    A registered instance always carries the native marker, so reusing the public
+    lifecycle entry made every real promotion fail with "requires the native
+    lifecycle manager". Pin that this path never calls it.
+    """
+    root, _binding, active, candidate, _calls = instance
+    _write_record(root, np.core._lifecycle_binding(root, active), candidate)
+
+    def boom(*a, **kw):
+        raise AssertionError("activate_release would take the legacy lease")
+
+    monkeypatch.setattr(np.lifecycle, "activate_release", boom)
+    assert np.activate_candidate(root, "new", stopped=True)["state"] == "activated"
