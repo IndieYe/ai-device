@@ -3082,3 +3082,51 @@ if arg and tonumber(arg[2]) and tonumber(arg[2]) > 0 then return end
 ### 边界
 - 升级路径仍被 `%pretrans` 拒绝，`%preun` 的 `arg[2]` 分支在产品升级场景中不可达，属前瞻防御。
 - DEB `prerm` 同类问题未修（dpkg 传 `upgrade` 字符串，修法不同）。
+
+## 298. DEB prerm 对称修复
+
+### dpkg 与 rpm 的调用顺序不同
+实测（Ubuntu 24.04 容器，探针包）：
+
+```
+dpkg -i 2.0（升级时）:  PRERM upgrade → PREINST upgrade → POSTRM abort-upgrade
+rpm -U             :  %pretrans 先拒绝，%preun 未执行
+```
+
+RPM 的 `%pretrans` 在 `%preun` 之前挡下升级，所以 `%preun` 的守卫缺陷不可达；
+dpkg 反过来，**`prerm upgrade` 先于 `preinst upgrade`**，守卫会真实执行。
+
+修复前实测：升级时会先输出 `prerm: guard would REFUSE during upgrade` 并 exit 1，
+失败后又触发 `prerm failed-upgrade` 再来一次。真实原因是 `preinst` 的 layout 检查，
+却被守卫消息掩盖。
+
+### 参数语义
+dpkg 传的是词，不是数字：升级 `upgrade`、卸载 `remove`、purge `purge`。
+据此不能用 rpm 的 `arg[2]` 数字比较，改用 shell `case`：
+
+```sh
+case "${1:-remove}" in
+ upgrade|failed-upgrade) exit 0 ;;
+esac
+```
+
+两点考虑：
+- `failed-upgrade` 必须一并放行，否则守卫在 upgrade 失败后的补偿调用里再次触发。
+- 脚本带 `set -eu`，`$1` 缺失会因 `set -u` 报错；默认值取 `remove`，让未知调用方仍走守卫（保守方向）。
+
+### 验收（制品 `0c1325f5…`，105274934 字节，隔离 Ubuntu systemd 容器）
+| 场景 | 结果 |
+| --- | --- |
+| 包内 `prerm` 第 10 行为 `${1:-remove}` case | 是 |
+| 有实例 `dpkg --purge` | rc=1 拒绝，payload 完好，包仍 installed |
+| 拒绝后实例 venv | 可用 |
+| unregister 后 `dpkg --purge` | rc=0，payload 删除，链接清理 1 个，wants absent |
+| 卸包后 venv | 可用 |
+| 升级尝试（已注册实例） | rc=1，报 `existing native versioned layout; helper transaction required`，**无 prerm 守卫消息** |
+
+最后一行是本次修复的目的：错误信息指向真实原因，不再被守卫误报掩盖。
+
+### 边界
+- 升级本身仍不可用（`preinst` 拒绝），本次只修正失败原因的可读性与调用链正确性。
+- 未验证放开 layout 检查后的真实升级语义。
+- DEB 制品未签名。

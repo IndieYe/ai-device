@@ -89,6 +89,16 @@ EOF
  cat > "$root/DEBIAN/prerm" <<'EOF'
 #!/bin/sh
 set -eu
+# dpkg calls prerm with a word, not a count: `upgrade` when a new version
+# replaces this one, `remove`/`purge` on a real erase. Unlike rpm, dpkg runs
+# prerm *before* preinst on an upgrade, so without this branch the guards below
+# would fire during an upgrade and report a registered instance where the real
+# refusal is the preinst layout check. Only erase must be guarded.
+# `set -u` is active, so read the action with a default: an unexpected caller
+# that passes nothing is treated as an erase, which keeps the guards closed.
+case "${1:-remove}" in
+ upgrade|failed-upgrade) exit 0 ;;
+esac
 # Erasing the package deletes the payload and its bundled interpreter, so an
 # existing instance would be left with a run script whose interpreter is gone.
 for path in /opt/ai-device/instances /var/lib/ai-device/manager /etc/systemd/system/ai-device-native-helper.service; do
