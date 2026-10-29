@@ -110,6 +110,42 @@ def _lock(root):
         yield
 
 
+def _write_candidate_record(root, active, prepared):
+    """Write the lifecycle binding that activate_release verifies.
+
+    lifecycle.prepare_upgrade records this itself; the native preparation path
+    builds the release through _prepare directly and therefore has to emit the
+    same record, or the prepared release can never be promoted.
+    """
+    _json(
+        root / "releases" / prepared["release"] / "candidate.json",
+        {
+            "format_version": 1,
+            "binding": _lifecycle_binding(root, active),
+            "candidate": prepared,
+        },
+    )
+
+
+def _lifecycle_binding(root, active):
+    """Mirror lifecycle._binding without importing it (lifecycle imports us)."""
+    return {
+        "active": active,
+        "identity": json.loads((root / "instance.json").read_text()),
+        "identity_sha256": _file_sha256(root / "instance.json"),
+        "config_sha256": _file_sha256(root / "config" / "roles.json"),
+        "state_format": 1,
+    }
+
+
+def _file_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _client_contract(bundle, manifest):
     """The client extra must select exactly the bundled core versions, not public lookalikes."""
     path = bundle / manifest["components"]["device"]["path"]

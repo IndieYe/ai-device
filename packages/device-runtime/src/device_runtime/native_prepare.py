@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from . import installation as core
+from . import lifecycle
 from . import native_candidate as candidate
 from . import native_helper as helper
 from .management_lock import MARKER, native_preparation_lease
@@ -157,6 +158,39 @@ def retire_preparation(root, operation_id):
         return receipt
 
 
+def activate_candidate(root, release, *, stopped=False):
+    """Promote a prepared release for a registered instance.
+
+    The service must already be stopped. This takes the installation lease
+    exclusively, which only succeeds when no launcher holds it shared, so the
+    lock -- not the caller's flag -- is what proves the instance is idle.
+    """
+    if not stopped:
+        raise PreparationError("explicit --stopped confirmation required; this never stops processes")
+    root = helper._path(root)
+    binding, active = _binding(root)
+    with (
+        native_preparation_lease(root),
+        (root / ".installation.lock").open("rb") as lease,
+    ):
+        try:
+            fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise PreparationError("instance is running or maintenance is active") from exc
+        if _binding(root) != (binding, active):
+            raise PreparationError("source changed before activation")
+        directory = root / "releases" / helper._identifier(release)
+        if directory.is_symlink() or (directory / "candidate.json").is_symlink():
+            raise PreparationError("invalid candidate directory")
+        record = candidate._json((directory / "candidate.json").read_bytes())
+        if record.get("format_version") != 1 or record.get("binding") != core._lifecycle_binding(
+            root, active
+        ):
+            raise PreparationError("candidate was not prepared for this instance state")
+        promoted = lifecycle.activate_release(root, release, stopped=True)
+        return {"state": "activated", **promoted}
+
+
 def prepare_runtime_candidate(
     root,
     package,
@@ -293,6 +327,11 @@ def prepare_runtime_candidate(
                 or helper._digest(root / MARKER) != request["binding_sha256"]
             ):
                 raise PreparationError("source changed during preparation; candidate not approved")
+            # Record the lifecycle candidate binding so the same release can later be
+            # activated through lifecycle.activate_release. Without this file the
+            # registered instance has no way to promote a prepared release: the
+            # application transaction ends at package_applied_pending_activation.
+            core._write_candidate_record(root, active, prepared)
             receipt = {
                 "state": "runtime_prepared",
                 "request": request,
@@ -311,6 +350,17 @@ def prepare_runtime_candidate(
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "activate":
+        parser = argparse.ArgumentParser(
+            description="Promote a prepared release for a stopped registered instance"
+        )
+        parser.add_argument("activate")
+        parser.add_argument("--root", required=True)
+        parser.add_argument("--release", required=True)
+        parser.add_argument("--stopped", action="store_true", required=True)
+        args = parser.parse_args()
+        print(canonical(activate_candidate(args.root, args.release, stopped=args.stopped)))
+        return
     if len(sys.argv) > 1 and sys.argv[1] == "retire":
         parser = argparse.ArgumentParser(
             description="Explicit administrator retirement; no deletion or replay"

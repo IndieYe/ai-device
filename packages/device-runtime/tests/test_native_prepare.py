@@ -14,6 +14,11 @@ def preparation(tmp_path, monkeypatch):
     root.mkdir()
     (root / ".installation.lock").touch()
     (root / "active.json").write_text('{"roles":["client"],"release_version":"1"}')
+    # A registered instance always carries these: helper.register reads both, and
+    # lifecycle binds them into every candidate record.
+    (root / "instance.json").write_text('{"format_version":1,"instance_id":"probe"}')
+    (root / "config").mkdir()
+    (root / "config/roles.json").write_text('{"client":{"device_id":"probe"}}')
     (root / np.MARKER).write_text("fixture binding")
     uv = tmp_path / "uv"
     uv.write_text("#!/bin/sh\nexit 99\n")
