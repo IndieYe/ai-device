@@ -50,12 +50,19 @@ def test_deb_preflight_rejects_existing_versioned_layout(tmp_path, existing):
 
 
 def test_rpm_preflight_guards_layout_roots():
+    """rpm must classify the layout, not refuse unconditionally.
+
+    The old lua refused any versioned tree, which blocked every upgrade. The
+    tree may now gain a sibling version -- but an unclassifiable layout, or a
+    reinstall of the same version, still stops the transaction.
+    """
     builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
     source = builder.read_text().split("%pretrans -p <lua>", 1)[1].split("%preun", 1)[0]
     assert "'/opt/ai-device/packages'" in source
     assert "'/opt/ai-device/bootstrap'" in source
-    assert "helper transaction required" in source
-    assert "posix.readlink(path)" in source
+    assert "pre-install refused" in source
+    assert "already installed" in source
+    assert "posix.stat(path, 'type')" in source
 
 
 @pytest.mark.parametrize("name", ["packages", "bootstrap"])

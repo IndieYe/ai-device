@@ -681,3 +681,87 @@ def test_candidate_evidence_must_be_regular_file(runtime, monkeypatch, kind):
     with pytest.raises(bootstrap.BootstrapError, match="candidate evidence"):
         bootstrap.read_helper_candidate(candidates, "v1")
     assert os.path.lexists(path)
+
+
+def test_bootstrap_pointer_selects_versioned_directory(tmp_path, monkeypatch):
+    """An upgrade writes a new versioned tree and moves the pointer.
+
+    Hard-coding one path meant every upgrade required editing this module.
+    """
+    root = tmp_path / "bootstrap"
+    target = root / "0.3.0-native2"
+    target.mkdir(parents=True)
+    (target / "runtime").mkdir()
+    pointer = root / "current"
+    pointer.write_text("0.3.0-native2\n")
+
+    monkeypatch.setattr(bootstrap, "BOOTSTRAP_ROOT", root)
+    monkeypatch.setattr(bootstrap, "BOOTSTRAP_POINTER", pointer)
+    monkeypatch.setattr(bootstrap.helper, "_trusted", lambda *a, **kw: None)
+
+    assert bootstrap.trusted_helper_bootstrap() == target / "runtime"
+
+
+def test_bootstrap_pointer_falls_back_when_absent(tmp_path, monkeypatch):
+    """Installs predating the pointer keep working."""
+    monkeypatch.setattr(bootstrap, "BOOTSTRAP_POINTER", tmp_path / "missing")
+    monkeypatch.setattr(bootstrap, "TRUSTED_HELPER_BOOTSTRAP", tmp_path / "legacy/runtime")
+
+    assert bootstrap.trusted_helper_bootstrap() == tmp_path / "legacy/runtime"
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["../escape", "/absolute/path", "a/b", "", ".hidden", "-dash", "x" * 200],
+)
+def test_bootstrap_pointer_rejects_anything_but_a_directory_name(tmp_path, monkeypatch, value):
+    """The pointer becomes a path component, so it may name a directory only."""
+    root = tmp_path / "bootstrap"
+    root.mkdir()
+    pointer = root / "current"
+    pointer.write_text(value + "\n")
+
+    monkeypatch.setattr(bootstrap, "BOOTSTRAP_ROOT", root)
+    monkeypatch.setattr(bootstrap, "BOOTSTRAP_POINTER", pointer)
+    monkeypatch.setattr(bootstrap.helper, "_trusted", lambda *a, **kw: None)
+
+    with pytest.raises(bootstrap.BootstrapError, match="invalid directory"):
+        bootstrap.trusted_helper_bootstrap()
+
+
+def test_bootstrap_pointer_is_itself_checked_for_trust(tmp_path, monkeypatch):
+    """The pointer must not become a way around the administrator-owned check."""
+    root = tmp_path / "bootstrap"
+    (root / "v1").mkdir(parents=True)
+    pointer = root / "current"
+    pointer.write_text("v1\n")
+
+    checked = []
+
+    def refuse(path, **kw):
+        checked.append(str(path))
+        raise bootstrap.helper.HelperError("administrator-owned non-writable path required")
+
+    monkeypatch.setattr(bootstrap, "BOOTSTRAP_ROOT", root)
+    monkeypatch.setattr(bootstrap, "BOOTSTRAP_POINTER", pointer)
+    monkeypatch.setattr(bootstrap.helper, "_trusted", refuse)
+
+    with pytest.raises(bootstrap.helper.HelperError, match="administrator-owned"):
+        bootstrap.trusted_helper_bootstrap()
+    assert checked == [str(pointer)]
+
+
+def test_bootstrap_pointer_must_be_regular_file(tmp_path, monkeypatch):
+    """A FIFO or symlink here would block or redirect resolution silently."""
+    import os
+
+    root = tmp_path / "bootstrap"
+    root.mkdir()
+    pointer = root / "current"
+    os.mkfifo(pointer)
+
+    monkeypatch.setattr(bootstrap, "BOOTSTRAP_ROOT", root)
+    monkeypatch.setattr(bootstrap, "BOOTSTRAP_POINTER", pointer)
+
+    with pytest.raises(bootstrap.BootstrapError, match="regular file"):
+        bootstrap.trusted_helper_bootstrap()

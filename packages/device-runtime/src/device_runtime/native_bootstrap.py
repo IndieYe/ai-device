@@ -33,7 +33,35 @@ class BootstrapError(ValueError):
 
 # This versioned bootstrap is installed separately from candidate snapshots.
 # Its package provenance and lifecycle still require independent verification.
-TRUSTED_HELPER_BOOTSTRAP = Path("/opt/ai-device/bootstrap/0.2.2-native1/runtime")
+BOOTSTRAP_ROOT = Path("/opt/ai-device/bootstrap")
+# Fallback for installs that predate the pointer, and for tests. A package upgrade
+# writes a new versioned directory and moves BOOTSTRAP_POINTER; hard-coding one
+# path made every upgrade require editing this module.
+TRUSTED_HELPER_BOOTSTRAP = BOOTSTRAP_ROOT / "0.2.2-native1" / "runtime"
+BOOTSTRAP_POINTER = BOOTSTRAP_ROOT / "current"
+
+
+def trusted_helper_bootstrap():
+    """Resolve the bootstrap the helper should run from.
+
+    The pointer names a versioned directory, never a path, so a malformed or
+    hostile value cannot escape BOOTSTRAP_ROOT. It is read as root-owned
+    evidence: the same ancestry check the caller applies to the bootstrap itself
+    runs here first, so the pointer cannot become a way around that check.
+    """
+    try:
+        info = BOOTSTRAP_POINTER.lstat()
+    except FileNotFoundError:
+        return TRUSTED_HELPER_BOOTSTRAP
+    if not stat.S_ISREG(info.st_mode):
+        raise BootstrapError("bootstrap pointer must be a regular file")
+    name = BOOTSTRAP_POINTER.read_text(encoding="utf-8").strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", name):
+        raise BootstrapError("bootstrap pointer names an invalid directory")
+    resolved = BOOTSTRAP_ROOT / name / "runtime"
+    helper._trusted(BOOTSTRAP_POINTER)
+    helper._trusted(resolved, directory=False)
+    return resolved
 
 
 def _digest(path):
@@ -348,7 +376,7 @@ def _verified_helper_bytes(candidates_dir, version, expected_snapshot_sha256):
         raise BootstrapError("Linux administrator required")
     candidate = helper._path(candidates_dir) / version
     runtime = candidate / "runtime"
-    bootstrap = TRUSTED_HELPER_BOOTSTRAP
+    bootstrap = trusted_helper_bootstrap()
     python = bootstrap / "bin/python3.13"
     site = bootstrap / "lib/python3.13/site-packages/device_runtime"
     if (

@@ -15,7 +15,9 @@ case "$mode" in
   mkdir -p /opt/ai-device/packages/old-release
   printf 'sentinel\n' > /opt/ai-device/packages/old-release/data
   if install >/tmp/native-layout-install.log 2>&1; then echo 'unexpected install success' >&2; exit 1; fi
-  grep 'helper transaction required' /tmp/native-layout-install.log
+  # The payload directory exists but carries no interpreter, so nothing can
+  # classify it. That stays a refusal; the message names the reason.
+  grep 'no payload interpreter can classify it' /tmp/native-layout-install.log
   test "$(cat /opt/ai-device/packages/old-release/data)" = sentinel
   test ! -e /opt/ai-device/packages/0.2.2-native1
   ;;
@@ -23,7 +25,8 @@ case "$mode" in
   mkdir -p /opt/ai-device
   ln -s /missing-target /opt/ai-device/bootstrap
   if install >/tmp/native-layout-install.log 2>&1; then echo 'unexpected install success' >&2; exit 1; fi
-  grep 'helper transaction required' /tmp/native-layout-install.log
+  # A dangling symlink is an unclassifiable layout, not an empty one.
+  grep 'no payload interpreter can classify it' /tmp/native-layout-install.log
   test "$(readlink /opt/ai-device/bootstrap)" = /missing-target
   test ! -e /opt/ai-device/packages
   ;;

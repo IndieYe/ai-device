@@ -56,23 +56,30 @@ chmod -R go-w "$root$bootstrap"
 # inside the payload. Bytecode belongs to the running interpreter, not to the
 # package, so ship a clean tree and let erase handle only caches created later.
 find "$root$home" "$root$bootstrap" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
-# Fail closed: no upgrade/removal of an existing native instance until helper
-# transactions are implemented. This development package only supports fresh install.
+# Guard the existing layout through one shared classifier. Both package managers
+# call native_layout, so the shell and lua hooks cannot drift apart. Anything the
+# classifier does not recognise is refused; a recognised single-version layout
+# may receive a new versioned tree beside it.
 cat > "$work/preflight" <<'EOF'
 #!/bin/sh
 set -eu
-if [ -e /opt/ai-device/packages ] || [ -L /opt/ai-device/packages ] || [ -e /opt/ai-device/bootstrap ] || [ -L /opt/ai-device/bootstrap ]; then
- echo 'existing native versioned layout; helper transaction required' >&2
- exit 1
-fi
-if [ -e /opt/ai-device/instances ] || [ -L /opt/ai-device/instances ] || [ -e /var/lib/ai-device/manager ] || [ -L /var/lib/ai-device/manager ] || [ -e /opt/ai-device/bootstrap/0.2.2-native1 ] || [ -L /opt/ai-device/bootstrap/0.2.2-native1 ]; then
- echo 'native lifecycle helper transaction required; no files have been replaced' >&2
- exit 1
-fi
-if [ -e /opt/ai-device/packages/0.2.2-native1 ] || [ -L /opt/ai-device/packages/0.2.2-native1 ]; then
- echo 'existing native payload; in-place package replacement is not yet supported' >&2
- exit 1
-fi
+# dpkg runs preinst before unpacking, so this package's own files are still in a
+# staging directory. The only interpreter that can exist here belongs to an
+# installed payload. Use it when present; otherwise classify with plain shell,
+# because a fresh install by definition has no layout to judge.
+for interpreter in /opt/ai-device/packages/*/runtime/bin/python3.13; do
+ [ -x "$interpreter" ] || continue
+ exec "$interpreter" -I -B -m device_runtime.native_layout check 0.2.2-native1
+done
+# No installed interpreter: only an absent layout is acceptable here. Anything
+# else is state this package cannot classify, so refuse rather than overwrite.
+for path in /opt/ai-device/packages /opt/ai-device/bootstrap /opt/ai-device/instances /var/lib/ai-device/manager; do
+ [ ! -e "$path" ] && [ ! -L "$path" ] || {
+  echo "native package pre-install refused: $path exists but no payload interpreter can classify it" >&2
+  exit 1
+ }
+done
+exit 0
 EOF
 if [ "$kind" = deb ]; then
  mkdir -p "$root/DEBIAN"
@@ -142,9 +149,33 @@ Offline development payload. Service management and unattended update not enable
 mkdir -p %{buildroot}
 cp -a $root/. %{buildroot}/
 %pretrans -p <lua>
-local p = {'/opt/ai-device/instances','/var/lib/ai-device/manager','/opt/ai-device/packages','/opt/ai-device/bootstrap','/opt/ai-device/packages/0.2.2-native1','/opt/ai-device/bootstrap/0.2.2-native1'}
-for _,path in ipairs(p) do
- if posix.stat(path) or posix.readlink(path) then error('existing native installation: helper transaction required') end
+-- Same decision as the dpkg preinst, expressed in lua because rpm runs this
+-- before it unpacks anything. Only an absent layout or a single complete
+-- versioned tree may proceed; everything else is state we cannot classify.
+local function versioned(root)
+ local found = {}
+ local names = posix.dir(root)
+ if not names then return found end
+ for _,name in ipairs(names) do
+  if name ~= '.' and name ~= '..' then
+   local path = root .. '/' .. name
+   local mode = posix.stat(path, 'type')
+   if mode ~= 'directory' then
+    error('native package pre-install refused: ' .. path .. ' is not a plain directory')
+   end
+   found[#found + 1] = name
+  end
+ end
+ return found
+end
+local packages = versioned('/opt/ai-device/packages')
+local bootstraps = versioned('/opt/ai-device/bootstrap')
+if #packages == 0 and #bootstraps == 0 then return end
+if #packages ~= 1 or #bootstraps ~= 1 then
+ error('native package pre-install refused: expected one versioned payload and bootstrap, found ' .. #packages .. '/' .. #bootstraps)
+end
+if packages[1] == '0.2.2-native1' then
+ error('native package pre-install refused: 0.2.2-native1 is already installed')
 end
 %preun -p <lua>
 -- rpm passes the number of package instances that will remain: 0 on a real

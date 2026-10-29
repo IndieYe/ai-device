@@ -393,7 +393,7 @@ def deploy_helper(*, bootstrap_python, registry, unit_dir, runtime_dir, group, c
     if candidate_version is not None:
         from . import native_bootstrap
 
-        if python != native_bootstrap.TRUSTED_HELPER_BOOTSTRAP / "bin/python3.13":
+        if python != native_bootstrap.trusted_helper_bootstrap() / "bin/python3.13":
             raise HelperError("independent bootstrap required for candidate deployment")
     if not registry.exists() and candidate_version is None:
         _trusted(registry.parent, directory=True)
