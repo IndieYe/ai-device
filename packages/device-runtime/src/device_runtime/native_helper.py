@@ -23,6 +23,7 @@ import time
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
+from .installation import LAUNCHER, RUNNER_BODY
 from .management_lock import MARKER, management_lease
 
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
@@ -83,6 +84,23 @@ def _trusted(path, *, directory=False):
             raise HelperError("administrator-owned non-writable path required")
     if directory and not path.is_dir():
         raise HelperError("registry must be a directory")
+
+
+def _read_release_pointer(root):
+    """Read the single-line release pointer the launcher trusts.
+
+    Registration follows this pointer so the interpreter it approves is the one
+    that will actually start. The value becomes a path component, so it is
+    validated here rather than trusted from the file.
+    """
+    path = root / "current"
+    if path.is_symlink() or not stat.S_ISREG(path.lstat().st_mode):
+        raise HelperError("release pointer must be a regular file")
+    value = _read_regular(path, "release pointer must be a regular file")
+    release = value.strip()
+    if value.count("\n") > 1 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.+!-]*", release):
+        raise HelperError("release pointer is not a valid release name")
+    return release
 
 
 def _trusted_instance_interpreter(path, uid, gid):
@@ -525,10 +543,26 @@ def _register(registry, unit_dir, *, instance_id, root, username, environment_fi
     # X_OK alone does not exclude a FIFO: any file can carry the execute bit.
     if not stat.S_ISREG(runner.lstat().st_mode):
         raise HelperError("stable runner must be a regular executable")
-    first = runner.read_text().splitlines()[0]
-    if not first.startswith("#!/") or first.startswith("#!/usr/bin/env"):
-        raise HelperError("native runner requires an absolute packaged interpreter")
-    interpreter = _path(first[2:])
+    entry_text = runner.read_text()
+    if entry_text == LAUNCHER:
+        body = root / "run-runner"
+        if body.is_symlink() or not stat.S_ISREG(body.lstat().st_mode):
+            raise HelperError("runner body must be a regular file")
+        if body.read_text() != RUNNER_BODY:
+            raise HelperError("runner body is not the expected program")
+        # Follow the pointer the launcher follows, and trust-check that release's
+        # interpreter. Switching releases later does not need a new registration:
+        # registration approves the instance, and whichever release the pointer
+        # names must still pass the same check at start-up.
+        release = _read_release_pointer(root)
+        interpreter = root / "releases" / release / "runtime" / "bin" / "python3.13"
+    else:
+        # Legacy instance installed without a private runtime: the entry is a
+        # single file whose shebang names the interpreter directly.
+        first, _, rest = entry_text.partition("\n")
+        if rest != RUNNER_BODY or not first.startswith("#!"):
+            raise HelperError("stable runner is not a recognized entrypoint")
+        interpreter = Path(first[2:].strip())
     # The client unit runs as the instance account, so this interpreter is not a
     # privilege boundary: swapping it cannot escalate. It still must be a real
     # regular executable that the account cannot rewrite after registration, so

@@ -88,9 +88,9 @@ def _policy(root, *, release=None, fingerprint=None):
 
 
 @contextmanager
-def _control(root, upgrade_id, *, supervised=False):
+def _control(root, upgrade_id, *, supervised=False, strict_pointer=True):
     root = life._root(root)
-    life._layout(root, online=True)
+    life._layout(root, online=True, strict_pointer=strict_pointer)
     _operation_id(upgrade_id)
     directory = root / "upgrades"
     if directory.is_symlink():
@@ -115,7 +115,9 @@ def _control(root, upgrade_id, *, supervised=False):
 
 
 def _baseline(root):
-    active, identity = life._layout(root, online=True)
+    # Recovery must be able to describe an interrupted publication, where the
+    # pointer and active.json legitimately disagree; repair happens later.
+    active, identity = life._layout(root, online=True, strict_pointer=False)
     return life._binding(root, active, identity)
 
 
@@ -126,6 +128,16 @@ def _pending(root, own):
         record = life._read(path)
         if record["state"] not in {"verified_local", "succeeded", "failed", "cancelled"}:
             raise UpgradeError("another nonterminal upgrade requires reconciliation")
+
+
+def _active_runtime(instance, release):
+    """Return the active release's private runtime, or None for legacy instances."""
+    if not install._has_pointer(instance):
+        return None
+    runtime = instance / "releases" / release / "runtime"
+    if not runtime.is_dir() or runtime.is_symlink():
+        raise UpgradeError("active release has no private runtime")
+    return runtime
 
 
 @legacy_operation
@@ -160,7 +172,11 @@ def prepare(root, bundle, upgrade_id):
             _save(path, record)
             try:
                 candidate = install._prepare(
-                    instance, bundle, manifest, baseline["active"]["roles"]
+                    instance,
+                    bundle,
+                    manifest,
+                    baseline["active"]["roles"],
+                    runtime_source=_active_runtime(instance, baseline["active"]["release"]),
                 )
                 record["candidate"] = candidate
                 if _baseline(instance) != baseline:
@@ -212,7 +228,10 @@ def activate(root, upgrade_id, *, stopped=False, _supervised=False, _recovery=Fa
     """
     if not stopped:
         raise UpgradeError("explicit stopped confirmation required")
-    with _control(root, upgrade_id, supervised=_supervised) as (instance, path):
+    with _control(root, upgrade_id, supervised=_supervised, strict_pointer=False) as (
+        instance,
+        path,
+    ):
         record = life._read(path)
         recovering = (
             _recovery
@@ -255,6 +274,10 @@ def activate(root, upgrade_id, *, stopped=False, _supervised=False, _recovery=Fa
                     pointer["task_output_map_sha256"] = current["task_output_map_sha256"]
             record.update(state="publishing", expected_active=pointer)
             _save(path, record)
+            # The launcher starts whatever the pointer names; move it before the
+            # metadata publication so a crash cannot leave them disagreeing.
+            if install._has_pointer(instance):
+                install._write_pointer(instance, pointer["release"])
             _save(instance / "active.json", pointer)
             record["state"] = "published"
             _save(path, record)
@@ -264,7 +287,7 @@ def activate(root, upgrade_id, *, stopped=False, _supervised=False, _recovery=Fa
 @legacy_operation
 def reconcile(root, upgrade_id):
     """Reconcile pointer publication only; never restart services or replay a switch."""
-    with _control(root, upgrade_id) as (instance, path):
+    with _control(root, upgrade_id, strict_pointer=False) as (instance, path):
         record = life._read(path)
         if record["state"] == "publishing":
             with install._lock(instance):

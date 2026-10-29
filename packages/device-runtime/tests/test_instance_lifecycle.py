@@ -1421,6 +1421,7 @@ def test_stable_run_resolves_active_roles_after_switch_rollback_and_rebuild(
     def observe():
         release = active(root)["release"]
         python = root / "releases" / release / role / "venv" / "bin" / "python"
+        python.parent.mkdir(parents=True, exist_ok=True)
         python.write_text(
             f"#!{sys.executable}\n"
             "import json,os,sys\n"
@@ -1435,8 +1436,9 @@ def test_stable_run_resolves_active_roles_after_switch_rollback_and_rebuild(
             capture_output=True,
             text=True,
             timeout=10,
-            check=True,
+            check=False,
         )
+        assert result.returncode == 0, result.stderr
         observed = json.loads(result.stdout)
         assert Path(observed["python"]) == python
         assert Path(observed["cwd"]) == root
@@ -1472,3 +1474,97 @@ def test_stable_run_resolves_active_roles_after_switch_rollback_and_rebuild(
     install.rebuild_instance(root, bundle=delivery)
     assert active(root)["release"] not in (initial, candidate)
     observe()
+
+
+def _spy_release(root, release, role, marker):
+    """Write a role interpreter that prints which release actually started."""
+    python = root / "releases" / release / role / "venv" / "bin" / "python"
+    python.parent.mkdir(parents=True, exist_ok=True)
+    python.write_text(
+        f"#!{sys.executable}\n"
+        "import json,sys\n"
+        f"print(json.dumps({{'marker': {marker!r}, 'exe': __file__, 'argv': sys.argv[1:]}}))\n"
+    )
+    python.chmod(0o700)
+
+
+def _launch(root, *args, home):
+    return subprocess.run(
+        [str(root / "run"), *args],
+        capture_output=True,
+        text=True,
+        env={"PATH": os.environ["PATH"], "HOME": str(home)},
+        timeout=10,
+        check=False,
+    )
+
+
+def test_launcher_follows_pointer_across_activation_without_restart(
+    tmp_path, delivery, upgraded, simulated_installer
+):
+    """E1a: the stable entry runs whatever release the pointer names.
+
+    Activation must not restart anything; the switch only takes effect the next
+    time the entry is started. No caller config names a release.
+    """
+    root = tmp_path / "instance with spaces"
+    first = create(root, delivery, roles=("client",))["release"]
+    _spy_release(root, first, "client", "first")
+
+    ran = _launch(root, "client", home=tmp_path)
+    assert ran.returncode == 0, ran.stderr
+    assert json.loads(ran.stdout)["marker"] == "first"
+
+    candidate = prepare(root, upgraded)
+    life.activate_release(root, candidate, stopped=True)
+    _spy_release(root, candidate, "client", "second")
+
+    # Same command, same file: only the pointer moved.
+    ran = _launch(root, "client", home=tmp_path)
+    assert ran.returncode == 0, ran.stderr
+    observed = json.loads(ran.stdout)
+    assert observed["marker"] == "second"
+    assert Path(observed["exe"]) == (
+        root / "releases" / candidate / "client" / "venv" / "bin" / "python"
+    )
+
+    life.rollback_release(root, first, stopped=True)
+    ran = _launch(root, "client", home=tmp_path)
+    assert ran.returncode == 0, ran.stderr
+    assert json.loads(ran.stdout)["marker"] == "first"
+
+
+def test_launcher_refuses_when_pointer_disagrees_with_active(
+    tmp_path, delivery, simulated_installer
+):
+    """A pointer naming a release active.json does not describe must not start.
+
+    This is the crash window between the two writes: failing closed is the whole
+    point, so the entry must exit non-zero rather than guess.
+    """
+    root = tmp_path / "instance"
+    release = create(root, delivery, roles=("client",))["release"]
+    _spy_release(root, release, "client", "ok")
+
+    (root / "current").write_text("0.2.0-doesnotexist\n")
+
+    ran = _launch(root, "client", home=tmp_path)
+    assert ran.returncode != 0
+    assert ran.stdout == ""
+    assert "device instance" in ran.stderr
+
+
+def test_launcher_rejects_malformed_pointer_before_exec(
+    tmp_path, delivery, simulated_installer
+):
+    """Pointer values are validated as release ids, not used as free paths."""
+    root = tmp_path / "instance"
+    release = create(root, delivery, roles=("client",))["release"]
+    _spy_release(root, release, "client", "ok")
+    for hostile in ("../../etc", "a/b", "", "x;id", "0.2.0 ok"):
+        (root / "current").write_text(hostile + "\n")
+        ran = _launch(root, "client", home=tmp_path)
+        assert ran.returncode != 0, hostile
+        assert ran.stdout == "", hostile
+    (root / "current").write_text(release + "\n")
+    assert _launch(root, "client", home=tmp_path).returncode == 0

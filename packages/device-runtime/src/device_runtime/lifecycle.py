@@ -30,7 +30,11 @@ from .tasks import (
     validate_output_map,
 )
 
-PERSISTENT = ("instance.json", "config", "state", "run")
+PERSISTENT = ("instance.json", "config", "state", "run", "run-runner")
+# The release pointer is not part of the persistent data contract, but a restore
+# must reproduce it: the launcher reads it before anything else, and the copied
+# releases are the only ones that will exist after the restore.
+POINTER_FILES = ("current",)
 # Explicitly audited Device versions, NOT an inference from an installation format.
 # Widen this map only after validating a new version's persistent data contract.
 STATE_COMPATIBILITY = {"0.2.0": 1, "0.2.1": 1, "0.2.2": 1}
@@ -141,6 +145,11 @@ def _persistent(root, roles, *, online=False):
             # Live sockets, WALs and task output are not a stable snapshot.
             if (root / name).is_symlink() or not (root / name).is_dir():
                 raise InstallationError("invalid live state directory")
+        elif not (root / name).exists() and install._has_pointer(root):
+            raise InstallationError("persistent data is missing")
+        elif not (root / name).exists():
+            # Legacy single-file instances have no separate runner body.
+            continue
         else:
             _tree(root / name)
     identity = _read(root / "instance.json")
@@ -176,21 +185,58 @@ def _persistent(root, roles, *, online=False):
                 parts._replace(scheme="wss" if parts.scheme in ("https", "wss") else "ws").geturl(),
                 identity["instance_id"],
             )
-    if not (root / "run").is_file() or (root / "run").read_text() != install.RUNNER:
-        raise InstallationError("stable entrypoint is missing or incompatible")
+    # The stable entry is the shell launcher; the Python body sits beside it so
+    # the launcher can name the interpreter for the active release. Both must
+    # match exactly: a hand-edited entry would bypass the pointer check.
+    _check_entry(root)
+
     mapping = read_output_map(root)
     if mapping is not None and "client" not in roles:
         raise InstallationError("task output map requires a client role")
     return identity
 
 
-def _layout(root, *, online=False):
+def _check_entry(root):
+    """Accept either supported entry layout.
+
+    Instances with a private runtime use the shell launcher plus a separate
+    pointer-addressed body. Instances installed without one keep the historical
+    single-file runner with a shebang, because they have no per-release
+    interpreter for a launcher to name.
+    """
+    entry = root / "run"
+    if entry.is_symlink() or not entry.is_file():
+        raise InstallationError("stable entrypoint is missing or incompatible")
+    text = entry.read_text()
+    if text == install.LAUNCHER:
+        body = root / "run-runner"
+        if body.is_symlink() or not body.is_file() or body.read_text() != install.RUNNER_BODY:
+            raise InstallationError("runner body is missing or incompatible")
+        return
+    # Legacy layout: one file, shebang first line plus the same body.
+    if text.split("\n", 1)[-1] != install.RUNNER_BODY:
+        raise InstallationError("stable entrypoint is missing or incompatible")
+
+
+def _layout(root, *, online=False, strict_pointer=True):
     # Validate before obtaining a lease: never create a lock in an unrelated directory.
     if not (root / ".installation.lock").is_file() or (root / ".installation.lock").is_symlink():
         raise InstallationError("installation lease is missing or invalid")
     if (root / "active.json").is_symlink() or (root / "releases").is_symlink():
         raise InstallationError("invalid active pointer/release directory")
     active = _record(_read(root / "active.json"))
+    # The pointer decides which release actually starts; it must name the same
+    # release active.json records, or the entry and the metadata disagree.
+    # Legacy single-file instances have no pointer, so only check when present.
+    # Recovery paths pass strict_pointer=False: an interrupted publication is
+    # exactly the state where the two disagree, and they must be able to read
+    # the record in order to repair it.
+    if (
+        strict_pointer
+        and install._has_pointer(root)
+        and install._read_pointer(root) != active["release"]
+    ):
+        raise InstallationError("release pointer disagrees with active release")
     identity = _persistent(root, active["roles"], online=online)
     return active, identity
 
@@ -243,6 +289,9 @@ def _publish(root, candidate):
     current = _read(root / "active.json")
     if "task_output_map_sha256" in current:
         pointer["task_output_map_sha256"] = current["task_output_map_sha256"]
+    # The launcher starts whatever the pointer names, so activate/rollback must
+    # move it before committing the metadata they are switching to.
+    install._write_pointer(root, pointer["release"])
     install._json(root / "active.json", pointer)
     return pointer
 
@@ -282,7 +331,15 @@ def prepare_upgrade(root, bundle, *, stopped=False):
         manifest = inspect_bundle(bundle)
         _compatible(manifest)
         binding = _binding(root, active, identity)
-        candidate = install._prepare(root, bundle, manifest, active["roles"])
+        # A prepared release must be startable on its own, so it inherits the
+        # live release's private runtime exactly like a native install does.
+        candidate = install._prepare(
+            root,
+            bundle,
+            manifest,
+            active["roles"],
+            runtime_source=_release_runtime(root, active["release"]),
+        )
         install._json(
             root / "releases" / candidate["release"] / "candidate.json",
             {"format_version": 1, "binding": binding, "candidate": candidate},
@@ -413,9 +470,35 @@ def _new_destination(destination, source):
     return destination
 
 
+def _release_runtime(root, release):
+    """Return the active release's private runtime, or None for legacy instances."""
+    runtime = root / "releases" / release / "runtime"
+    if not install._has_pointer(root):
+        return None
+    if not runtime.is_dir() or runtime.is_symlink():
+        raise InstallationError("active release has no private runtime")
+    return runtime
+
+
+def _private_runtime(path):
+    """Strip group/other access while keeping each file's execute bit.
+
+    _private() forces 0o600, which is right for data files but would make every
+    interpreter in a recovered runtime unusable.
+    """
+    for item in [path, *path.rglob("*")]:
+        mode = item.lstat().st_mode
+        if stat.S_ISDIR(mode):
+            item.chmod(0o700)
+        elif stat.S_ISREG(mode):
+            item.chmod(0o700 if mode & 0o111 else 0o600)
+
+
 def _snapshot_inventory(root):
     result = {}
-    for name in (*PERSISTENT, "bundle"):
+    for name in (*PERSISTENT, *POINTER_FILES, "bundle"):
+        if not (root / name).exists():
+            continue
         result.update(_tree(root / name))
     return result
 
@@ -498,16 +581,30 @@ def backup_instance(root, destination, *, stopped=False):
             raise InstallationError("active installation record mismatch")
         bundle = root / "releases" / active["release"] / "bundle"
         before = {}
-        for name in PERSISTENT:
+        for name in (*PERSISTENT, *POINTER_FILES):
             before.update(_tree(root / name))
         before.update(_tree(bundle))
         inherited = read_output_map(root)
         destination.mkdir(mode=0o700, parents=True, exist_ok=False)
         for name in PERSISTENT:
             _copy(root / name, destination / name)
+        for name in POINTER_FILES:
+            if (root / name).is_file() and not (root / name).is_symlink():
+                _copy(root / name, destination / name)
         _copy(bundle, destination / "bundle")
+        # A restore rebuilds its environment from the backup alone, so the
+        # private runtime must travel with it; the source release may be gone by
+        # then and a launcher without an interpreter cannot start.
+        source_runtime = root / "releases" / active["release"] / "runtime"
+        backup_runtime = None
+        if source_runtime.is_dir() and not source_runtime.is_symlink():
+            backup_runtime = destination / "runtime"
+            # _copy() normalises every file to 0o600, which is right for data but
+            # strips the execute bit an interpreter needs. Keep modes here.
+            shutil.copytree(source_runtime, backup_runtime, symlinks=True)
+            _private_runtime(backup_runtime)
         after = {}
-        for name in PERSISTENT:
+        for name in (*PERSISTENT, *POINTER_FILES):
             after.update(_tree(root / name))
         after.update(_tree(bundle))
         if (
@@ -560,7 +657,13 @@ def _validate_backup(root):
         or manifest["format_version"] != 1
         or manifest["state_format"] != 1
         or {p.name for p in root.iterdir()}
-        != {*PERSISTENT, "bundle", "backup.json", "complete.json"}
+        != {
+            *PERSISTENT,
+            *POINTER_FILES,
+            "bundle",
+            "backup.json",
+            "complete.json",
+        } | ({"runtime"} if (root / "runtime").is_dir() else set())
         or manifest["inventory"] != _snapshot_inventory(root)
     ):
         raise InstallationError("backup is incomplete, damaged or unsupported")
@@ -592,7 +695,21 @@ def restore_instance(backup, destination):
     with install._lock(destination):
         for name in PERSISTENT:
             _copy(backup / name, destination / name)
+        # The launcher reads the pointer before anything else, so a restored
+        # instance must carry the backup's pointer rather than depend on the
+        # release id assigned below.
+        for name in POINTER_FILES:
+            if (backup / name).is_file() and not (backup / name).is_symlink():
+                _copy(backup / name, destination / name)
         (destination / "run").chmod(0o700)
+        # Reuse the private runtime captured in the backup, otherwise the new
+        # release would be published without an interpreter it can start with.
+        runtime_source = None
+        backup_runtime = backup / "runtime"
+        if (backup / "current").is_file():
+            if not backup_runtime.is_dir() or backup_runtime.is_symlink():
+                raise InstallationError("backup instance has no private runtime")
+            runtime_source = backup_runtime
         candidate = install._prepare(
             destination,
             backup / "bundle",
@@ -601,13 +718,20 @@ def restore_instance(backup, destination):
             required_output_map_format=(
                 OUTPUT_MAP_FORMAT if "client" in manifest["active"]["roles"] else None
             ),
+            runtime_source=runtime_source,
         )
         restored = {}
-        for name in PERSISTENT:
+        for name in (*PERSISTENT, *POINTER_FILES):
             restored.update(_tree(destination / name))
-        expected = {k: v for k, v in manifest["inventory"].items() if k.split("/")[0] in PERSISTENT}
+        expected = {
+            k: v
+            for k, v in manifest["inventory"].items()
+            if k.split("/")[0] in (*PERSISTENT, *POINTER_FILES)
+        }
         if restored != expected:
             raise InstallationError("restored persistent data does not match backup")
+        if runtime_source is not None:
+            _private_runtime(destination / "releases" / candidate["release"] / "runtime")
         _persistent(destination, candidate["roles"])
         _check_release(destination, candidate["release"], candidate["roles"])
         # Revalidate the source as well; never publish from a changing backup.
@@ -626,6 +750,8 @@ def restore_instance(backup, destination):
                     (destination / OUTPUT_MAP_FILE).read_bytes()
                 ).hexdigest(),
             }
+        if runtime_source is not None:
+            install._write_pointer(destination, candidate["release"])
         install._json(destination / "active.json", candidate)
         (destination / "active.json").chmod(0o600)
         return {"status": "restored_not_started", "instance_root": str(destination), **candidate}

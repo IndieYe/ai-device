@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import zipfile
+from pathlib import Path
 
 import pytest
 from test_bundle import make_wheel
@@ -54,7 +55,23 @@ def fake_uv(monkeypatch):
     return commands
 
 
-def create(root, delivery, roles=("client",)):
+def make_runtime(root, python=None):
+    """Build a minimal runtime tree to hand to install_instance.
+
+    Native installs always pass a runtime payload; supplying one here makes the
+    fixture exercise the launcher layout instead of the legacy single file.
+    """
+    if python is None:
+        python = sys.executable
+    source = Path(root).parent / (Path(root).name + "-runtime-src")
+    target = source / "bin" / "python3.13"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(f"#!/bin/sh\nexec {python} \"$@\"\n")
+    target.chmod(0o755)
+    return source
+
+
+def create(root, delivery, roles=("client",), runtime=True):
     return install_instance(
         delivery,
         root=root,
@@ -62,7 +79,26 @@ def create(root, delivery, roles=("client",)):
         roles=roles,
         server_url="http://127.0.0.1:28765",
         port=28765,
+        runtime_source=make_runtime(root) if runtime else None,
     )
+
+
+def add_runtime(root, release=None, python=None):
+    """Give a release the interpreter the launcher resolves from the pointer.
+
+    The launcher execs releases/<release>/runtime/bin/python3.13, so tests that
+    start ``run`` need that path to exist; without it the entry fails closed.
+    """
+    if release is None:
+        release = (root / "current").read_text().strip()
+    target = root / "releases" / release / "runtime" / "bin" / "python3.13"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if python is None:
+        python = sys.executable
+    if not target.exists():
+        target.write_text(f"#!/bin/sh\nexec {python} \"$@\"\n")
+        target.chmod(0o755)
+    return target
 
 
 def persistent(root):
@@ -84,7 +120,7 @@ def test_environment_uses_bootstrap_python_not_uv_discovery(
 
     root = tmp_path / "instance"
     if operation != "install":
-        create(root, delivery)
+        create(root, delivery, runtime=False)
         fake_uv.clear()
     # Simulate a transient bootstrap venv backed by a durable interpreter.
     interpreter = tmp_path / "shared python" / "python3.13"
@@ -96,7 +132,7 @@ def test_environment_uses_bootstrap_python_not_uv_discovery(
     monkeypatch.setenv("UV_PYTHON", "/root/private/python")
     monkeypatch.setenv("UV_PYTHON_INSTALL_DIR", "/root/private/managed")
     if operation == "install":
-        create(root, delivery, ("center", "client", "mcp"))
+        create(root, delivery, ("center", "client", "mcp"), runtime=False)
     elif operation == "rebuild":
         rebuild_instance(root)
     else:
@@ -138,7 +174,9 @@ def test_real_uv_venv_uses_bootstrap_base_with_hostile_uv_environment(
 
     monkeypatch.setattr(module, "_invoke", invoke)
     root = tmp_path / "instance"
-    active = create(root, delivery)
+    # This checks the venv base against the bootstrap interpreter, so it must
+    # not route the environment through a copied private runtime.
+    active = create(root, delivery, runtime=False)
     python = root / "releases" / active["release"] / "client/venv/bin/python"
     actual = json.loads(
         subprocess.check_output(
@@ -406,8 +444,9 @@ def test_corrupt_bundle_rejected_before_writes(tmp_path, delivery, fake_uv):
 def test_runner_error_is_controlled_and_keeps_config_private(tmp_path, delivery, fake_uv):
     root = tmp_path / "instance"
     create(root, delivery)
+    add_runtime(root)
     result = subprocess.run(
-        [sys.executable, str(root / "run"), "mcp"], capture_output=True, text=True, check=False
+        [str(root / "run"), "mcp"], capture_output=True, text=True, check=False
     )
     assert result.returncode == 2 and "Traceback" not in result.stderr
 
@@ -459,8 +498,9 @@ def test_runner_holds_lease_and_forwards_termination(tmp_path, delivery, fake_uv
         "while True: time.sleep(.02)\n"
     )
     executable.chmod(0o755)
+    add_runtime(root)
     process = subprocess.Popen(
-        [sys.executable, str(root / "run"), "center"],
+        [str(root / "run"), "center"],
         env={**os.environ, "TEST_READY": str(ready), "TEST_DONE": str(done)},
     )
     try:
@@ -534,11 +574,14 @@ def test_termination_while_popen_has_child_but_has_not_returned(
         f"    os.kill(os.getpid(), {signum})\n"
         "    return child\n"
         "subprocess.Popen = delayed\n"
-        f"entry = {str(root / 'run')!r}\n"
-        "exec(compile(Path(entry).read_text(),entry,'exec'),{'__file__':entry})\n"
+        f"entry = {str(root / 'run-runner')!r}\n"
+        f"release = {installed['release']!r}\n"
+        "exec(compile(Path(entry).read_text(),entry,'exec'),"
+        "{'__file__':entry,'__name__':'__main__'})\n"
     )
+    add_runtime(root)
     process = subprocess.Popen(
-        [sys.executable, "-c", injection, "center"],
+        [sys.executable, "-c", injection, installed["release"], "center"],
         env={**os.environ, "TEST_READY": str(ready), "TEST_DONE": str(done)},
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -803,8 +846,11 @@ def test_runner_client_concurrency_config(tmp_path, delivery, fake_uv, invalid):
         "#!/usr/bin/env python3\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n"
     )
     executable.chmod(0o755)
+    # The launcher resolves its interpreter from the pointer, so the release
+    # needs that path even though these cases only inspect the venv argv.
+    add_runtime(root, release=installed["release"])
     result = subprocess.run(
-        [sys.executable, str(root / "run"), "client"],
+        [str(root / "run"), "client"],
         capture_output=True,
         text=True,
         check=False,
@@ -831,7 +877,11 @@ def test_native_runner_is_written_before_active(tmp_path, delivery, fake_uv, mon
 
     def save(path, value):
         if path == root / "active.json":
-            assert (root / "run").read_text().splitlines()[0] == f"#!{python}"
+            # The stable entry is the launcher, and its interpreter choice comes
+            # from the pointer, so the shebang is no longer the call-site python.
+            assert (root / "run").read_text() == module.LAUNCHER
+            assert (root / "run-runner").read_text() == module.RUNNER_BODY
+            assert (root / "current").read_text().strip() == value["release"]
         return original(path, value)
 
     monkeypatch.setattr(module, "_json", save)
@@ -841,7 +891,7 @@ def test_native_runner_is_written_before_active(tmp_path, delivery, fake_uv, mon
         instance_id="native",
         roles=["client"],
         server_url="https://example.invalid",
-        runner_python=python,
+        runtime_source=make_runtime(root, python),
     )
 
 

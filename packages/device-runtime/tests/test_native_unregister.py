@@ -22,10 +22,11 @@ def registered(tmp_path, monkeypatch):
     (root / "instance.json").write_text('{"instance_id":"probe"}')
     (root / "active.json").write_text('{"roles":["client"]}')
     (root / "config/roles.json").write_text('{"roles":["client"]}')
-    runner = root / "run"
+    from conftest import write_entry
+
     # The packaged runner uses an absolute interpreter path, never /usr/bin/env.
-    runner.write_text(f"#!{Path(sys.executable).resolve()}\n")
-    runner.chmod(0o700)
+    write_entry(root, python=Path(sys.executable).resolve())
+    (root / "run").chmod(0o700)
     environment = tmp_path / "environment"
     environment.write_text("fixture")
     environment.chmod(0o600)

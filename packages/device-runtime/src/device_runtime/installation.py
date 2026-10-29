@@ -45,9 +45,14 @@ import re
 
 root = Path(__file__).resolve().parent
 try:
-    if len(sys.argv) != 2:
-        raise ValueError("usage: run <center|mcp|client>")
-    role = sys.argv[1]
+    # The launcher already resolved the release from the single-line pointer and
+    # selected this interpreter. Re-check that the pointer still names the same
+    # release under the shared lease: a switch that landed between the launcher's
+    # read and this lock must not silently run a release the pointer abandoned.
+    if len(sys.argv) != 3:
+        raise ValueError("usage: run <release> <center|mcp|client>")
+    expected_release = sys.argv[1]
+    role = sys.argv[2]
     with (root / ".installation.lock").open("rb") as lock:
         fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
         active = json.loads((root / "active.json").read_text())
@@ -57,6 +62,8 @@ try:
         release = active["release"]
         if not isinstance(release, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.+!-]*", release):
             raise ValueError("invalid active release")
+        if release != expected_release:
+            raise ValueError("active release changed before startup")
         env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME")}
         venv = root / "releases" / release / role / "venv"
         if role == "mcp":
@@ -97,6 +104,88 @@ except (OSError, ValueError, KeyError, TypeError):
     print("device instance: invalid configuration, unavailable environment or installation busy", file=sys.stderr)
     raise SystemExit(2)
 """
+
+# The stable entry point. It must keep working when a release is broken, so it
+# is plain POSIX shell with no dependency on any interpreter. It reads the
+# single-line release pointer and execs that release's own interpreter; the
+# pointer is the only thing an activation changes.
+LAUNCHER = """#!/bin/sh
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ "$#" -ne 1 ]; then
+ echo 'usage: run <center|mcp|client>' >&2
+ exit 2
+fi
+# Read the pointer without parsing JSON: an activation rewrites this file with
+# a single atomic replace, so a torn read cannot expose half a release name.
+release=$(cat "$root/current" 2>/dev/null) || {
+ echo 'device instance: release pointer is unreadable' >&2
+ exit 2
+}
+# Validate before using it in a path: the pointer is writable only by the
+# instance owner, but a malformed value must fail closed, not become a path.
+case "$release" in
+ ''|*[!A-Za-z0-9_.+!-]*)
+  echo 'device instance: release pointer is invalid' >&2
+  exit 2
+  ;;
+esac
+# A leading dot or dash would still pass the character check, so reject those
+# two shapes explicitly rather than trusting the pattern above.
+case "$release" in
+ .*|-*) echo 'device instance: release pointer is invalid' >&2; exit 2 ;;
+esac
+interpreter="$root/releases/$release/runtime/bin/python3.13"
+if [ ! -x "$interpreter" ]; then
+ echo 'device instance: active release has no executable interpreter' >&2
+ exit 2
+fi
+exec "$interpreter" -I "$root/run-runner" "$release" "$1"
+"""
+
+# Same body without a shebang: the launcher names the interpreter explicitly.
+RUNNER_BODY = RUNNER.split("\n", 1)[1]
+
+POINTER = "current"
+
+
+def _write_pointer(root, release):
+    """Atomically replace the single-line release pointer.
+
+    The value is validated first so a bug cannot write a path fragment. Callers
+    must already hold the installation lock: the pointer and active.json are
+    read by different processes and must move together.
+    """
+    if not isinstance(release, str) or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9_.+!-]*", release
+    ):
+        raise InstallationError("invalid release pointer value")
+    path = root / POINTER
+    temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
+    try:
+        with temporary.open("x", encoding="utf-8") as stream:
+            stream.write(release + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _has_pointer(root):
+    """Legacy instances installed without a private runtime have no pointer."""
+    path = root / POINTER
+    return path.is_file() and not path.is_symlink()
+
+
+def _read_pointer(root):
+    path = root / POINTER
+    if path.is_symlink() or not path.is_file():
+        raise InstallationError("release pointer is missing or invalid")
+    value = path.read_text(encoding="utf-8")
+    if value.count("\n") > 1:
+        raise InstallationError("release pointer must be a single line")
+    return value.rstrip("\n")
 
 
 def _identity(value):
@@ -521,9 +610,29 @@ def install_instance(
             }
             _json(root / "config" / "roles.json", config)
             _json(root / "instance.json", {"format_version": 1, "instance_id": instance_id})
+            # The stable entry is the shell launcher; the Python body lives in a
+            # sibling file so it carries no shebang and cannot be started directly
+            # with a stale interpreter.
+            runner_body = root / "run-runner"
             runner = root / "run"
-            runner.write_text(runner_content, encoding="utf-8")
-            runner.chmod(0o755)
+            if runtime_source is None:
+                # No private runtime to address, so keep the historical single
+                # file runner. A launcher here would name an interpreter that
+                # does not exist and the instance could never start.
+                runner.write_text(runner_content, encoding="utf-8")
+                runner.chmod(0o755)
+            else:
+                # The stable entry is the shell launcher; the Python body lives in
+                # a sibling file so it carries no shebang and cannot be started
+                # directly with a stale interpreter.
+                runner_body.write_text(RUNNER_BODY, encoding="utf-8")
+                runner_body.chmod(0o755)
+                runner.write_text(LAUNCHER, encoding="utf-8")
+                runner.chmod(0o755)
+                # Pointer first, metadata second, both under the installation
+                # lock. A crash between them leaves the pointer naming a release
+                # that active.json does not describe, which RUNNER rejects.
+                _write_pointer(root, active["release"])
             _json(root / "active.json", active)
         return {"instance_root": str(root), **active}
     except OSError as exc:
@@ -565,13 +674,29 @@ def rebuild_instance(root, *, bundle=None):
             manifest = inspect_bundle(source)
             if _fingerprint(manifest) != active["bundle_sha256"]:
                 raise InstallationError("rebuild requires the identical bundle, not an upgrade")
-            candidate = _prepare(root, source, manifest, roles)
+            # A rebuild must not hand the instance a release it cannot start.
+            # Reuse the live release's private runtime so the new environment is
+            # self-contained; legacy pointer-less instances keep their entry.
+            runtime_source = None
+            if _has_pointer(root):
+                current_runtime = root / "releases" / active["release"] / "runtime"
+                if current_runtime.is_dir() and not current_runtime.is_symlink():
+                    runtime_source = current_runtime
+                else:
+                    raise InstallationError(
+                        "active release has no private runtime; rebuild would break the entrypoint"
+                    )
+            candidate = _prepare(root, source, manifest, roles, runtime_source=runtime_source)
             if "task_output_map_sha256" in active:
                 candidate = {
                     **candidate,
                     "task_output_map_sha256": active["task_output_map_sha256"],
                 }
-            # Last operation: no writes to config/state/identity/runner, no process starts.
+            # Last operations: pointer then metadata, inside the same lock. No
+            # writes to config/state/identity/runner and no process starts, so a
+            # switch only takes effect on the next start by design.
+            if runtime_source is not None:
+                _write_pointer(root, candidate["release"])
             _json(root / "active.json", candidate)
             return {"instance_root": str(root), **candidate}
     except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:

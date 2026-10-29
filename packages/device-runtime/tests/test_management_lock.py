@@ -87,9 +87,9 @@ def test_registration_fence_published_before_unit_and_record(tmp_path, monkeypat
     (root / "config/roles.json").write_text('{"client":{}}')
     python = tmp_path / "python"
     python.touch()
-    runner = root / "run"
-    runner.write_text(f"#!{python}\n")
-    runner.chmod(0o755)
+    from conftest import write_entry
+
+    write_entry(root, python=python)
     registry, units = tmp_path / "registry", tmp_path / "units"
     registry.mkdir()
     units.mkdir()

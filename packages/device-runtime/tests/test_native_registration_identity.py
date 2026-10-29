@@ -22,8 +22,9 @@ def registration(tmp_path, monkeypatch):
     (root / "instance.json").write_text('{"instance_id":"probe"}')
     (root / "active.json").write_text('{"roles":["client"]}')
     (root / "config/roles.json").write_text('{"roles":["client"]}')
-    runner = root / "run"
-    runner.write_text(f"#!{Path(sys.executable).resolve()}\n")
+    from conftest import write_entry
+
+    runner = write_entry(root, python=Path(sys.executable).resolve())
     runner.chmod(0o700)
     environment = tmp_path / "environment"
     environment.write_text("fixture")
