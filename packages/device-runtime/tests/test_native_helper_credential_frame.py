@@ -176,11 +176,15 @@ def test_query_listener_sets_credentials_before_bind_and_holds_daemon_lease(linu
             raise RuntimeError("stop test")
 
     monkeypatch.setattr(helper, "_daemon_lease", lease)
+    # Drain check is covered separately; these tests assert credential/lock order.
+    monkeypatch.setattr(helper, "_retired_reason", lambda: None)
     monkeypatch.setattr(socket, "socket", lambda *_args: Listener())
     monkeypatch.setattr(helper.os, "chown", lambda *_args: events.append("chown"))
     monkeypatch.setattr(helper.os, "chmod", lambda *_args: events.append("chmod"))
     with pytest.raises(RuntimeError, match="stop test"):
-        helper._serve_credential_queries(tmp_path, tmp_path / "query.sock", group=0)
+        helper._serve_credential_queries(
+            tmp_path, tmp_path / "query.sock", group=0
+        )
     assert events == ["lock", "credentials", "bind", "chown", "chmod", "listen", "accept", "close", "unlock"]
 
 
@@ -191,6 +195,7 @@ def test_query_locked_loop_does_not_reacquire_daemon_lock(linux_credentials, mon
     monkeypatch.setattr(helper, "_trusted", lambda *_a, **_k: None)
     monkeypatch.setattr(helper, "Helper", lambda _registry: object())
     monkeypatch.setattr(helper, "_daemon_lease", lambda *_a: pytest.fail("unexpected second lock"))
+    monkeypatch.setattr(helper, "_retired_reason", lambda: None)
     monkeypatch.setattr(helper.os, "chown", lambda *_a: None)
     monkeypatch.setattr(helper.os, "chmod", lambda *_a: None)
 

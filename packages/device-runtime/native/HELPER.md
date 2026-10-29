@@ -40,6 +40,19 @@ register返回started=false、enabled=false、daemon_reload_required=true。是�
 
 代码模块同步执行systemctl、文件校验与锁，不得直接放入HTTP事件循环。socket串行执行、start最长120秒，当前适用于本机单实例开发；不声称已具备多实例并发吞吐。
 
+## 升级期间的排空
+
+包升级会删除旧 bootstrap 树，而 helper 进程仍持有旧解释器与旧代码。serve 在**每次 accept 之前**比对
+`sys.executable` 所在 runtime 与 `current` 指针：不一致即视为陈旧，清理自己创建的 socket 后退出。
+循环一次只处理一个连接，所以该检查点必然没有在途请求，`start` 不会被中途打断。
+
+- 指针不可读、或解析抛错时返回"继续服务"，不因不确定而停掉可用的 helper。
+- 退出用正常退出码，单元保持 `Restart=no`：`KillMode=process` 下 guard 持有继承租约，崩溃自动重启不安全，
+  这一权衡未变。管理员一条 `systemctl start` 即加载新代码。
+- 退出时删除的只是本进程 bind 的 socket；无主 socket 仍必须走 `recover-socket` 显式对账，不自动清理。
+- 已知边界：`systemctl restart` 以 SIGTERM 终止进程，不经过该检查点，因此仍会留下 socket 并使新进程
+  `EADDRINUSE`。升级后应先让 helper 自然排空（或先 stop 再 start），不要直接 restart。
+
 ## 本轮证据
 
 - helper单元测试30项：有限输入、普通用户、绑定漂移、幂等、unknown阻止新ID、安装/监督锁、非终态升级、socket调用和响应丢失等。

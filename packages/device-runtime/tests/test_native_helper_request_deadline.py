@@ -75,6 +75,8 @@ def test_request_read_deadline(monkeypatch, tmp_path, slow):
     monkeypatch.setattr(nh.socket, "SO_PEERCRED", 17, raising=False)
     monkeypatch.setattr(nh.socket, "socket", lambda *args, **kwargs: Listener())
     monkeypatch.setattr(nh, "Helper", Helper)
+    # This test measures read timeouts; drain is covered separately.
+    monkeypatch.setattr(nh, "_retired_reason", lambda: None)
 
     def serve():
         try:

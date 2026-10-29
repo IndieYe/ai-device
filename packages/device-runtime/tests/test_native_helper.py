@@ -2507,3 +2507,148 @@ def test_deploy_creates_the_default_registry_parent(tmp_path, monkeypatch):
 
     assert Path(result["unit"]).exists()
     assert registry.is_dir()
+
+
+def test_retired_reason_is_none_for_the_current_tree(tmp_path, monkeypatch):
+    """Still current: keep serving."""
+    from device_runtime import native_bootstrap
+
+    (tmp_path / "bin").mkdir(parents=True)
+    monkeypatch.setattr(nh.sys, "executable", str(tmp_path / "bin" / "python3.13"))
+    monkeypatch.setattr(
+        native_bootstrap, "trusted_helper_bootstrap", lambda: tmp_path
+    )
+
+    assert nh._retired_reason() is None
+
+
+def test_retired_reason_reports_a_moved_pointer(tmp_path, monkeypatch):
+    """The pointer moved after this process started: its code is stale."""
+    from device_runtime import native_bootstrap
+
+    (tmp_path / "old" / "bin").mkdir(parents=True)
+    monkeypatch.setattr(nh.sys, "executable", str(tmp_path / "old" / "bin" / "python3.13"))
+    monkeypatch.setattr(
+        native_bootstrap, "trusted_helper_bootstrap", lambda: tmp_path / "new"
+    )
+
+    reason = nh._retired_reason()
+    assert reason is not None and "release pointer names" in reason
+
+
+def test_retired_reason_keeps_serving_when_the_pointer_is_unreadable(tmp_path, monkeypatch):
+    """Uncertainty must not stop a working helper."""
+    from device_runtime import native_bootstrap
+
+    def broken():
+        raise native_bootstrap.BootstrapError("pointer is not a regular file")
+
+    monkeypatch.setattr(nh.sys, "executable", str(tmp_path / "bin" / "python3.13"))
+    monkeypatch.setattr(native_bootstrap, "trusted_helper_bootstrap", broken)
+
+    assert nh._retired_reason() is None
+
+
+def test_draining_helper_removes_its_own_socket(tmp_path, monkeypatch):
+    """The drain must leave the endpoint reusable.
+
+    This process bound the socket and holds no request at the drain point, so
+    removing it is cleaning up our own resource -- unlike the orphan case
+    recover-socket guards. Without this the next start fails EADDRINUSE and a
+    clean drain becomes an outage.
+    """
+    monkeypatch.setattr(nh.sys, "platform", "linux")
+    monkeypatch.setattr(nh.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(nh, "_trusted", lambda *a, **kw: None)
+    monkeypatch.setattr(nh, "Helper", lambda registry: object())
+    # chown needs real root; the drain path under test starts after bind.
+    monkeypatch.setattr(nh.os, "chown", lambda *a, **kw: None)
+    monkeypatch.setattr(nh, "_retired_reason", lambda: "stale tree")
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    endpoint = tmp_path / "helper.sock"
+
+    nh._serve(registry, endpoint, group=12345)
+
+    assert not endpoint.exists()
+
+
+def test_drain_never_interrupts_a_request_in_flight(tmp_path, monkeypatch):
+    """The promise of the protocol: finish the current request, then stop.
+
+    _serve handles one connection at a time and checks for retirement only
+    before accept, so a start already running is never cut short. This asserts
+    that ordering rather than trusting the loop's shape.
+    """
+    events = []
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def settimeout(self, _value):
+            return None
+
+        def getsockopt(self, *_args):
+            import struct as struct_module
+
+            return struct_module.pack("3i", 0, 0, 0)
+
+        def recv(self, _size):
+            return b'{"action": "query"}\n'
+
+        def sendall(self, _payload):
+            return None
+
+    class Listener:
+        def __init__(self):
+            self.accepted = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def bind(self, _path):
+            (tmp_path / "helper.sock").touch()
+
+        def listen(self, _backlog):
+            return None
+
+        def accept(self):
+            self.accepted += 1
+            if self.accepted > 1:
+                raise RuntimeError("second accept")
+            return Connection(), None
+
+    class Helper:
+        def __init__(self, _registry):
+            pass
+
+        def handle(self, _request, peer_uid=None):
+            events.append("handle")
+            return {"ok": True}
+
+    def retired():
+        events.append("check")
+        return "stale" if events.count("handle") else None
+
+    monkeypatch.setattr(nh.sys, "platform", "linux")
+    monkeypatch.setattr(nh.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(nh, "_trusted", lambda *a, **kw: None)
+    monkeypatch.setattr(nh, "Helper", Helper)
+    monkeypatch.setattr(nh.os, "chown", lambda *a, **kw: None)
+    monkeypatch.setattr(nh.socket, "SO_PEERCRED", 17, raising=False)
+    monkeypatch.setattr(nh.socket, "socket", lambda *a, **kw: Listener())
+    registry = tmp_path / "registry"
+    registry.mkdir()
+
+    nh._serve(registry, tmp_path / "helper.sock", group=0, retired_reason=retired)
+
+    # check -> handle -> check(stale, exit): the request completed before the
+    # process decided to stop.
+    assert events == ["check", "handle", "check"]

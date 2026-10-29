@@ -1317,6 +1317,31 @@ def recover_socket(registry, socket_path):
         return {"removed": True, "operations_changed": False}
 
 
+def _retired_reason():
+    """Why this process should stop serving, or None if it is still current.
+
+    The running interpreter is the honest signal: it names the tree that was
+    published when this process started. If the pointer has moved to another
+    tree, the code here is stale and the payload it lives in is about to be
+    deleted. Returning None on any uncertainty (unreadable pointer, fallback
+    layout) keeps a working helper serving rather than stopping it on a guess.
+    """
+    from . import native_bootstrap
+
+    # The interpreter lives in <runtime>/bin, and trusted_helper_bootstrap()
+    # returns <runtime>.
+    running = Path(sys.executable).resolve().parent.parent
+    try:
+        expected = native_bootstrap.trusted_helper_bootstrap().resolve()
+    except (OSError, native_bootstrap.BootstrapError):
+        return None
+    if running != expected:
+        return f"running {running} but the release pointer names {expected}"
+    if not running.exists():
+        return f"running code {running} is no longer installed"
+    return None
+
+
 def serve(registry, socket_path, *, group):
     if sys.platform != "linux" or os.geteuid() != 0:
         raise HelperError("helper daemon requires Linux administrator identity")
@@ -1329,7 +1354,10 @@ def serve(registry, socket_path, *, group):
         _serve(registry, socket_path, group=group)
 
 
-def _serve(registry, socket_path, *, group):
+def _serve(registry, socket_path, *, group, retired_reason=None):
+    # Resolved at call time so callers (and tests) can substitute the check.
+    if retired_reason is None:
+        retired_reason = _retired_reason
     if sys.platform != "linux" or os.geteuid() != 0:
         raise HelperError("helper daemon requires Linux administrator identity")
     helper = Helper(registry)
@@ -1342,6 +1370,26 @@ def _serve(registry, socket_path, *, group):
         os.chmod(socket_path, 0o660)
         server.listen(8)
         while True:
+            # A package upgrade replaces the bootstrap tree this process was
+            # started from. Nothing here can load the new code in place, and
+            # continuing to answer would mean serving from a directory that no
+            # longer exists. Check between requests -- the loop handles one
+            # connection at a time, so no request is ever in flight here -- and
+            # leave restarting to systemd or the administrator.
+            reason = retired_reason()
+            if reason is not None:
+                # Remove the endpoint on the way out. This process created it
+                # and holds no request, so it is our own resource -- unlike the
+                # orphan case recover-socket handles, where the owner is gone
+                # and we must not guess. Leaving it behind would make the next
+                # start fail with EADDRINUSE and turn a clean drain into an
+                # outage that needs manual recovery.
+                try:
+                    os.unlink(socket_path)
+                except OSError:
+                    pass
+                print(f"helper exiting: {reason}", file=sys.stderr)
+                return
             connection, _ = server.accept()
             with connection:
                 deadline = time.monotonic() + 5
@@ -1498,7 +1546,9 @@ def _serve_credential_queries(registry, socket_path, *, group):
         _serve_credential_queries_locked(registry, socket_path, group=group)
 
 
-def _serve_credential_queries_locked(registry, socket_path, *, group):
+def _serve_credential_queries_locked(registry, socket_path, *, group, retired_reason=None):
+    if retired_reason is None:
+        retired_reason = _retired_reason
     """Internal query loop; caller owns both daemon locks for its entire lifetime.
 
     This function cannot verify that precondition or authenticate a supervisor;
@@ -1520,6 +1570,26 @@ def _serve_credential_queries_locked(registry, socket_path, *, group):
         os.chmod(socket_path, 0o600)
         server.listen(8)
         while True:
+            # A package upgrade replaces the bootstrap tree this process was
+            # started from. Nothing here can load the new code in place, and
+            # continuing to answer would mean serving from a directory that no
+            # longer exists. Check between requests -- the loop handles one
+            # connection at a time, so no request is ever in flight here -- and
+            # leave restarting to systemd or the administrator.
+            reason = retired_reason()
+            if reason is not None:
+                # Remove the endpoint on the way out. This process created it
+                # and holds no request, so it is our own resource -- unlike the
+                # orphan case recover-socket handles, where the owner is gone
+                # and we must not guess. Leaving it behind would make the next
+                # start fail with EADDRINUSE and turn a clean drain into an
+                # outage that needs manual recovery.
+                try:
+                    os.unlink(socket_path)
+                except OSError:
+                    pass
+                print(f"helper exiting: {reason}", file=sys.stderr)
+                return
             connection, _ = server.accept()
             _serve_credential_query_once(service, connection, deadline=time.monotonic() + 5)
 
