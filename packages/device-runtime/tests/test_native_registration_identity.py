@@ -92,3 +92,25 @@ def test_recovery_conflict_does_not_recreate_missing_unit(registration):
         nh.register(registry, unit_dir, **kwargs, recover=True)
     assert not unit.exists()
     assert {path: path.read_bytes() for path in before} == before
+
+
+def test_release_pointer_reads_as_text(tmp_path):
+    """The pointer reader must decode bytes before string validation.
+
+    ``_read_regular`` returns bytes; validating that with ``str`` helpers raised
+    TypeError instead of a HelperError, so every packaged registration failed.
+    """
+    root = tmp_path / "instance"
+    root.mkdir()
+    (root / "current").write_text("0.2.2-abc123\n")
+
+    assert nh._read_release_pointer(root) == "0.2.2-abc123"
+
+
+def test_release_pointer_rejects_bad_value(tmp_path):
+    root = tmp_path / "instance"
+    root.mkdir()
+    (root / "current").write_text("../escape\n")
+
+    with pytest.raises(nh.HelperError, match="not a valid release name"):
+        nh._read_release_pointer(root)

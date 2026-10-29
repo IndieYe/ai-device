@@ -96,7 +96,7 @@ def _read_release_pointer(root):
     path = root / POINTER
     if path.is_symlink() or not stat.S_ISREG(path.lstat().st_mode):
         raise HelperError("release pointer must be a regular file")
-    value = _read_regular(path, "release pointer must be a regular file")
+    value = _read_regular(path, "release pointer must be a regular file").decode("utf-8", "replace")
     release = value.strip()
     if value.count("\n") > 1 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.+!-]*", release):
         raise HelperError("release pointer is not a valid release name")
