@@ -3130,3 +3130,40 @@ esac
 - 升级本身仍不可用（`preinst` 拒绝），本次只修正失败原因的可读性与调用链正确性。
 - 未验证放开 layout 检查后的真实升级语义。
 - DEB 制品未签名。
+
+## 多版本激活（E1a）隔离容器验收
+
+制品与源码身份：
+
+| 项 | 值 |
+| --- | --- |
+| 源码提交 | `8daa66228f8950ead708bd0414e58d43c07224c0` |
+| payload | `build/native-payload-e1a`（device 轮子 sha256 `6335a09e4734e37b862ef4404cb496685ec34dd404468ef537769c7fff0b1e07`） |
+| 容器 | Rocky Linux 9，`x86_64`，Rosetta，一次性，无残留 |
+| 解释器 | CPython 3.13.17（私有 runtime 副本） |
+| 入口 sha256 | `run` `46c70603…d073ca`，`run-runner` `33e7afa3…b4da9` |
+
+验收结果：
+
+| 场景 | 结果 |
+| --- | --- |
+| 经稳定入口启动 release 1 | 成功，venv `sys.prefix` 指向该 release |
+| `prepare_upgrade` 第二 release | 成功，新 release 自带私有 runtime，venv 可用 |
+| `activate_release` 切换 | `activated`；**未重启任何进程**，不重写入口 |
+| 切换后 `run` / `run-runner` 字节 | 与切换前**完全一致**，mtime 不变 |
+| 切换后经同一入口启动 | venv `sys.prefix` 指向**新** release |
+| `rollback_release` | `software_rollback`，入口随后指向原 release，字节仍不变 |
+| 指针指向不存在的 release | rc=2，`active release has no executable interpreter`，拒绝启动 |
+| 指针指向**另一个真实** release（与 active 不一致） | rc=2，`invalid configuration, unavailable environment or installation busy`；shell 已 exec，由 run-runner 在锁内拒绝 |
+
+最后一行是 E1a 的关键防线：解释器选择发生在取得共享锁之前，因此只靠 shell
+无法阻止"指针指向别的合法 release"。锁内的 `active.json` 对比才是实际门禁。
+
+### 边界
+- 容器无 systemd（该镜像在 Rosetta 下 PID1 无法稳定启动），因此**未验证** unit 层面的
+  "activate 不触发 `systemctl`"；此处以进程未重启与入口字节不变为证据。
+- 未构建 E1a 的 DEB/RPM 制品；本次只验证源码到 payload 的激活语义。
+- 未做并发切换与崩溃点注入。
+- 验收过程中发现：`venv/bin/python` 是指向 `runtime/bin/python3.13` 的符号链接，
+  替换 venv 解释器会穿透写到 runtime 本体。这是 venv 的常规结构，不是缺陷，
+  但任何"替换解释器"的测试手法都会破坏 runtime，应改用 `sys.prefix` 判定归属。
