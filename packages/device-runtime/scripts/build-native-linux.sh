@@ -2,8 +2,17 @@
 # Build a local, unsigned development package inside a disposable Linux builder.
 # Inputs: preassembled payload, locked CPython archive, output directory.
 set -eu
-[ "$#" = 4 ] || { echo 'usage: build-native-linux.sh deb|rpm PAYLOAD RUNTIME_ARCHIVE OUTPUT' >&2; exit 2; }
+[ "$#" -ge 4 ] && [ "$#" -le 6 ] || { echo 'usage: build-native-linux.sh deb|rpm PAYLOAD RUNTIME_ARCHIVE OUTPUT [TREE [PKGVER]]' >&2; exit 2; }
 kind=$1; payload=$2; archive=$3; output=$4
+# The versioned tree name and the package version are separate knobs so an
+# upgrade can be built from identical payload inputs: only its identity differs,
+# which is exactly what the pre-install classifier has to judge.
+tree=${5:-0.2.2-native1}
+pkgver=${6:-0.2.2-1}
+case $tree in ''|*[!A-Za-z0-9._-]*) echo 'TREE must be a plain version name' >&2; exit 2 ;; esac
+case $pkgver in ''|*[!A-Za-z0-9.+~-]*) echo 'PKGVER must be a plain package version' >&2; exit 2 ;; esac
+rpmver=${pkgver%-*}
+rpmrel=${pkgver##*-}
 [ "$kind" = deb ] || [ "$kind" = rpm ] || exit 2
 [ "$(uname -m)" = x86_64 ] || exit 2
 # Match native/runtime-lock.json before any extraction/execution.
@@ -13,7 +22,7 @@ mkdir -p "$output"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 root=$work/root
-home=/opt/ai-device/packages/0.2.2-native1
+home=/opt/ai-device/packages/$tree
 mkdir -p "$root$home" "$root/usr/bin"
 cp -R "$payload/." "$root$home/"
 tar -xzf "$archive" -C "$root$home"
@@ -25,12 +34,13 @@ env -i PATH=/usr/bin:/bin HOME="$work" TMPDIR="$work" \
 cat > "$root/usr/bin/ai-device-native-install" <<'EOF'
 #!/bin/sh
 set -eu
-home=/opt/ai-device/packages/0.2.2-native1
+home=/opt/ai-device/packages/__TREE__
 exec "$home/runtime/bin/python3.13" -I -m device_runtime.native_install --payload "$home" "$@"
 EOF
+sed -i "s#__TREE__#$tree#g" "$root/usr/bin/ai-device-native-install"
 chmod 755 "$root/usr/bin/ai-device-native-install"
 # Independent standard-library-only administrator bootstrap, never client imports.
-bootstrap=/opt/ai-device/bootstrap/0.2.2-native1
+bootstrap=/opt/ai-device/bootstrap/$tree
 mkdir -p "$root$bootstrap"
 # Exclude upstream bytecode while creating this new bootstrap, not by altering
 # an existing installation. Candidate identity checks require source-only code.
@@ -45,8 +55,9 @@ done
 cat > "$root/usr/bin/ai-device-native-helper" <<'EOF'
 #!/bin/sh
 set -eu
-exec /opt/ai-device/bootstrap/0.2.2-native1/runtime/bin/python3.13 -I -B -m device_runtime.native_helper "$@"
+exec /opt/ai-device/bootstrap/__TREE__/runtime/bin/python3.13 -I -B -m device_runtime.native_helper "$@"
 EOF
+sed -i "s#__TREE__#$tree#g" "$root/usr/bin/ai-device-native-helper"
 chmod 755 "$root/usr/bin/ai-device-native-helper"
 # Upstream CPython files can be group-writable. Published system programs must
 # not be writable by the client or group before a root helper trusts them.
@@ -56,42 +67,56 @@ chmod -R go-w "$root$bootstrap"
 # inside the payload. Bytecode belongs to the running interpreter, not to the
 # package, so ship a clean tree and let erase handle only caches created later.
 find "$root$home" "$root$bootstrap" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
-# Guard the existing layout through one shared classifier. Both package managers
-# call native_layout, so the shell and lua hooks cannot drift apart. Anything the
-# classifier does not recognise is refused; a recognised single-version layout
-# may receive a new versioned tree beside it.
+# Guard the existing layout with the classifier that ships in this package.
+# dpkg runs preinst before unpacking, so our own tree is not on disk yet and the
+# only interpreter present belongs to the payload being replaced. An older
+# payload predates native_layout, so importing it would fail with a missing
+# module on exactly the hosts that need to upgrade. Emit the classifier as a
+# standalone script next to the hook and run it with whatever interpreter
+# exists: one authoritative source, no dependency on the installed version.
+cp "$root$home/runtime/lib/python3.13/site-packages/device_runtime/native_layout.py" "$work/classify.py"
 cat > "$work/preflight" <<'EOF'
 #!/bin/sh
 set -eu
-# dpkg runs preinst before unpacking, so this package's own files are still in a
-# staging directory. The only interpreter that can exist here belongs to an
-# installed payload. Use it when present; otherwise classify with plain shell,
-# because a fresh install by definition has no layout to judge.
-for interpreter in /opt/ai-device/packages/*/runtime/bin/python3.13; do
- [ -x "$interpreter" ] || continue
- exec "$interpreter" -I -B -m device_runtime.native_layout check 0.2.2-native1
+here=$(dirname "$0")
+classifier=
+for candidate in /opt/ai-device/packages/*/runtime/bin/python3.13 \
+                 /opt/ai-device/bootstrap/*/runtime/bin/python3.13; do
+ [ -x "$candidate" ] || continue
+ classifier=$candidate
+ break
 done
-# No installed interpreter: only an absent layout is acceptable here. Anything
-# else is state this package cannot classify, so refuse rather than overwrite.
-for path in /opt/ai-device/packages /opt/ai-device/bootstrap /opt/ai-device/instances /var/lib/ai-device/manager; do
- [ ! -e "$path" ] && [ ! -L "$path" ] || {
-  echo "native package pre-install refused: $path exists but no payload interpreter can classify it" >&2
-  exit 1
- }
-done
-exit 0
+if [ -z "$classifier" ]; then
+ # A fresh install has no layout to judge, so only an absent one may proceed.
+ # Anything else is state this package cannot inspect: refuse rather than
+ # unpack on top of it.
+ for path in /opt/ai-device/packages /opt/ai-device/bootstrap \
+             /opt/ai-device/instances /var/lib/ai-device/manager; do
+  [ ! -e "$path" ] && [ ! -L "$path" ] || {
+   echo "native package pre-install refused: $path exists but no payload interpreter can classify it" >&2
+   exit 1
+  }
+ done
+ echo "native package pre-install: fresh install" >&2
+ exit 0
+fi
+exec "$classifier" -I -B "$here/classify.py" check __TREE__
 EOF
+sed -i "s#__TREE__#$tree#g" "$work/preflight"
 if [ "$kind" = deb ]; then
  mkdir -p "$root/DEBIAN"
  cat > "$root/DEBIAN/control" <<'EOF'
 Package: ai-device-native-client
-Version: 0.2.2-1
+Version: __PKGVER__
 Architecture: amd64
 Maintainer: Device development
 Description: Offline Device client development package, no service auto-start
 EOF
  cp "$work/preflight" "$root/DEBIAN/preinst"
+ cp "$work/classify.py" "$root/DEBIAN/classify.py"
+ sed -i "s#__TREE__#$tree#g" "$root/DEBIAN/preinst"
  chmod 755 "$root/DEBIAN/preinst"
+ sed -i "s#__PKGVER__#$pkgver#g" "$root/DEBIAN/control"
  # Preserve any user-created instance; the only package-owned tree is packages/.
  cat > "$root/DEBIAN/prerm" <<'EOF'
 #!/bin/sh
@@ -124,19 +149,20 @@ done
 # The package cannot list them, so erase would leave them behind and a later
 # install would be refused by the layout guard below. Remove only caches; the
 # shipped payload files themselves stay under dpkg's control.
-for cache in /opt/ai-device/packages/0.2.2-native1 /opt/ai-device/bootstrap/0.2.2-native1; do
+for cache in /opt/ai-device/packages/__TREE__ /opt/ai-device/bootstrap/__TREE__; do
  [ -d "$cache" ] || continue
  find "$cache" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
 done
 EOF
  chmod 755 "$root/DEBIAN/prerm"
- dpkg-deb --build "$root" "$output/ai-device-native-client_0.2.2-1_amd64.deb"
+ sed -i "s#__TREE__#$tree#g" "$root/DEBIAN/prerm"
+ dpkg-deb --build "$root" "$output/ai-device-native-client_${pkgver}_amd64.deb"
 else
  mkdir -p "$work/rpm/BUILD" "$work/rpm/RPMS" "$work/rpm/SOURCES" "$work/rpm/SPECS" "$work/rpm/SRPMS"
  cat > "$work/rpm/SPECS/native.spec" <<EOF
 Name: ai-device-native-client
-Version: 0.2.2
-Release: 1
+Version: $rpmver
+Release: $rpmrel
 Summary: Offline Device client development package
 # Deliberately do not claim composite runtime third-party licensing is closed.
 License: MIT AND Python-2.0 AND LicenseRef-Development-Review-Pending
@@ -152,15 +178,34 @@ cp -a $root/. %{buildroot}/
 -- Same decision as the dpkg preinst, expressed in lua because rpm runs this
 -- before it unpacks anything. Only an absent layout or a single complete
 -- versioned tree may proceed; everything else is state we cannot classify.
+-- Legacy management trees predate the versioned layout and may still hold live
+-- instances that no transaction here maintains. Refuse, exactly as dpkg does.
+for _,path in ipairs({'/opt/ai-device/instances', '/var/lib/ai-device/manager'}) do
+ if posix.stat(path) or posix.readlink(path) then
+  error('native package pre-install refused: legacy management layout ' .. path)
+ end
+end
+-- posix.stat follows symlinks, so a link to a directory would pass the type
+-- check below and be treated as a versioned tree. Test the link itself first.
+local function plain_dir(path)
+ if posix.readlink(path) then return false end
+ return posix.stat(path, 'type') == 'directory'
+end
 local function versioned(root)
  local found = {}
+ if posix.readlink(root) then
+  error('native package pre-install refused: ' .. root .. ' must not be a symlink')
+ end
+ if not posix.stat(root) then return found end
+ if not plain_dir(root) then
+  error('native package pre-install refused: ' .. root .. ' is not a directory')
+ end
  local names = posix.dir(root)
  if not names then return found end
  for _,name in ipairs(names) do
   if name ~= '.' and name ~= '..' then
    local path = root .. '/' .. name
-   local mode = posix.stat(path, 'type')
-   if mode ~= 'directory' then
+   if not plain_dir(path) then
     error('native package pre-install refused: ' .. path .. ' is not a plain directory')
    end
    found[#found + 1] = name
@@ -174,8 +219,24 @@ if #packages == 0 and #bootstraps == 0 then return end
 if #packages ~= 1 or #bootstraps ~= 1 then
  error('native package pre-install refused: expected one versioned payload and bootstrap, found ' .. #packages .. '/' .. #bootstraps)
 end
-if packages[1] == '0.2.2-native1' then
- error('native package pre-install refused: 0.2.2-native1 is already installed')
+-- Completeness, matching the dpkg classifier: a tree without its runtime or
+-- bundle is state we cannot classify, not an upgrade target.
+local function has(path)
+ local names = posix.dir(path) or {}
+ local seen = {}
+ for _,name in ipairs(names) do seen[name] = true end
+ return seen
+end
+local payload = has('/opt/ai-device/packages/' .. packages[1])
+if not payload['runtime'] or not payload['bundle'] then
+ error('native package pre-install refused: payload ' .. packages[1] .. ' is incomplete')
+end
+local boot = has('/opt/ai-device/bootstrap/' .. bootstraps[1])
+if not boot['runtime'] then
+ error('native package pre-install refused: bootstrap ' .. bootstraps[1] .. ' is incomplete')
+end
+if packages[1] == '$tree' then
+ error('native package pre-install refused: $tree is already installed')
 end
 %preun -p <lua>
 -- rpm passes the number of package instances that will remain: 0 on a real
@@ -233,8 +294,8 @@ local function drop_caches(dir)
   end
  end
 end
-drop_caches('/opt/ai-device/packages/0.2.2-native1')
-drop_caches('/opt/ai-device/bootstrap/0.2.2-native1')
+drop_caches('/opt/ai-device/packages/$tree')
+drop_caches('/opt/ai-device/bootstrap/$tree')
 %files
 # Own the parent directories so erase removes them when empty. Otherwise an
 # empty /opt/ai-device/packages left behind by a first erase makes the
@@ -245,9 +306,9 @@ drop_caches('/opt/ai-device/bootstrap/0.2.2-native1')
 %dir /opt/ai-device/bootstrap
 # The build strips __pycache__ before packaging, so the manifest stays free of
 # bytecode caches without per-path excludes.
-/opt/ai-device/packages/0.2.2-native1
+/opt/ai-device/packages/$tree
 /usr/bin/ai-device-native-install
-/opt/ai-device/bootstrap/0.2.2-native1
+/opt/ai-device/bootstrap/$tree
 /usr/bin/ai-device-native-helper
 EOF
  rpmbuild --define "_topdir $work/rpm" -bb "$work/rpm/SPECS/native.spec" > "$work/rpm-build.log" 2>&1 || { cat "$work/rpm-build.log"; exit 1; }

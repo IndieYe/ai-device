@@ -112,9 +112,12 @@ def test_packaged_helper_entry_disables_bytecode_writes():
     builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
     script = builder.read_text()
     assert (
-        "exec /opt/ai-device/bootstrap/0.2.2-native1/runtime/bin/python3.13 "
+        "exec /opt/ai-device/bootstrap/__TREE__/runtime/bin/python3.13 "
         "-I -B -m device_runtime.native_helper" in script
     )
+    # The tree name is a build input now, so the entry must be substituted
+    # rather than left as a literal no package can satisfy.
+    assert 'sed -i "s#__TREE__#$tree#g" "$root/usr/bin/ai-device-native-helper"' in script
 
 
 @pytest.mark.parametrize("existing", ["instances", "manager"])
@@ -247,7 +250,7 @@ def test_remove_clears_runtime_bytecode_caches():
     source = builder.read_text()
     deb = source.split("cat > \"$root/DEBIAN/prerm\" <<'EOF'\n", 1)[1].split("\nEOF", 1)[0]
     assert "__pycache__" in deb
-    assert "/opt/ai-device/packages/0.2.2-native1" in deb
+    assert "/opt/ai-device/packages/__TREE__" in deb
     rpm = source.split("%preun -p <lua>", 1)[1].split("%files", 1)[0]
     assert "drop_caches" in rpm
     assert "__pycache__" in rpm
@@ -261,3 +264,40 @@ def test_build_strips_bytecode_before_packaging():
     assert strip in source
     # Packaging starts at the deb/rpm branch, so the strip must come first.
     assert source.index(strip) < source.index('if [ "$kind" = deb ]')
+
+
+def test_deb_preflight_carries_its_own_classifier():
+    """Upgrading must not depend on the installed version shipping the classifier.
+
+    An earlier build ran ``-m device_runtime.native_layout`` with the *installed*
+    interpreter. Every host on a payload older than that module then failed with
+    ModuleNotFoundError -- exactly the devices the upgrade exists for. The hook
+    therefore ships the classifier beside itself and runs that copy.
+    """
+    builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
+    source = builder.read_text()
+    script = source.split("cat > \"$work/preflight\" <<'EOF'\n", 1)[1].split("\nEOF", 1)[0]
+    assert "-m device_runtime.native_layout" not in script
+    assert '"$here/classify.py" check' in script
+    # The classifier must be copied into the control area, not just referenced.
+    assert 'cp "$work/classify.py" "$root/DEBIAN/classify.py"' in source
+    assert 'cp "$root$home/runtime/lib/python3.13/site-packages/device_runtime/native_layout.py"' in source
+
+
+def test_rpm_preflight_matches_deb_protections():
+    """The lua hook must not fall behind the dpkg classifier.
+
+    They cannot share code, so the only defence against drift is asserting both
+    carry the same decisions: legacy management roots, symlink refusal (stat
+    follows links, so a linked directory would otherwise look like a tree), and
+    payload/bootstrap completeness.
+    """
+    builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
+    source = builder.read_text()
+    lua = source.split("%pretrans -p <lua>", 1)[1].split("%preun", 1)[0]
+    assert "/opt/ai-device/instances" in lua
+    assert "/var/lib/ai-device/manager" in lua
+    assert "posix.readlink(root)" in lua
+    assert "posix.readlink(path)" in lua
+    assert "is incomplete" in lua
+    assert "directories" in lua or "plain_dir" in lua
