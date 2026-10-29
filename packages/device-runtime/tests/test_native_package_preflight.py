@@ -111,12 +111,13 @@ def test_bootstrap_extract_excludes_bytecode_but_keeps_source(tmp_path):
 def test_packaged_helper_entry_disables_bytecode_writes():
     builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
     script = builder.read_text()
-    assert (
-        "exec /opt/ai-device/bootstrap/__TREE__/runtime/bin/python3.13 "
-        "-I -B -m device_runtime.native_helper" in script
-    )
-    # The tree name is a build input now, so the entry must be substituted
-    # rather than left as a literal no package can satisfy.
+    # The entrypoint resolves the tree through the pointer. Naming one build's
+    # path is what left the wrapper pointing at a directory an upgrade deleted.
+    assert 'root=/opt/ai-device/bootstrap' in script
+    assert 'version=$(cat "$root/current")' in script
+    assert 'exec "$root/$version/runtime/bin/python3.13" -I -B -m device_runtime.native_helper' in script
+    # The fallback still names this build, substituted at package time.
+    assert 'version=__TREE__' in script
     assert 'sed -i "s#__TREE__#$tree#g" "$root/usr/bin/ai-device-native-helper"' in script
 
 

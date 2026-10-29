@@ -52,10 +52,26 @@ mkdir -p "$site/device_runtime"
 for module in __init__.py entrypoint.py native_helper.py management_lock.py native_bootstrap.py; do
  cp "$root$home/runtime/lib/python3.13/site-packages/device_runtime/$module" "$site/device_runtime/"
 done
+# The entrypoint resolves the versioned bootstrap through the pointer rather
+# than naming one build's tree. A hard-coded path is what made an upgrade leave
+# the wrapper pointing at a directory the new package had just deleted.
 cat > "$root/usr/bin/ai-device-native-helper" <<'EOF'
 #!/bin/sh
 set -eu
-exec /opt/ai-device/bootstrap/__TREE__/runtime/bin/python3.13 -I -B -m device_runtime.native_helper "$@"
+root=/opt/ai-device/bootstrap
+# Same validation the module applies: a single directory name, never a path.
+if [ -r "$root/current" ]; then
+ version=$(cat "$root/current") || version=
+else
+ version=__TREE__
+fi
+case "$version" in
+ ''|*[!A-Za-z0-9_.-]*|.*|-*)
+  echo 'native helper: bootstrap pointer is invalid' >&2
+  exit 1
+  ;;
+esac
+exec "$root/$version/runtime/bin/python3.13" -I -B -m device_runtime.native_helper "$@"
 EOF
 sed -i "s#__TREE__#$tree#g" "$root/usr/bin/ai-device-native-helper"
 chmod 755 "$root/usr/bin/ai-device-native-helper"
@@ -114,6 +130,30 @@ Description: Offline Device client development package, no service auto-start
 EOF
  cp "$work/preflight" "$root/DEBIAN/preinst"
  cp "$work/classify.py" "$root/DEBIAN/classify.py"
+ # Publishing the pointer here is what closes the upgrade window on the package
+ # side: unpacking replaced the versioned tree, and until this runs the old
+ # pointer (if any) names a directory that no longer exists.
+ cat > "$root/DEBIAN/postinst" <<'EOF'
+#!/bin/sh
+set -eu
+root=/opt/ai-device/bootstrap
+wanted=__TREE__
+[ -d "$root/$wanted/runtime" ] || {
+ echo "native package post-install: bootstrap directory is missing" >&2
+ exit 1
+}
+tmp=$(mktemp "$root/.current-XXXXXX")
+printf '%s\n' "$wanted" > "$tmp"
+chmod 644 "$tmp"
+mv -f "$tmp" "$root/current"
+# Make the rename durable, not just the file contents. sync on a path is not
+# portable (Linux fsyncs the directory via the file descriptor instead), and the
+# host has no syncfs helper worth relying on here.
+sync
+exit 0
+EOF
+ sed -i "s#__TREE__#$tree#g" "$root/DEBIAN/postinst"
+ chmod 755 "$root/DEBIAN/postinst"
  sed -i "s#__TREE__#$tree#g" "$root/DEBIAN/preinst"
  chmod 755 "$root/DEBIAN/preinst"
  sed -i "s#__PKGVER__#$pkgver#g" "$root/DEBIAN/control"
@@ -205,10 +245,27 @@ local function versioned(root)
  for _,name in ipairs(names) do
   if name ~= '.' and name ~= '..' then
    local path = root .. '/' .. name
-   if not plain_dir(path) then
-    error('native package pre-install refused: ' .. path .. ' is not a plain directory')
+   -- The bootstrap pointer is a file beside the trees it selects. Any other
+   -- non-directory child is state this package must not write over.
+   if name == 'current' then
+    if posix.readlink(path) then
+     error('native package pre-install refused: ' .. path .. ' must be a regular file')
+    end
+    local handle = io.open(path, 'r')
+    if not handle then
+     error('native package pre-install refused: ' .. path .. ' is unreadable')
+    end
+    local value = handle:read('*l')
+    handle:close()
+    if value and not string.match(value, '^[A-Za-z0-9][A-Za-z0-9_.%-]*$') then
+     error('native package pre-install refused: ' .. path .. ' names an invalid directory')
+    end
+   else
+    if not plain_dir(path) then
+     error('native package pre-install refused: ' .. path .. ' is not a plain directory')
+    end
+    found[#found + 1] = name
    end
-   found[#found + 1] = name
   end
  end
  return found

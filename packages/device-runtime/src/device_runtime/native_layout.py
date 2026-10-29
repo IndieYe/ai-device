@@ -19,6 +19,7 @@ Exit status is the contract with the hooks:
 
 import json
 import re
+import stat
 import sys
 from pathlib import Path
 
@@ -36,12 +37,19 @@ class LayoutError(ValueError):
     """The layout cannot be classified, so no package may touch it."""
 
 
+# The bootstrap pointer is a file that lives beside the versioned trees it
+# selects. It belongs to the layout by design, so the classifier has to know it
+# and check its shape rather than treat it as a stray child.
+POINTER_NAME = "current"
+
+
 def _versioned_directories(root):
     """Return the versioned children of a layout root.
 
     Anything that is not a plain directory with a versioned name is reported as
     an error rather than skipped: a symlink or stray file here could be an
-    attempt to redirect the package into an unrelated tree.
+    attempt to redirect the package into an unrelated tree. A pointer is allowed
+    but must still be a regular file naming a plausible directory.
     """
     if not root.exists() and not root.is_symlink():
         return []
@@ -51,12 +59,28 @@ def _versioned_directories(root):
         raise LayoutError(f"{root} is not a directory")
     names = []
     for entry in sorted(root.iterdir()):
+        if entry.name == POINTER_NAME:
+            _check_pointer(entry)
+            continue
         if not _VERSIONED.fullmatch(entry.name):
             raise LayoutError(f"{entry} has an unrecognised name")
         if entry.is_symlink() or not entry.is_dir():
             raise LayoutError(f"{entry} must be a plain directory")
         names.append(entry.name)
     return names
+
+
+def _check_pointer(path):
+    """The pointer selects a versioned tree, so it may only name one."""
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode):
+        raise LayoutError(f"{path} must be a regular file")
+    try:
+        name = path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise LayoutError(f"{path} is unreadable") from exc
+    if not _VERSIONED.fullmatch(name):
+        raise LayoutError(f"{path} names an invalid directory")
 
 
 def _looks_complete(package_name):

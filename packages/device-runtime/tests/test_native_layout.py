@@ -176,3 +176,43 @@ def test_dangling_management_symlink_is_refused(tmp_path, roots, monkeypatch, na
 
     with pytest.raises(layout.LayoutError, match="legacy management layout"):
         layout.classify()
+
+
+def test_pointer_beside_versioned_trees_is_accepted(roots):
+    """The pointer lives next to the trees it selects, so it is part of the layout.
+
+    Treating it as a stray child made every upgrade after a pointer existed
+    refuse with "must be a plain directory" -- the classifier rejected the very
+    file the upgrade writes.
+    """
+    packages, bootstrap = roots
+    _payload(packages)
+    _bootstrap(bootstrap)
+    (bootstrap / "current").write_text("0.2.2-native1\n")
+
+    observation = layout.classify()
+
+    assert observation["kind"] == "upgrade"
+
+
+def test_pointer_must_be_a_plain_file(roots):
+    packages, bootstrap = roots
+    _payload(packages)
+    _bootstrap(bootstrap)
+    pointer = bootstrap / "current"
+    pointer.mkdir()
+
+    with pytest.raises(layout.LayoutError, match="must be a regular file"):
+        layout.classify()
+
+
+@pytest.mark.parametrize("value", ["", "../escape", "/abs", "a/b", "-flag", ".hidden"])
+def test_pointer_must_name_a_directory(roots, value):
+    """A pointer that is not a directory name cannot be joined to a root."""
+    packages, bootstrap = roots
+    _payload(packages)
+    _bootstrap(bootstrap)
+    (bootstrap / "current").write_text(value + "\n")
+
+    with pytest.raises(layout.LayoutError):
+        layout.classify()
