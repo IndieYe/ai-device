@@ -138,6 +138,20 @@ def _lifecycle_binding(root, active):
     }
 
 
+def _release_runtime_source(root, release):
+    """Private runtime of an existing release, or None for a legacy instance.
+
+    lifecycle._release_runtime returns the same path; it lives here so the native
+    preparation path can reuse it without importing lifecycle at module scope.
+    """
+    if not _has_pointer(root):
+        return None
+    runtime = root / "releases" / release / "runtime"
+    if not runtime.is_dir() or runtime.is_symlink():
+        raise InstallationError("active release has no private runtime")
+    return runtime
+
+
 def _file_sha256(path):
     digest = hashlib.sha256()
     with Path(path).open("rb") as stream:

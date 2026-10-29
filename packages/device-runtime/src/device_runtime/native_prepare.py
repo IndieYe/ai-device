@@ -325,7 +325,18 @@ def prepare_runtime_candidate(
                 ) as sender,
                 core.preparation_sender(sender),
             ):
-                prepared = core._prepare(root, bundle, manifest, ["client"], uv_executable=uv)
+                # The prepared release must start on its own after activation, so it
+                # inherits the live release's private runtime exactly like
+                # prepare_upgrade does. Without this the new release has no
+                # interpreter and the launcher refuses it after the pointer moves.
+                prepared = core._prepare(
+                    root,
+                    bundle,
+                    manifest,
+                    ["client"],
+                    uv_executable=uv,
+                    runtime_source=core._release_runtime_source(root, active["release"]),
+                )
             home = root / "releases" / prepared["release"]
             _durable_tree(home)
             with helper._directory_fd(home.parent) as fd:

@@ -13,7 +13,9 @@ def preparation(tmp_path, monkeypatch):
     root = tmp_path / "instance"
     root.mkdir()
     (root / ".installation.lock").touch()
-    (root / "active.json").write_text('{"roles":["client"],"release_version":"1"}')
+    (root / "active.json").write_text(
+        '{"roles":["client"],"release":"old-release","release_version":"1"}'
+    )
     # A registered instance always carries these: helper.register reads both, and
     # lifecycle binds them into every candidate record.
     (root / "instance.json").write_text('{"format_version":1,"instance_id":"probe"}')
@@ -431,3 +433,29 @@ def test_binding_refuses_fifo_instance_identity(tmp_path, monkeypatch):
     # _digest rejects the FIFO before the identity read is reached.
     with pytest.raises((np.PreparationError, np.helper.HelperError)):
         np._binding(root)
+
+
+def test_prepare_inherits_active_private_runtime(preparation):
+    """A prepared release must be able to start; it needs its own runtime copy.
+
+    Without runtime_source the release directory has no interpreter, so after the
+    pointer moves the launcher refuses to start and the unit restarts forever.
+    """
+    root, _, _, calls = preparation
+    (root / "current").write_text("old-release\n")
+    runtime = root / "releases" / "old-release" / "runtime"
+    runtime.mkdir(parents=True)
+
+    assert prepare(preparation)["state"] == "runtime_prepared"
+
+    kwargs = calls[0][3]
+    assert kwargs["runtime_source"] == runtime
+
+
+def test_prepare_without_pointer_passes_no_runtime_source(preparation):
+    """Legacy single-file instances have no private runtime to inherit."""
+    _root, _, _, calls = preparation
+
+    assert prepare(preparation)["state"] == "runtime_prepared"
+
+    assert calls[0][3]["runtime_source"] is None
