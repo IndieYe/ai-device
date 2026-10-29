@@ -3167,3 +3167,39 @@ esac
 - 验收过程中发现：`venv/bin/python` 是指向 `runtime/bin/python3.13` 的符号链接，
   替换 venv 解释器会穿透写到 runtime 本体。这是 venv 的常规结构，不是缺陷，
   但任何"替换解释器"的测试手法都会破坏 runtime，应改用 `sys.prefix` 判定归属。
+
+### E1a 制品与安装验收
+
+制品身份（源码 `8daa66228f8950ead708bd0414e58d43c07224c0`，payload `build/native-payload-e1a`，
+device 轮子 `6335a09e…0b1e07`，均未签名 `development_build`）：
+
+| 制品 | 大小 | sha256 |
+| --- | ---: | --- |
+| `build/native-packages-p1-e1a/ai-device-native-client-0.2.2-1.x86_64.rpm` | 106369269 | `b2dfb2a54efb11c26bd225529283197682269211643d9b5fce111b2230f47821` |
+| `build/native-packages-p1-e1a/ai-device-native-client_0.2.2-1_amd64.deb` | 105292738 | `098df61dc2e7e50b23af31e6285fc68c1856ad1ebfe67a5e2834f2742e87f525` |
+
+包内容核对：两个包的 `installation.py` 均含 6 处 E1a 标识且 `POINTER = "current"`；
+bootstrap `native_helper.py` 含 4 处指针/launcher 判定；DEB `prerm` 含 `upgrade|failed-upgrade) exit 0`。
+
+隔离验收（Ubuntu 24.04 x86_64 装 DEB，Rocky 9 x86_64 装 RPM，均一次性容器）：
+
+| 场景 | DEB | RPM |
+| --- | --- | --- |
+| 安装 | `ii 0.2.2-1` | `ai-device-native-client-0.2.2-1.x86_64` |
+| 包入口建实例（普通用户） | 成功，生成 `run`/`run-runner`/`current` | 同 |
+| 经稳定入口启动 | 进入真实 client（仅缺运行配置） | 同 |
+| `prepare_upgrade` 第二 release | 成功，自带私有 runtime | 成功 |
+| `activate_release` | `activated`，未重启 | `activated` |
+| 切换前后入口 sha256 | 完全一致 | 完全一致 |
+| 切换后 venv `sys.prefix` | 指向新 release | 指向新 release |
+
+两包 `run`/`run-runner` 哈希与源码 payload 一致（`46c70603…` / `33e7afa3…`），即安装未改写入口。
+
+### 制品验收边界
+- root 直接安装实例被拒（`native client instances must be created by the selected non-root user`），
+  符合设计；实例由普通用户创建。
+- `prepare`/`activate` 需要 `uv` 在 PATH；包内 `tools/uv` 未暴露为命令，本轮以显式 PATH 验证。
+  这是一个可用性缺口，未修改打包行为。
+- RPM 以 `--nodeps` 安装，因 spec 设 `AutoReqProv:no`，**不构成依赖闭环验收**。
+- 容器无 systemd，unit 层"activate 不触发 systemctl"仍未验证。
+- 制品未签名，不得作为发布件。
