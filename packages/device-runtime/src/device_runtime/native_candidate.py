@@ -71,10 +71,14 @@ def _sha(value):
     return value
 
 
-def verify_release(
-    envelope, trusted_keys, *, release_id, target, source_version, bootstrap_version
-):
-    """Authenticate canonical payload with externally configured raw Ed25519 keys."""
+def authenticate_envelope(envelope, trusted_keys):
+    """Verify the Ed25519 signature over the canonical payload.
+
+    This is the authenticity step on its own: it proves only that whoever holds
+    a key from ``trusted_keys`` issued this exact payload. Every caller must
+    still bind the payload to the artifacts it is about to act on, because the
+    payload alone says nothing about files on disk.
+    """
     from cryptography.exceptions import InvalidSignature
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
@@ -94,6 +98,15 @@ def verify_release(
         )
     except (InvalidSignature, ValueError, TypeError, binascii.Error) as exc:
         raise CandidateError("release signature invalid") from exc
+    return payload
+
+
+def verify_release(
+    envelope, trusted_keys, *, release_id, target, source_version, bootstrap_version
+):
+    """Authenticate canonical payload with externally configured raw Ed25519 keys."""
+    payload = authenticate_envelope(envelope, trusted_keys)
+    key_id = envelope["key_id"]
     required = {
         "schema",
         "release_id",

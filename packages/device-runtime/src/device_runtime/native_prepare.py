@@ -158,17 +158,30 @@ def retire_preparation(root, operation_id):
         return receipt
 
 
-def activate_candidate(root, release, *, stopped=False):
+def activate_candidate(root, release, *, envelope, trusted_keys, stopped=False):
     """Promote a prepared release for a registered instance.
 
     The service must already be stopped. This takes the installation lease
     exclusively, which only succeeds when no launcher holds it shared, so the
     lock -- not the caller's flag -- is what proves the instance is idle.
+
+    The candidate record cannot authorize anything: it lives in the owner's own
+    tree, so an owner can write a self-consistent one without ever passing
+    signature verification. The envelope and trusted keys are therefore
+    re-verified here, and the manifest digest that verification produced is
+    compared against the release directory this promotes.
     """
     if not stopped:
         raise PreparationError("explicit --stopped confirmation required; this never stops processes")
     root = helper._path(root)
     binding, active = _binding(root)
+    keys_path = Path(trusted_keys)
+    helper._trusted(keys_path.resolve())
+    keys = candidate._json(_read_regular(keys_path, "trusted keys must be a regular file"))
+    signed = candidate._read_envelope(Path(envelope))
+    payload = candidate.authenticate_envelope(signed, keys)
+    # The path component must match before it is joined onto the root.
+    expected = lifecycle._release_id(release)
     with (
         native_preparation_lease(root),
         (root / ".installation.lock").open("rb") as lease,
@@ -179,7 +192,7 @@ def activate_candidate(root, release, *, stopped=False):
             raise PreparationError("instance is running or maintenance is active") from exc
         if _binding(root) != (binding, active):
             raise PreparationError("source changed before activation")
-        directory = root / "releases" / lifecycle._release_id(release)
+        directory = root / "releases" / expected
         if directory.is_symlink() or (directory / "candidate.json").is_symlink():
             raise PreparationError("invalid candidate directory")
         record = candidate._json((directory / "candidate.json").read_bytes())
@@ -192,9 +205,18 @@ def activate_candidate(root, release, *, stopped=False):
         # management_lease and rejects any instance carrying the native marker.
         # This function already holds the native maintenance lease exclusively.
         prepared = lifecycle._read(directory / "candidate.json")
-        checked = lifecycle._check_release(root, release, active["roles"])
+        checked = lifecycle._check_release(root, expected, active["roles"])
         if checked != prepared["candidate"]:
             raise PreparationError("candidate installation record changed")
+        # Bind the authenticated payload to the bytes about to be promoted. The
+        # bundle manifest covers every wheel, so a release tampered with after
+        # preparation stops matching here even though its own record still does.
+        package = payload.get("package")
+        if not isinstance(package, dict):
+            raise PreparationError("signed payload lacks a package descriptor")
+        manifest_sha256 = package.get("manifest_sha256")
+        if helper._digest(directory / "bundle" / "manifest.json") != manifest_sha256:
+            raise PreparationError("release bundle does not match the signed manifest")
         promoted = lifecycle._publish(root, checked)
         return {"state": "activated", **promoted}
 
@@ -376,9 +398,21 @@ def main():
         parser.add_argument("activate")
         parser.add_argument("--root", required=True)
         parser.add_argument("--release", required=True)
+        parser.add_argument("--envelope", required=True)
+        parser.add_argument("--trusted-keys", required=True)
         parser.add_argument("--stopped", action="store_true", required=True)
         args = parser.parse_args()
-        print(canonical(activate_candidate(args.root, args.release, stopped=args.stopped)))
+        print(
+            canonical(
+                activate_candidate(
+                    args.root,
+                    args.release,
+                    envelope=args.envelope,
+                    trusted_keys=args.trusted_keys,
+                    stopped=args.stopped,
+                )
+            )
+        )
         return
     if len(sys.argv) > 1 and sys.argv[1] == "retire":
         parser = argparse.ArgumentParser(

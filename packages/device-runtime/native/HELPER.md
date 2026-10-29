@@ -156,6 +156,8 @@ release envelope严格为payload/key_id/signature；签名是对既有canonical 
 
 `python -m device_runtime.native_prepare --root ... --package ... --envelope ... --trusted-keys ... --release-id ... --operation-id ... --bootstrap-version ... --uv-executable ...` 重验签名并从包重新提取，不能只信用户可编辑candidate.json。限Linux登记所有者非root、schema2完整binding及单client角色；核对unit/run/identity/roles摘要。使用专用native_preparation_lease（管理EX）与安装SH锁，允许运行中的客户端继续工作但排除其他维护，旧工具仍拒绝受管实例。当前Python真实路径及显式uv均要求管理员可信非可写持久路径，不执行提取目录工具。
 
+`python -m device_runtime.native_prepare activate --root ... --release ... --envelope ... --trusted-keys ... --stopped` 在同一维护租约内重验信封并激活，candidate.json仅作提示不作授权。准备完成后改写release时，即使installation.json与候选记录重新自洽，也会因与签名payload的`manifest_sha256`不符而被拒。
+
 先在`native-candidates/<id>.intent.json`记录源active/marker、签名发布摘要、持久工具摘要，再重新认证提取到保留目录，复用installation._prepare于最终release目录直接创建venv和健康检查。文件落盘后核对active和marker未变，再发布runtime_prepared结果，不切换active。相同ID只在源及release/bundle/解释器证据仍有效时返回原结果；无完成或失败结果禁止相同/新ID自动重放。失败保留release及证据供后续管理员恢复，不提供删除台账解锁流程。完整准备恢复/批准消费尚缺。
 
 新登记schema2 marker以root 0644原子发布，内容仅绑定路径/摘要，不含凭证；其他操作账本仍默认0600，凭证环境仍0600。已有0600 marker不会自动chmod，普通用户读取失败需管理员明确处理，非自动迁移。之前v15包和已运行helper不自动加载新代码。

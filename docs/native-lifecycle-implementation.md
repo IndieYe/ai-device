@@ -3258,11 +3258,17 @@ bootstrap `native_helper.py` 含 4 处指针/launcher 判定；DEB `prerm` 含 `
 | --- | --- |
 | 候选记录 | `native_prepare` 准备成功后写出 lifecycle 兼容的 `candidate.json`，绑定当时的 `active.json`、`instance.json`、`roles.json` 摘要 |
 | 私有 runtime | 准备时传入当前 active release 的 runtime，使新 release 能被稳定入口启动 |
-| 激活入口 | `native_prepare activate --root --release --stopped` |
+| 激活入口 | `native_prepare activate --root --release --envelope --trusted-keys --stopped` |
 
 激活的安全约束由锁而非标志位保证：`.installation.lock` 的独占获取只有在没有
 launcher 持有共享锁时才能成功，因此实例仍在运行时会被拒绝，不依赖调用方声明。
 锁内还会重新核对 binding、候选记录与 `_check_release`，拒绝为旧实例状态准备的候选。
+
+候选记录不构成授权。它位于实例所有者自己的目录树内，所有者可以在未通过任何签名
+验证的情况下写出一份字段自洽的记录；因此激活会重新验证信封，并要求 `--trusted-keys`
+指向管理员可信且不可写的路径，与 `--uv-executable`、解释器同等待遇。验签得到的
+`payload.package.manifest_sha256` 再与待激活 release 的 `bundle/manifest.json` 摘要比对，
+使得准备完成后被改写的 release 即使自身记录仍自洽也会被拒绝。
 
 激活不复用 `lifecycle.activate_release`：该函数内部取 `install._lock`，而 `_lock`
 经 `management_lease` 会拒绝带 native marker 的实例，真实注册实例必然失败。改在已
