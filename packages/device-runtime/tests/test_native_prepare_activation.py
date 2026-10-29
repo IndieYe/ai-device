@@ -395,3 +395,96 @@ def test_resolve_refuses_when_already_consistent(instance):
 
     with pytest.raises(np.PreparationError, match="already agree"):
         np.resolve_activation(root, active["release"])
+
+
+def test_resolve_refuses_pointer_without_journal(instance, tmp_path):
+    """A hand-written pointer is not an interrupted promotion.
+
+    An earlier resolve only called _check_release, which reads the release's own
+    files. An owner could write `current` and then ask for it to be promoted,
+    skipping every signature check activate_candidate performs.
+    """
+    root, _binding, active, _candidate, _calls = instance
+    _prepare_release(root, "new")
+    (root / "current").write_text("new\n")
+    (root / "active.json").write_text(json.dumps(active))
+
+    with pytest.raises(np.PreparationError, match="no activation journal"):
+        np.resolve_activation(root, "new")
+    # Fail closed: neither write may happen.
+    assert (root / "current").read_text() == "new\n"
+    assert json.loads((root / "active.json").read_text()) == active
+
+
+def test_resolve_refuses_journal_for_a_different_release(instance):
+    root, _binding, active, _candidate, _calls = instance
+    (root / "current").write_text("new\n")
+    (root / np._activation_journal(root).name).write_text(
+        json.dumps(
+            {"format_version": 1, "release": "other", "previous": active["release"]}
+        )
+    )
+
+    with pytest.raises(np.PreparationError, match="different release"):
+        np.resolve_activation(root, "new")
+
+
+def test_resolve_refuses_unsigned_release(instance, tmp_path, monkeypatch):
+    """The release's own envelope must verify against the administrator's keys."""
+    root, _binding, active, _candidate, _calls = instance
+    (root / "current").write_text("new\n")
+    (root / np._activation_journal(root).name).write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "release": "new",
+                "previous": active["release"],
+                "manifest_sha256": hashlib.sha256(_manifest_bytes("new")).hexdigest(),
+            }
+        )
+    )
+    # Owner-supplied envelope signed by an owner key, and a key set the owner
+    # controls: authenticate_envelope must reject it against the trusted set.
+    envelope, _keys = _sign(tmp_path, "new", hashlib.sha256(_manifest_bytes("new")).hexdigest())
+    (root / "releases" / "new" / "release.json").write_text(envelope.read_text())
+    monkeypatch.setattr(np, "_load_trusted_keys", lambda path=None: {})
+
+    with pytest.raises(np.candidate.CandidateError):
+        np.resolve_activation(root, "new")
+    assert (root / "current").read_text() == "new\n"
+
+
+def test_resolve_completes_an_authorised_promotion(instance, tmp_path, monkeypatch):
+    """The legitimate crash window still recovers.
+
+    _publish writes the pointer, then active.json. A crash in between leaves the
+    journal and a signed release on disk; completion must accept exactly that.
+    """
+    root, _binding, active, _candidate, _calls = instance
+    digest = hashlib.sha256(_manifest_bytes("new")).hexdigest()
+    envelope, keys = _sign(tmp_path, "new", digest)
+    (root / "releases" / "new" / "release.json").write_text(envelope.read_text())
+    (root / "current").write_text("new\n")
+    (root / np._activation_journal(root).name).write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "release": "new",
+                "previous": active["release"],
+                "manifest_sha256": digest,
+            }
+        )
+    )
+
+    _write_record(root, np.core._lifecycle_binding(root, active), {"release": "new", "roles": ["client"]})
+    trusted = json.loads(keys.read_text())
+    monkeypatch.setattr(np, "_load_trusted_keys", lambda path=None: trusted)
+    # _release_id derives the directory name from the release string; the fixture
+    # names the directory plainly, so keep that mapping.
+    monkeypatch.setattr(np.lifecycle, "_release_id", lambda release: release)
+
+    result = np.resolve_activation(root, "new")
+
+    assert result["state"] == "completed"
+    assert json.loads((root / "active.json").read_text())["release"] == "new"
+    assert not np._activation_journal(root).exists()

@@ -231,6 +231,14 @@ def resolve_activation(root, release):
     a third release and never runs on a live instance. Choosing the pointer's
     release completes the promotion the crashed run started; choosing the active
     release rolls the pointer back to what the metadata still describes.
+
+    Completing a promotion is an activation, so it must carry the same evidence
+    an activation does. An earlier version only called ``_check_release`` here,
+    which reads the release's own files: an owner could hand-write ``current``
+    and then ask for it to be promoted, skipping every signature check that
+    ``activate_candidate`` performs. The journal written before ``_publish`` is
+    the record that this promotion was already authorised, so completion now
+    requires it and re-verifies the release against it.
     """
     root = helper._path(root)
     binding, active = _binding(root)
@@ -241,10 +249,17 @@ def resolve_activation(root, release):
         raise PreparationError("release pointer is missing; restore it explicitly")
     if release == active["release"]:
         target = active["release"]
+        completing = False
     elif release == observation["pointer"]:
         target = observation["pointer"]
+        completing = True
     else:
         raise PreparationError("requested release is neither the pointer nor active")
+    # Verify outside the lease: nothing here writes, and a failure must leave
+    # both the pointer and active.json untouched.
+    verified = None
+    if completing:
+        verified = _verify_interrupted_promotion(root, target, observation, active)
     with (
         native_preparation_lease(root),
         (root / ".installation.lock").open("rb") as lease,
@@ -255,14 +270,53 @@ def resolve_activation(root, release):
             raise PreparationError("instance is running or maintenance is active") from exc
         if _binding(root) != (binding, active):
             raise PreparationError("source changed before resolution")
-        if release == active["release"]:
+        if not completing:
             core._write_pointer(root, active["release"])
             _activation_journal(root).unlink(missing_ok=True)
             return {"state": "rolled_back", "release": active["release"]}
-        checked = lifecycle._check_release(root, target, active["roles"])
+        checked = verified
         core._json(root / "active.json", {**checked, "activation_id": uuid.uuid4().hex})
         _activation_journal(root).unlink(missing_ok=True)
         return {"state": "completed", "release": target}
+
+
+def _verify_interrupted_promotion(root, target, observation, active):
+    """Re-prove that ``target`` was an authorised promotion before completing it.
+
+    Completion is reached only after a crash between ``_publish`` and the
+    active.json commit, so the evidence that authorised it is: the journal the
+    crashing run wrote, the signature over the release's own envelope, and the
+    digest binding that envelope to the bytes now on disk. Any missing or
+    mismatched piece means the state is not a recoverable promotion.
+    """
+    journal = observation.get("journal")
+    if not isinstance(journal, dict):
+        raise PreparationError(
+            "no activation journal; a pointer without one was not an authorised promotion"
+        )
+    if journal.get("format_version") != 1:
+        raise PreparationError("activation journal format is unrecognised")
+    if journal.get("release") != target:
+        raise PreparationError("activation journal describes a different release")
+    if journal.get("previous") != active["release"]:
+        raise PreparationError("activation journal does not follow the active release")
+    expected = lifecycle._release_id(target)
+    directory = root / "releases" / expected
+    if directory.is_symlink() or (directory / "release.json").is_symlink():
+        raise PreparationError("invalid release directory")
+    # Prepare recorded the envelope it authenticated; verify it again here with
+    # the administrator's key set rather than trusting the owner's copy.
+    signed = candidate._read_envelope(directory / "release.json")
+    payload = candidate.authenticate_envelope(signed, _load_trusted_keys(None))
+    package = payload.get("package")
+    if not isinstance(package, dict):
+        raise PreparationError("signed payload lacks a package descriptor")
+    manifest_sha256 = package.get("manifest_sha256")
+    if journal.get("manifest_sha256") != manifest_sha256:
+        raise PreparationError("activation journal manifest digest differs from the signed one")
+    if helper._digest(directory / "bundle" / "manifest.json") != manifest_sha256:
+        raise PreparationError("release bundle does not match the signed manifest")
+    return lifecycle._check_release(root, expected, active["roles"])
 
 
 def activate_candidate(root, release, *, envelope, trusted_keys, stopped=False):
