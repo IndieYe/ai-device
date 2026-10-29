@@ -19,7 +19,10 @@ def test_builder_uses_isolated_offline_uv_for_explicit_runtime():
 def test_independent_bootstrap_includes_candidate_launcher():
     builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
     source = builder.read_text()
-    assert "for module in __init__.py native_helper.py management_lock.py native_bootstrap.py; do" in source
+    assert (
+        "for module in __init__.py entrypoint.py native_helper.py "
+        "management_lock.py native_bootstrap.py; do"
+    ) in source
     # The stable helper entry is unchanged; candidate launch is not activated.
     assert "-I -B -m device_runtime.native_helper" in source
 

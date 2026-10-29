@@ -23,7 +23,7 @@ import time
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
-from .installation import LAUNCHER, RUNNER_BODY
+from .entrypoint import LAUNCHER, POINTER, RUNNER_BODY
 from .management_lock import MARKER, management_lease
 
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
@@ -93,7 +93,7 @@ def _read_release_pointer(root):
     that will actually start. The value becomes a path component, so it is
     validated here rather than trusted from the file.
     """
-    path = root / "current"
+    path = root / POINTER
     if path.is_symlink() or not stat.S_ISREG(path.lstat().st_mode):
         raise HelperError("release pointer must be a regular file")
     value = _read_regular(path, "release pointer must be a regular file")
