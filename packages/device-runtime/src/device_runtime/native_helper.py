@@ -30,6 +30,9 @@ ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
 MAX_REQUEST = 4096
 ACTIONS = {"query", "start", "reconcile", "resolve-running", "resolve-stopped"}
 RUNTIME_ROOT = Path("/run")
+# Stable entrypoint the package publishes; it resolves the release pointer, so
+# the unit survives the tree removal that every upgrade performs.
+HELPER_ENTRYPOINT = Path("/usr/bin/ai-device-native-helper")
 
 
 class HelperError(ValueError):
@@ -343,26 +346,34 @@ def render_client_unit(*, instance_id, root, uid, gid, environment_file):
     )
 
 
-def render_helper_unit(*, bootstrap_python, registry, socket_path, group, candidate_version=None, candidate_sha256=None):
+def render_helper_unit(*, bootstrap_python, registry, socket_path, group, candidate_version=None, candidate_sha256=None, entrypoint=None):
     python, registry, socket_path = map(_path, (bootstrap_python, registry, socket_path))
     if type(group) is not int or group < 0:
         raise HelperError("explicit socket group required")
     if candidate_version is None:
         if candidate_sha256 is not None:
             raise HelperError("candidate digest requires version")
-        entry = "device_runtime.native_helper serve"
-        version_arg = ""
+        # Launch through the packaged entrypoint, never the versioned interpreter.
+        # The package deletes its predecessor's tree on upgrade, so a unit naming
+        # one build's interpreter cannot restart afterwards: systemd reports
+        # 203/EXEC and the management plane stays down until someone edits it.
+        # The entrypoint resolves the same release pointer an instance uses.
+        launch = f"{_path(HELPER_ENTRYPOINT if entrypoint is None else entrypoint)} serve"
     else:
         _identifier(candidate_version)
         if not isinstance(candidate_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", candidate_sha256):
             raise HelperError("candidate snapshot digest required")
-        entry = "device_runtime.native_bootstrap"
-        version_arg = f" --version {candidate_version} --snapshot-sha256 {candidate_sha256}"
+        # Candidate launches keep the fenced snapshot contract: a pinned
+        # interpreter and digest, never the moving pointer.
+        launch = (
+            f"{python} -I -B -m device_runtime.native_bootstrap "
+            f"--version {candidate_version} --snapshot-sha256 {candidate_sha256}"
+        )
     return (
         "[Unit]\nDescription=Device bounded native management helper\n"
         "After=local-fs.target\n\n[Service]\nType=simple\nUser=root\nGroup=root\n"
-        f"ExecStart={python} -I -B -m {entry} "
-        f"--registry {registry} --socket {socket_path} --group {group}{version_arg}\n"
+        f"ExecStart={launch} "
+        f"--registry {registry} --socket {socket_path} --group {group}\n"
         "# The start guard owns inherited leases until its sender is reaped.\n"
         "KillMode=process\nUMask=0077\nNoNewPrivileges=yes\nRestart=no\n"
         "# No ExecStartPre unlink: an orphan socket requires explicit reconciliation.\n"
@@ -395,6 +406,11 @@ def deploy_helper(*, bootstrap_python, registry, unit_dir, runtime_dir, group, c
 
         if python != native_bootstrap.trusted_helper_bootstrap() / "bin/python3.13":
             raise HelperError("independent bootstrap required for candidate deployment")
+    else:
+        # The unit now launches the packaged entrypoint, so that file -- not only
+        # the interpreter -- is what root will execute. Require it to be a
+        # root-owned, non-writable regular file before publishing a unit onto it.
+        _require_helper_entrypoint()
     if not registry.exists() and candidate_version is None:
         _trusted(registry.parent, directory=True)
         registry.mkdir(mode=0o755)
@@ -407,6 +423,21 @@ def deploy_helper(*, bootstrap_python, registry, unit_dir, runtime_dir, group, c
             evidence = native_bootstrap.read_helper_candidate(registry / "bootstrap-candidates", candidate_version)
             candidate_sha256 = evidence["snapshot_sha256"]
         return _deploy_helper_locked(python, registry, unit_dir, runtime_dir, group, candidate_version, candidate_sha256)
+
+
+def _require_helper_entrypoint(path=None):
+    """Refuse to publish a unit that would exec an untrusted entrypoint."""
+    path = Path(HELPER_ENTRYPOINT if path is None else path)
+    try:
+        info = path.lstat()
+    except OSError as error:
+        raise HelperError(f"stable helper entrypoint is missing: {error}") from error
+    if not stat.S_ISREG(info.st_mode):
+        raise HelperError("stable helper entrypoint must be a regular file")
+    if not os.access(path, os.X_OK):
+        raise HelperError("stable helper entrypoint must be executable")
+    _trusted(path)
+    return path
 
 
 def _deploy_helper_locked(python, registry, unit_dir, runtime_dir, group, candidate_version, candidate_sha256):

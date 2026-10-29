@@ -472,17 +472,58 @@ def test_nonterminal_upgrade_blocks_start(helper):
     assert not any(action == "start" for action, _ in adapter.calls)
 
 
-def test_render_helper_uses_independent_bootstrap(tmp_path):
+def test_render_helper_launches_the_stable_entrypoint(tmp_path):
+    """The unit must not name one build's interpreter.
+
+    Every package upgrade deletes the previous tree, so a hard-coded
+    interpreter leaves systemd failing with 203/EXEC after the upgrade.
+    """
+    entrypoint = tmp_path / "ai-device-native-helper"
     result = nh.render_helper_unit(
         bootstrap_python=tmp_path / "python",
         registry=tmp_path,
         socket_path=tmp_path / "helper.sock",
         group=12345,
+        entrypoint=entrypoint,
     )
     assert "User=root" in result
     assert "Restart=no" in result
     assert "ExecStartPre=" not in result
-    assert f"ExecStart={tmp_path / 'python'} -I -B -m device_runtime.native_helper serve " in result
+    assert f"ExecStart={entrypoint} serve " in result
+    assert str(tmp_path / "python") not in result
+
+
+def test_render_helper_candidate_keeps_pinned_interpreter(tmp_path):
+    """Candidate launches stay fenced to an exact snapshot, not the pointer."""
+    python = tmp_path / "python"
+    result = nh.render_helper_unit(
+        bootstrap_python=python,
+        registry=tmp_path,
+        socket_path=tmp_path / "helper.sock",
+        group=12345,
+        candidate_version="cand022",
+        candidate_sha256="a" * 64,
+    )
+    assert f"ExecStart={python} -I -B -m device_runtime.native_bootstrap" in result
+    assert "--snapshot-sha256 " + "a" * 64 in result
+    assert "serve" not in result
+
+
+def test_deploy_refuses_untrusted_entrypoint(tmp_path, monkeypatch):
+    """A world-writable or foreign entrypoint must not receive the unit."""
+    unit_dir = tmp_path / "units"
+    unit_dir.mkdir()
+    python = tmp_path / "python"
+    python.write_text("#!/bin/sh\n")
+    python.chmod(0o755)
+    entrypoint = tmp_path / "ai-device-native-helper"
+    entrypoint.write_text("#!/bin/sh\n")
+    entrypoint.chmod(0o777)
+    monkeypatch.setattr(nh, "HELPER_ENTRYPOINT", entrypoint)
+
+    with pytest.raises(nh.HelperError, match="administrator-owned non-writable"):
+        nh._require_helper_entrypoint(entrypoint)
+    assert not (unit_dir / "ai-device-native-helper.service").exists()
 
 
 def test_peer_process_rejects_non_root_and_unsupported_kernel(monkeypatch):
@@ -739,6 +780,11 @@ def deployment(tmp_path, monkeypatch):
     python.chmod(0o755)
     units = tmp_path / "units"
     units.mkdir()
+    # deploy_helper now publishes a unit that execs the packaged entrypoint.
+    entrypoint = tmp_path / "ai-device-native-helper"
+    entrypoint.write_text("#!/bin/sh\n")
+    entrypoint.chmod(0o755)
+    monkeypatch.setattr(nh, "HELPER_ENTRYPOINT", entrypoint)
     return {
         "bootstrap_python": python,
         "registry": tmp_path / "registry",
