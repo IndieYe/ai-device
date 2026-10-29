@@ -3245,3 +3245,48 @@ bootstrap `native_helper.py` 含 4 处指针/launcher 判定；DEB `prerm` 含 `
   即缺该变量，非安装缺陷。
 - helper 守护进程（`deploy`）未部署，`helper.sock` 不存在，`call query/start` 未验证。
 - 容器无 journald 持久化，unit 退出原因靠 `systemctl show` 与手动复现。
+
+### 注册实例签名升级链路
+
+此前签名更新止于 `package_applied_pending_activation`：验签、提取、准备新 release、
+安装 Debian 包都完成，但没有任何代码把它推进为 active。注册实例因此无法完成一次
+真实升级，systemd 层验收只能用未注册实例加手写 unit 绕行。
+
+补齐三个环节后该链路端到端可用：
+
+| 环节 | 内容 |
+| --- | --- |
+| 候选记录 | `native_prepare` 准备成功后写出 lifecycle 兼容的 `candidate.json`，绑定当时的 `active.json`、`instance.json`、`roles.json` 摘要 |
+| 私有 runtime | 准备时传入当前 active release 的 runtime，使新 release 能被稳定入口启动 |
+| 激活入口 | `native_prepare activate --root --release --stopped` |
+
+激活的安全约束由锁而非标志位保证：`.installation.lock` 的独占获取只有在没有
+launcher 持有共享锁时才能成功，因此实例仍在运行时会被拒绝，不依赖调用方声明。
+锁内还会重新核对 binding、候选记录与 `_check_release`，拒绝为旧实例状态准备的候选。
+
+激活不复用 `lifecycle.activate_release`：该函数内部取 `install._lock`，而 `_lock`
+经 `management_lease` 会拒绝带 native marker 的实例，真实注册实例必然失败。改在已
+持有的原生维护租约内复用 `lifecycle._check_release` / `_publish`，校验不减，且不再
+重复获取旧锁。
+
+隔离验证（`device-qual-systemd-amd64:probe`，源码 `0cc692d`，DEB
+`8f0d5028b99e0fe132d0a2f82e19918ca2fcd44f4e452e12c801dc6b96c23a9d`）：
+
+| 步骤 | 结果 |
+| --- | --- |
+| 普通用户建实例 + helper register | 成功，服务 `active (running)` |
+| 运行中签名准备 | 成功，服务 MainPID 不变 |
+| 运行中激活 | **拒绝** `instance is running or maintenance is active` |
+| 停止后激活 | `activated`，指针指向新 release |
+| `run`/`run-runner`/unit sha256 | 三者前后一致 |
+| 重启后进程树 | 两进程均位于新 release 目录 |
+| 持续观测 | MainPID 稳定，无重启循环 |
+
+### 该链路仍存边界
+- 信封由开发用临时密钥生成（`--development-ephemeral-key` 同类脚本），
+  **不是发布签名**；生产信封须由外部发布方签发。
+- helper 侧没有 update/upgrade 子命令，`native_update` 与 `native_update_job`
+  仍未被 helper 导入；本次验证经 `python -m device_runtime.native_prepare` 直接调用，
+  管理员日常入口尚未接线。
+- `package apply` 步骤（dpkg 安装新包）未纳入本次验证，只验证了准备与激活。
+- 旧 release 与 `native-candidates` 记录不会自动清理。
