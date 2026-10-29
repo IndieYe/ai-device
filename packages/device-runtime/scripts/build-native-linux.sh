@@ -251,13 +251,37 @@ local function versioned(root)
     if posix.readlink(path) then
      error('native package pre-install refused: ' .. path .. ' must be a regular file')
     end
+    -- io.open on a directory may succeed or fail depending on libc; check the
+    -- type explicitly so the message names the real problem.
+    if posix.stat(path, 'type') ~= 'regular' then
+     error('native package pre-install refused: ' .. path .. ' must be a regular file')
+    end
     local handle = io.open(path, 'r')
     if not handle then
      error('native package pre-install refused: ' .. path .. ' is unreadable')
     end
     local value = handle:read('*l')
     handle:close()
-    if value and not string.match(value, '^[A-Za-z0-9][A-Za-z0-9_.%-]*$') then
+    -- Validate without a pattern: %pretrans runs in a restricted lua where an
+    -- anchored match over the file contents proved unreliable, and a wrong
+    -- "invalid" answer here blocks every upgrade.
+    local ok = type(value) == 'string' and #value > 0 and #value <= 128
+    if ok then
+     local first = string.sub(value, 1, 1)
+     if not string.find('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789', first, 1, true) then
+      ok = false
+     end
+    end
+    if ok then
+     for i = 1, #value do
+      local c = string.sub(value, i, i)
+      if not string.find('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-', c, 1, true) then
+       ok = false
+       break
+      end
+     end
+    end
+    if not ok then
      error('native package pre-install refused: ' .. path .. ' names an invalid directory')
     end
    else
@@ -295,6 +319,26 @@ end
 if packages[1] == '$tree' then
  error('native package pre-install refused: $tree is already installed')
 end
+%post
+# Publish the pointer after the files are in place. rpm -U removes the previous
+# version's paths, so until this runs the pointer (if any) names a directory
+# that no longer exists. The dpkg postinst does the same thing; both must, or
+# an upgrade through one package manager leaves a working entrypoint while the
+# other leaves a broken one.
+# The spec is written through an unquoted heredoc so the tree name is baked in,
+# which means every other $ must be escaped to survive until install time.
+root=/opt/ai-device/bootstrap
+if [ ! -d "\$root/__TREE__/runtime" ]; then
+ echo "native package post-install: bootstrap directory is missing" >&2
+ exit 1
+fi
+tmp=\$(mktemp "\$root/.current-XXXXXX")
+printf '%s\\n' "__TREE__" > "\$tmp"
+chmod 644 "\$tmp"
+mv -f "\$tmp" "\$root/current"
+sync
+exit 0
+
 %preun -p <lua>
 -- rpm passes the number of package instances that will remain: 0 on a real
 -- erase, 1 or more on an upgrade. In a %preun lua script arg[1] is the script
@@ -368,6 +412,7 @@ drop_caches('/opt/ai-device/bootstrap/$tree')
 /opt/ai-device/bootstrap/$tree
 /usr/bin/ai-device-native-helper
 EOF
+ sed -i "s#__TREE__#$tree#g" "$work/rpm/SPECS/native.spec"
  rpmbuild --define "_topdir $work/rpm" -bb "$work/rpm/SPECS/native.spec" > "$work/rpm-build.log" 2>&1 || { cat "$work/rpm-build.log"; exit 1; }
  cp "$work/rpm/RPMS/x86_64/"*.rpm "$output/"
 fi

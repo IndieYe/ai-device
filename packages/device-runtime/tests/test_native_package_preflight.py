@@ -302,3 +302,24 @@ def test_rpm_preflight_matches_deb_protections():
     assert "posix.readlink(path)" in lua
     assert "is incomplete" in lua
     assert "directories" in lua or "plain_dir" in lua
+
+
+def test_both_package_managers_publish_the_pointer():
+    """An upgrade deletes the old tree, so both managers must repoint it.
+
+    dpkg got a postinst first; rpm had nothing, which would have left an RPM
+    upgrade with a working package and an entrypoint naming a deleted path.
+    """
+    builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
+    source = builder.read_text()
+
+    deb = source.split('cat > "$root/DEBIAN/postinst"', 1)[1].split("\nEOF", 1)[0]
+    assert "mv -f" in deb and "current" in deb
+
+    spec = source.split("%post", 1)[1].split("%preun", 1)[0]
+    assert "mv -f" in spec and "current" in spec
+    # Same guard as dpkg: never point at a tree that is not there. The spec is
+    # an unquoted heredoc, so install-time values are escaped and the tree name
+    # is left as a placeholder for the substitution step.
+    assert '-d "\\$root/__TREE__/runtime"' in spec
+    assert 'sed -i "s#__TREE__#$tree#g" "$work/rpm/SPECS/native.spec"' in source

@@ -195,9 +195,33 @@ Ubuntu 24.04.5 镜像 `device-qual-systemd-amd64:probe`（digest 前缀 `7b5d57b
 老包没有该模块，`dpkg -i` 会以 `No module named device_runtime.native_layout` 失败——
 即所有存量设备都无法升级。改为 preinst 随包携带 `classify.py` 并显式执行后修复。
 
-### 8.2 未覆盖
+### 8.2 RPM 路径（2026-10-29 补充）
+
+`rpmbuild` 来源：联网 Rocky 容器 `dnf -y install rpm-build`（RPM 4.16.1.3）。
+构建容器联网，**验收容器仍为 `--network none`**。
+
+Rocky Linux 9.3 / amd64 实测：
+
+| 场景 | 结果 |
+| --- | --- |
+| `rpm -i` 安装 v2 | 通过，`current=0.2.2-native2`，helper 可用 |
+| `rpm -U` 升级 v2 → v3 | 通过，指针切到 native3，旧目录删除，helper 仍可用 |
+| 同版本重装 | rpm 自身按版本号拒绝 |
+| 空指针 / `../escape` / 指针为目录 / 指针为符号链接 | lua 钩子全部拒绝 |
+| legacy `instances/` 存在 | 拒绝 |
+| 多版本并存 | 拒绝（`expected one versioned payload`） |
+
+过程中修掉两个只有真实 `rpm -U` 才暴露的问题：
+
+1. **RPM 缺少 `%post`**：dpkg 有 postinst 发布指针，spec 里没有任何对应脚本。
+   结果是 RPM 升级后包是新的、指针还是旧的（指向已删除目录）。已补，且
+   spec 经无引号 heredoc 生成，安装期变量需转义、tree 名用占位符替换。
+2. **lua 里带锚点的 `string.match` 在 `%pretrans` 环境下不可靠**，会把合法
+   的 `0.2.2-native1` 判成非法。改为逐字符校验，不依赖模式匹配。
+
+### 8.3 未覆盖
 
 - 未验证 systemd 下的 helper 单元切换（容器内无 systemd 服务运行）。
-- 未验证 RPM 路径：`rpm -U` 的同名语义只做了脚本层检查，没有真实 Rocky 容器升级。
 - 未验证签名与批准消费：本轮包未签名，走的是开发制品路径。
-- 未验证升级中断（`dpkg` 在 unpack 阶段被 kill）后的恢复。
+- 未验证升级中断（`dpkg`/`rpm` 在 unpack 阶段被 kill）后的恢复。
+- 未验证跨大版本（`0.2.2` → `0.3.0`）升级。
