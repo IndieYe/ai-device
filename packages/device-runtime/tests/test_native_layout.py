@@ -6,6 +6,8 @@ new package. The rule these tests pin is narrower: refuse what cannot be
 classified, allow one complete versioned tree to gain a sibling.
 """
 
+from pathlib import Path
+
 import pytest
 
 from device_runtime import native_layout as layout
@@ -238,3 +240,47 @@ def test_pointer_must_name_a_directory(roots, value):
 
     with pytest.raises(layout.LayoutError):
         layout.classify()
+
+
+def test_legacy_manager_root_is_refused(roots, monkeypatch, tmp_path):
+    """The absolute manager directory is legacy state, not a normal path.
+
+    rpm's pretrans guard refuses it. The dpkg classifier used to skip it
+    because INSTANCE_MARKERS was declared but never walked, so the two
+    package managers disagreed about the same machine.
+    """
+    packages, bootstrap = roots
+    _payload(packages)
+    _bootstrap(bootstrap)
+    manager = tmp_path / "manager"
+    manager.mkdir()
+    monkeypatch.setattr(layout, "INSTANCE_MARKERS", (manager,))
+    monkeypatch.setattr(layout, "INSTANCE_ROOT", tmp_path / "instances")
+
+    with pytest.raises(layout.LayoutError, match="legacy management layout"):
+        layout.classify()
+
+
+def test_legacy_manager_root_dangling_symlink_is_refused(roots, monkeypatch, tmp_path):
+    packages, bootstrap = roots
+    _payload(packages)
+    _bootstrap(bootstrap)
+    manager = tmp_path / "manager"
+    manager.symlink_to(tmp_path / "missing")
+    monkeypatch.setattr(layout, "INSTANCE_MARKERS", (manager,))
+    monkeypatch.setattr(layout, "INSTANCE_ROOT", tmp_path / "instances")
+
+    with pytest.raises(layout.LayoutError, match="legacy management layout"):
+        layout.classify()
+
+
+def test_guard_targets_match_the_rpm_pretrans_list():
+    """Both package managers must refuse the same machines.
+
+    The rpm pretrans guard names these two paths literally. If the dpkg
+    classifier drifts from that list, an upgrade succeeds on Debian and
+    fails on RHEL for the same host state.
+    """
+    assert layout.INSTANCE_ROOT == Path("/opt/ai-device/instances")
+    assert layout.INSTANCE_NAMES == ("manager",)
+    assert layout.INSTANCE_MARKERS == (Path("/var/lib/ai-device/manager"),)

@@ -110,8 +110,12 @@ def classify():
     # requiring it to be absent refused every upgrade on a host that had one --
     # the exact hosts an upgrade is for. What matters is not the directory but
     # whether it holds something the package cannot account for.
-    for name in INSTANCE_NAMES:
-        marker = INSTANCE_ROOT / name
+    # Two shapes of the same legacy state: the absolute manager directory the
+    # old layout wrote, and the in-tree manager entry under the instance root.
+    # Both are checked; the rpm pretrans guard refuses both, and a classifier
+    # that skipped one would let dpkg through where rpm refuses.
+    markers = (*INSTANCE_MARKERS, *(INSTANCE_ROOT / name for name in INSTANCE_NAMES))
+    for marker in markers:
         if marker.exists() or marker.is_symlink():
             raise LayoutError(f"legacy management layout {marker} requires explicit migration")
 
