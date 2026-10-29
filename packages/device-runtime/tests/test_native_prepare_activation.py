@@ -16,6 +16,7 @@ import base64
 import fcntl
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -290,3 +291,107 @@ def test_activation_requires_signed_package_descriptor(instance, tmp_path):
     with pytest.raises(np.PreparationError, match="package descriptor"):
         _activate(root, "new", envelope_path, keys_path)
     assert calls == []
+
+
+def test_trusted_keys_default_to_the_fixed_trust_root():
+    """The key set has one administrator-owned home, not a per-call argument.
+
+    When no path is supplied the loader must read the fixed location. Passing a
+    path made the trust root a property of whoever ran the command, which is the
+    same as having no trust root: the owner mints a key, then satisfies every
+    downstream check honestly.
+    """
+    assert np.TRUSTED_KEYS == Path("/etc/ai-device-native/trusted-keys.json")
+
+
+def test_trusted_keys_must_be_administrator_owned(tmp_path, monkeypatch):
+    """An override is still required to sit in a tree the owner cannot write."""
+    keys = tmp_path / "keys.json"
+    keys.write_text(json.dumps({"release-key": "AAAA"}))
+
+    def refuse(*a, **kw):
+        raise np.helper.HelperError("administrator-owned non-writable path required")
+
+    monkeypatch.setattr(np.helper, "_trusted", refuse)
+
+    with pytest.raises(np.helper.HelperError, match="administrator-owned"):
+        np._load_trusted_keys(keys)
+
+
+def test_trusted_keys_default_path_is_checked_not_trusted_blindly(monkeypatch):
+    """Omitting the argument does not skip validation of the default path."""
+    seen = []
+
+    def record(path, **kw):
+        seen.append(str(path))
+
+    monkeypatch.setattr(np.helper, "_trusted", record)
+    monkeypatch.setattr(np, "_read_regular", lambda *a, **kw: b'{"release-key": "AAAA"}')
+
+    np._load_trusted_keys()
+    assert seen == [str(Path("/etc/ai-device-native/trusted-keys.json").resolve())]
+
+
+def test_reconcile_reports_consistent_instance(instance, tmp_path, monkeypatch):
+    root, _binding, active, candidate, calls = instance
+    _write_record(root, np.core._lifecycle_binding(root, active), candidate)
+    envelope, keys = _sign(tmp_path, "new", hashlib.sha256(_manifest_bytes("new")).hexdigest())
+
+    def publish(root_, checked):
+        # Mirror _publish: pointer first, then active.json, both landing.
+        (root_ / "current").write_text(checked["release"] + "\n")
+        (root_ / "active.json").write_text(json.dumps({"release": checked["release"]}))
+        calls.append((str(root_), checked["release"]))
+        return {"release": checked["release"], "roles": ["client"]}
+
+    monkeypatch.setattr(np.lifecycle, "_publish", publish)
+    _activate(root, "new", envelope, keys)
+
+    # The fixture pins _binding to its initial snapshot, so reconcile -- which
+    # reads active.json -- needs the real reader to observe the promotion.
+    monkeypatch.setattr(
+        np, "_binding", lambda path: ({"uid": 1}, json.loads((path / "active.json").read_text()))
+    )
+    observation = np.reconcile_activation(root)
+
+    assert observation["state"] == "consistent"
+    assert observation["pending"] is False
+
+
+def test_reconcile_reports_pointer_ahead(instance):
+    """A crash between _publish's two writes leaves the pointer ahead."""
+    root, _binding, active, _candidate, _calls = instance
+    (root / "current").write_text("new\n")
+    (root / np._activation_journal(root).name).write_text(
+        json.dumps({"format_version": 1, "release": "new", "previous": active["release"]})
+    )
+
+    observation = np.reconcile_activation(root)
+
+    assert observation["state"] == "pointer_ahead"
+    assert observation["pointer"] == "new"
+    assert observation["active"] == active["release"]
+    assert observation["pending"] is True
+
+
+def test_reconcile_reports_missing_pointer(instance):
+    root, _binding, _active, _candidate, _calls = instance
+
+    assert np.reconcile_activation(root)["state"] == "pointer_missing"
+
+
+def test_resolve_refuses_a_third_release(instance):
+    """Resolution picks between what is on disk; it never accepts a new target."""
+    root, _binding, _active, _candidate, _calls = instance
+    (root / "current").write_text("new\n")
+
+    with pytest.raises(np.PreparationError, match="neither the pointer nor active"):
+        np.resolve_activation(root, "some-other-release")
+
+
+def test_resolve_refuses_when_already_consistent(instance):
+    root, _binding, active, _candidate, _calls = instance
+    (root / "current").write_text(active["release"] + "\n")
+
+    with pytest.raises(np.PreparationError, match="already agree"):
+        np.resolve_activation(root, active["release"])

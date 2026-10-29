@@ -10,6 +10,7 @@ import hashlib
 import os
 import stat
 import sys
+import uuid
 from pathlib import Path
 
 from . import installation as core
@@ -23,6 +24,13 @@ from .protocol import canonical
 
 class PreparationError(ValueError):
     pass
+
+
+# The signing key set has one administrator-owned home. Passing a path per call
+# made the trust root a property of the caller, which is the same as having no
+# trust root at all. --trusted-keys remains for provisioning and tests, but it
+# must point at a tree the instance owner cannot write.
+TRUSTED_KEYS = Path("/etc/ai-device-native/trusted-keys.json")
 
 
 def _read_regular(path, error):
@@ -158,6 +166,105 @@ def retire_preparation(root, operation_id):
         return receipt
 
 
+def _load_trusted_keys(path=None):
+    """Load the signing key set from a path the instance owner cannot write.
+
+    The key set is the root of every authenticity decision here, so it gets the
+    same treatment as the interpreter and uv: administrator-owned, non-writable,
+    no symlink anywhere in the ancestry. Reading an arbitrary path would let the
+    owner mint its own key and satisfy every later check honestly.
+    """
+    keys_path = Path(path) if path is not None else TRUSTED_KEYS
+    helper._trusted(keys_path.resolve())
+    return candidate._json(_read_regular(keys_path, "trusted keys must be a regular file"))
+
+
+def _activation_journal(root):
+    return root / "native-activation.json"
+
+
+def _read_pointer(root):
+    """Read the single-line pointer, or None when it is absent."""
+    path = root / "current"
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(info.st_mode):
+        raise PreparationError("release pointer must be a regular file")
+    value = path.read_text(encoding="utf-8").strip()
+    return value or None
+
+
+def reconcile_activation(root):
+    """Report whether the pointer and active.json still describe one release.
+
+    _publish moves the pointer before committing active.json, so a crash between
+    them leaves the launcher naming a release that the metadata has not accepted
+    yet. run-runner refuses that state, which is correct -- but without a way to
+    see it, the instance simply never starts again. This is read-only.
+    """
+    root = helper._path(root)
+    active = _binding(root)[1]
+    pointer = _read_pointer(root)
+    journal = _activation_journal(root)
+    pending = journal.is_file()
+    if pointer is None:
+        state = "pointer_missing"
+    elif pointer == active["release"]:
+        state = "consistent"
+    else:
+        state = "pointer_ahead"
+    return {
+        "state": state,
+        "pointer": pointer,
+        "active": active["release"],
+        "journal": candidate._json(journal.read_bytes()) if pending else None,
+        "pending": pending,
+    }
+
+
+def resolve_activation(root, release):
+    """Finish or abandon a pointer/active mismatch with an explicit choice.
+
+    ``release`` must be one of the two values already on disk; this never picks
+    a third release and never runs on a live instance. Choosing the pointer's
+    release completes the promotion the crashed run started; choosing the active
+    release rolls the pointer back to what the metadata still describes.
+    """
+    root = helper._path(root)
+    binding, active = _binding(root)
+    observation = reconcile_activation(root)
+    if observation["state"] == "consistent":
+        raise PreparationError("pointer and active release already agree")
+    if observation["state"] == "pointer_missing":
+        raise PreparationError("release pointer is missing; restore it explicitly")
+    if release == active["release"]:
+        target = active["release"]
+    elif release == observation["pointer"]:
+        target = observation["pointer"]
+    else:
+        raise PreparationError("requested release is neither the pointer nor active")
+    with (
+        native_preparation_lease(root),
+        (root / ".installation.lock").open("rb") as lease,
+    ):
+        try:
+            fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise PreparationError("instance is running or maintenance is active") from exc
+        if _binding(root) != (binding, active):
+            raise PreparationError("source changed before resolution")
+        if release == active["release"]:
+            core._write_pointer(root, active["release"])
+            _activation_journal(root).unlink(missing_ok=True)
+            return {"state": "rolled_back", "release": active["release"]}
+        checked = lifecycle._check_release(root, target, active["roles"])
+        core._json(root / "active.json", {**checked, "activation_id": uuid.uuid4().hex})
+        _activation_journal(root).unlink(missing_ok=True)
+        return {"state": "completed", "release": target}
+
+
 def activate_candidate(root, release, *, envelope, trusted_keys, stopped=False):
     """Promote a prepared release for a registered instance.
 
@@ -175,9 +282,7 @@ def activate_candidate(root, release, *, envelope, trusted_keys, stopped=False):
         raise PreparationError("explicit --stopped confirmation required; this never stops processes")
     root = helper._path(root)
     binding, active = _binding(root)
-    keys_path = Path(trusted_keys)
-    helper._trusted(keys_path.resolve())
-    keys = candidate._json(_read_regular(keys_path, "trusted keys must be a regular file"))
+    keys = _load_trusted_keys(trusted_keys)
     signed = candidate._read_envelope(Path(envelope))
     payload = candidate.authenticate_envelope(signed, keys)
     # The path component must match before it is joined onto the root.
@@ -217,7 +322,21 @@ def activate_candidate(root, release, *, envelope, trusted_keys, stopped=False):
         manifest_sha256 = package.get("manifest_sha256")
         if helper._digest(directory / "bundle" / "manifest.json") != manifest_sha256:
             raise PreparationError("release bundle does not match the signed manifest")
+        # _publish writes the pointer before active.json. Record the intended
+        # destination first so a crash in between is diagnosable instead of
+        # leaving a launcher that names a release the metadata never accepted.
+        journal = _activation_journal(root)
+        helper._save_new(
+            journal,
+            {
+                "format_version": 1,
+                "release": checked["release"],
+                "previous": active["release"],
+                "manifest_sha256": manifest_sha256,
+            },
+        )
         promoted = lifecycle._publish(root, checked)
+        journal.unlink(missing_ok=True)
         return {"state": "activated", **promoted}
 
 
@@ -399,7 +518,7 @@ def main():
         parser.add_argument("--root", required=True)
         parser.add_argument("--release", required=True)
         parser.add_argument("--envelope", required=True)
-        parser.add_argument("--trusted-keys", required=True)
+        parser.add_argument("--trusted-keys", default=None)
         parser.add_argument("--stopped", action="store_true", required=True)
         args = parser.parse_args()
         print(
@@ -413,6 +532,30 @@ def main():
                 )
             )
         )
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "reconcile-activation":
+        parser = argparse.ArgumentParser(
+            description="Report whether the release pointer and active.json still agree"
+        )
+        parser.add_argument("reconcile-activation")
+        parser.add_argument("--root", required=True)
+        args = parser.parse_args()
+        print(canonical(reconcile_activation(args.root)))
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "resolve-activation":
+        parser = argparse.ArgumentParser(
+            description="Finish or abandon a crashed activation; never stops processes"
+        )
+        parser.add_argument("resolve-activation")
+        parser.add_argument("--root", required=True)
+        parser.add_argument("--release", required=True)
+        parser.add_argument("--stopped", action="store_true", required=True)
+        args = parser.parse_args()
+        if not args.stopped:
+            raise PreparationError(
+                "explicit --stopped confirmation required; this never stops processes"
+            )
+        print(canonical(resolve_activation(args.root, args.release)))
         return
     if len(sys.argv) > 1 and sys.argv[1] == "retire":
         parser = argparse.ArgumentParser(
@@ -429,15 +572,15 @@ def main():
         "root",
         "package",
         "envelope",
-        "trusted-keys",
         "release-id",
         "operation-id",
         "bootstrap-version",
         "uv-executable",
     ):
         parser.add_argument("--" + name, required=True)
+    parser.add_argument("--trusted-keys", default=None)
     args = vars(parser.parse_args())
-    args["trusted_keys"] = candidate._json(Path(args["trusted_keys"]).read_bytes())
+    args["trusted_keys"] = _load_trusted_keys(args["trusted_keys"])
     print(canonical(prepare_runtime_candidate(**args)))
 
 

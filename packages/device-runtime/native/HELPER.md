@@ -156,7 +156,11 @@ release envelope严格为payload/key_id/signature；签名是对既有canonical 
 
 `python -m device_runtime.native_prepare --root ... --package ... --envelope ... --trusted-keys ... --release-id ... --operation-id ... --bootstrap-version ... --uv-executable ...` 重验签名并从包重新提取，不能只信用户可编辑candidate.json。限Linux登记所有者非root、schema2完整binding及单client角色；核对unit/run/identity/roles摘要。使用专用native_preparation_lease（管理EX）与安装SH锁，允许运行中的客户端继续工作但排除其他维护，旧工具仍拒绝受管实例。当前Python真实路径及显式uv均要求管理员可信非可写持久路径，不执行提取目录工具。
 
-`python -m device_runtime.native_prepare activate --root ... --release ... --envelope ... --trusted-keys ... --stopped` 在同一维护租约内重验信封并激活，candidate.json仅作提示不作授权。准备完成后改写release时，即使installation.json与候选记录重新自洽，也会因与签名payload的`manifest_sha256`不符而被拒。
+`python -m device_runtime.native_prepare activate --root ... --release ... --envelope ... [--trusted-keys ...] --stopped` 在同一维护租约内重验信封并激活，candidate.json仅作提示不作授权。准备完成后改写release时，即使installation.json与候选记录重新自洽，也会因与签名payload的`manifest_sha256`不符而被拒。
+
+信任根固定在`/etc/ai-device-native/trusted-keys.json`，省略`--trusted-keys`时读该路径；显式传入仅供部署与测试，同样要求管理员所有且不可写。公钥不由调用方自选，否则信任根不成立。
+
+`python -m device_runtime.native_prepare reconcile-activation --root ROOT` 只读报告`current`与`active.json`是否一致（consistent/pointer_ahead/pointer_missing）及待处理journal。`resolve-activation --root ROOT --release RELEASE --stopped` 显式收敛：只接受磁盘上已有的pointer或active值，选active回退指针，选pointer完成切换，均在维护租约与安装锁内并重校binding。
 
 先在`native-candidates/<id>.intent.json`记录源active/marker、签名发布摘要、持久工具摘要，再重新认证提取到保留目录，复用installation._prepare于最终release目录直接创建venv和健康检查。文件落盘后核对active和marker未变，再发布runtime_prepared结果，不切换active。相同ID只在源及release/bundle/解释器证据仍有效时返回原结果；无完成或失败结果禁止相同/新ID自动重放。失败保留release及证据供后续管理员恢复，不提供删除台账解锁流程。完整准备恢复/批准消费尚缺。
 

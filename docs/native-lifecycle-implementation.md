@@ -3258,17 +3258,37 @@ bootstrap `native_helper.py` 含 4 处指针/launcher 判定；DEB `prerm` 含 `
 | --- | --- |
 | 候选记录 | `native_prepare` 准备成功后写出 lifecycle 兼容的 `candidate.json`，绑定当时的 `active.json`、`instance.json`、`roles.json` 摘要 |
 | 私有 runtime | 准备时传入当前 active release 的 runtime，使新 release 能被稳定入口启动 |
-| 激活入口 | `native_prepare activate --root --release --envelope --trusted-keys --stopped` |
+| 激活入口 | `native_prepare activate --root --release --envelope [--trusted-keys] --stopped` |
 
-激活的安全约束由锁而非标志位保证：`.installation.lock` 的独占获取只有在没有
-launcher 持有共享锁时才能成功，因此实例仍在运行时会被拒绝，不依赖调用方声明。
-锁内还会重新核对 binding、候选记录与 `_check_release`，拒绝为旧实例状态准备的候选。
+签名公钥有固定管理员位置 `/etc/ai-device-native/trusted-keys.json`，省略
+`--trusted-keys` 时读该路径；显式传入仅用于部署与测试，同样要求管理员所有且不可写。
+公钥路径不随调用方变化，否则信任根等同于调用方自选。
 
 候选记录不构成授权。它位于实例所有者自己的目录树内，所有者可以在未通过任何签名
 验证的情况下写出一份字段自洽的记录；因此激活会重新验证信封，并要求 `--trusted-keys`
 指向管理员可信且不可写的路径，与 `--uv-executable`、解释器同等待遇。验签得到的
 `payload.package.manifest_sha256` 再与待激活 release 的 `bundle/manifest.json` 摘要比对，
 使得准备完成后被改写的 release 即使自身记录仍自洽也会被拒绝。
+
+### 激活中断后的恢复
+
+`_publish` 先移动 `current` 再提交 `active.json`，两者不是跨文件原子。中途崩溃会留下
+指针已指向新 release、`active.json` 仍是旧值的状态；`run-runner` 检测到不一致会拒绝启动，
+这是正确的，但此前没有任何入口能看见或解除该状态。
+
+激活前先以无覆盖方式写入 `native-activation.json`（目标 release、原 release、签名清单摘要），
+成功后清除。两个显式入口：
+
+```bash
+# 只读；报告 consistent / pointer_ahead / pointer_missing 及待处理 journal
+native_prepare reconcile-activation --root ROOT
+
+# 显式收敛；release 必须是磁盘上已有的二者之一，需 --stopped
+native_prepare resolve-activation --root ROOT --release RELEASE --stopped
+```
+
+选 `active` 的 release 回退指针，选 `pointer` 的 release 完成切换；两者都在维护租约与
+安装锁内执行，并重新核对 binding。不接受第三个 release，也不自动选择。
 
 激活不复用 `lifecycle.activate_release`：该函数内部取 `install._lock`，而 `_lock`
 经 `management_lease` 会拒绝带 native marker 的实例，真实注册实例必然失败。改在已
