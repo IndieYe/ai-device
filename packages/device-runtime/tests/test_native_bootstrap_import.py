@@ -62,3 +62,17 @@ def test_entrypoint_text_matches_installation(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_activation_path_never_invokes_systemd():
+    """Release switching must not restart the service under systemd.
+
+    The unit's ExecStart is the stable launcher; an activation only moves the
+    pointer. If this code grew a systemctl call, a switch would start, stop or
+    reload the unit behind the administrator's back.
+    """
+    package = PACKAGE
+    for name in ("lifecycle.py", "installation.py", "upgrader.py", "entrypoint.py"):
+        text = (package / name).read_text()
+        assert "systemctl" not in text, name
+        assert "systemd" not in text, name
