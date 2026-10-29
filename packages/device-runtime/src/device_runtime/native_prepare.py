@@ -179,7 +179,7 @@ def activate_candidate(root, release, *, stopped=False):
             raise PreparationError("instance is running or maintenance is active") from exc
         if _binding(root) != (binding, active):
             raise PreparationError("source changed before activation")
-        directory = root / "releases" / helper._identifier(release)
+        directory = root / "releases" / lifecycle._release_id(release)
         if directory.is_symlink() or (directory / "candidate.json").is_symlink():
             raise PreparationError("invalid candidate directory")
         record = candidate._json((directory / "candidate.json").read_bytes())

@@ -45,13 +45,12 @@ def instance(tmp_path, monkeypatch):
     candidate = {"release": "new", "roles": ["client"]}
     calls = []
 
-    class FakeLifecycle:
-        @staticmethod
-        def activate_release(root, release, *, stopped=False):
-            calls.append((str(root), release, stopped))
-            return {"release": release, "roles": ["client"]}
+    def activate_release(root, release, *, stopped=False):
+        calls.append((str(root), release, stopped))
+        return {"release": release, "roles": ["client"]}
 
-    monkeypatch.setattr(np, "lifecycle", FakeLifecycle)
+    # Keep the real module for _release_id; only the promotion itself is faked.
+    monkeypatch.setattr(np.lifecycle, "activate_release", activate_release)
     return root, binding, active, candidate, calls
 
 
@@ -108,3 +107,24 @@ def test_activation_promotes_prepared_release(instance):
     assert result["state"] == "activated"
     assert result["release"] == "new"
     assert calls == [(str(root), "new", True)]
+
+
+def test_activation_accepts_dotted_release_names(instance):
+    """Release IDs contain dots and plus signs; instance-id rules must not apply."""
+    root, _binding, active, _candidate, calls = instance
+    release = "0.2.2.post1-a8db1f6f687448c19e88afadbb91cd0d"
+    (root / "releases" / release).mkdir()
+    (root / "releases" / release / "candidate.json").write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "binding": np.core._lifecycle_binding(root, active),
+                "candidate": {"release": release, "roles": ["client"]},
+            }
+        )
+    )
+
+    result = np.activate_candidate(root, release, stopped=True)
+
+    assert result["state"] == "activated"
+    assert calls[0][1] == release
