@@ -71,7 +71,30 @@ case "$version" in
   exit 1
   ;;
 esac
-exec "$root/$version/runtime/bin/python3.13" -I -B -m device_runtime.native_helper "$@"
+# dpkg and rpm remove the previous payload tree before unpacking the new one, so
+# a caller racing an upgrade can observe a pointer that names a tree which is
+# briefly absent or incomplete. That is transient, not a refusal or a bug in
+# this build. Report it as such with EX_TEMPFAIL (75) so callers can retry
+# instead of parsing a shell "exec: not found" message.
+#
+# This cannot be made atomic: unpacking lands files one at a time, so a probe can
+# pass and the interpreter can still lose a module between that probe and exec.
+# The checks here cover the common cases where the tree or its interpreter is
+# wholly absent, which is what an upgrade actually looks like for most of the
+# window. A residual import failure still surfaces as the interpreter's own
+# error; do not try to swallow it here, because capturing output would break
+# ``serve``, which must stay exec'd.
+# Keep 1 for genuine refusal and 2+ for the module's own errors.
+interpreter="$root/$version/runtime/bin/python3.13"
+if [ ! -f "$interpreter" ] || [ ! -x "$interpreter" ]; then
+ echo "native helper: version $version is not installed yet (payload being replaced); retry" >&2
+ exit 75
+fi
+if [ ! -d "$root/$version/runtime/lib/python3.13/site-packages/device_runtime" ]; then
+ echo "native helper: version $version payload is incomplete (upgrade in progress); retry" >&2
+ exit 75
+fi
+exec "$interpreter" -I -B -m device_runtime.native_helper "$@"
 EOF
 sed -i "s#__TREE__#$tree#g" "$root/usr/bin/ai-device-native-helper"
 chmod 755 "$root/usr/bin/ai-device-native-helper"

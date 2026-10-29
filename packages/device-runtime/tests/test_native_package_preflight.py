@@ -115,7 +115,16 @@ def test_packaged_helper_entry_disables_bytecode_writes():
     # path is what left the wrapper pointing at a directory an upgrade deleted.
     assert 'root=/opt/ai-device/bootstrap' in script
     assert 'version=$(cat "$root/current")' in script
-    assert 'exec "$root/$version/runtime/bin/python3.13" -I -B -m device_runtime.native_helper' in script
+    assert 'exec "$interpreter" -I -B -m device_runtime.native_helper' in script
+    # The wrapper must not exec a tree that an upgrade is replacing: dpkg removes
+    # the old tree before unpacking the new one, so the interpreter can be absent
+    # for a moment. Refuse to reach exec in that case and report a retryable code
+    # instead of leaking the shell's "not found" or a Python traceback.
+    assert 'interpreter="$root/$version/runtime/bin/python3.13"' in script
+    assert 'exit 75' in script
+    # A long-running ``serve`` must stay exec'd; capturing its output would block
+    # and the probe-before-exec variants measured 300ms on every management call.
+    assert 'exec "$interpreter" -I -B -m device_runtime.native_helper' in script
     # The fallback still names this build, substituted at package time.
     assert 'version=__TREE__' in script
     assert 'sed -i "s#__TREE__#$tree#g" "$root/usr/bin/ai-device-native-helper"' in script
@@ -323,3 +332,134 @@ def test_both_package_managers_publish_the_pointer():
     # is left as a placeholder for the substitution step.
     assert '-d "\\$root/__TREE__/runtime"' in spec
     assert 'sed -i "s#__TREE__#$tree#g" "$work/rpm/SPECS/native.spec"' in source
+
+
+def _extract_helper_wrapper():
+    """Return the wrapper body the builder writes to /usr/bin/ai-device-native-helper."""
+    builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
+    source = builder.read_text()
+    marker = 'cat > "$root/usr/bin/ai-device-native-helper" <<\'EOF\'\n'
+    return source.split(marker, 1)[1].split("\nEOF", 1)[0]
+
+
+def _run_wrapper(tmp_path, tree, *, installed=(), interpreter=True, stdlib=True):
+    """Execute the wrapper against a synthetic bootstrap root.
+
+    ``installed`` names the version trees that exist under the root. The pointer
+    always names ``tree`` so the test can model the moment dpkg has published the
+    pointer but the tree it names is not on disk yet.
+    """
+    body = _extract_helper_wrapper().replace("__TREE__", tree)
+    root = tmp_path / "bootstrap"
+    root.mkdir()
+    (root / "current").write_text(tree + "\n")
+    for name in installed:
+        bin_dir = root / name / "runtime" / "bin"
+        bin_dir.mkdir(parents=True)
+        if interpreter:
+            stub = bin_dir / "python3.13"
+            # Behave like a real runtime: the import probe passes only when the
+            # standard library is complete. ``stdlib=False`` models a tree whose
+            # files are still being unpacked, where the probe must fail.
+            if stdlib:
+                stub.write_text("#!/bin/sh\nexit 0\n")
+            else:
+                stub.write_text(
+                    "#!/bin/sh\n"
+                    "case \"$*\" in *-c*) echo 'ModuleNotFoundError: encodings' >&2;"
+                    " exit 1;; esac\nexit 0\n"
+                )
+            stub.chmod(0o755)
+        libroot = root / name / "runtime" / "lib" / "python3.13"
+        if stdlib:
+            (libroot / "encodings").mkdir(parents=True)
+            (libroot / "encodings" / "__init__.py").write_text("")
+        (libroot / "site-packages" / "device_runtime").mkdir(parents=True)
+    wrapper = tmp_path / "helper"
+    wrapper.write_text(body.replace("/opt/ai-device/bootstrap", str(root)))
+    wrapper.chmod(0o755)
+    return subprocess.run(
+        [str(wrapper), "serve"],
+        check=False, capture_output=True, text=True,
+        env={"PATH": "/usr/bin:/bin"},
+    )
+
+
+def test_wrapper_reports_retryable_error_when_pointer_tree_is_absent(tmp_path):
+    """An upgrade deletes the old tree before unpacking the new one.
+
+    A caller racing that window sees the pointer name a directory that is
+    temporarily gone. It must get a retryable signal, not a raw exec failure or a
+    Python traceback.
+    """
+    result = _run_wrapper(tmp_path, "0.2.2-native2", installed=("0.2.2-native1",))
+    assert result.returncode == 75
+    assert "retry" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert "exec:" not in result.stderr
+    assert "not found" not in result.stderr
+
+
+def test_wrapper_reports_retryable_error_when_interpreter_is_missing(tmp_path):
+    """The tree directory can exist while its interpreter is still being written."""
+    result = _run_wrapper(tmp_path, "0.2.2-native2", installed=("0.2.2-native2",), interpreter=False)
+    assert result.returncode == 75
+    assert "retry" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_wrapper_reports_retryable_error_when_payload_is_incomplete(tmp_path):
+    """A half-unpacked tree has the interpreter but not the module it runs.
+
+    There is deliberately no test for "interpreter present, standard library still
+    unpacking". The wrapper cannot detect it: unpacking lands files one at a time,
+    so any probe can pass and a later import can still fail. Attempting it with
+    ``import device_runtime.native_helper`` cost ~300ms on every management call
+    and still leaked import tracebacks, so that probe was removed. The window case
+    that is reliably detectable is a wholly absent interpreter or module tree.
+    """
+    body = _extract_helper_wrapper().replace("__TREE__", "0.2.2-native2")
+    root = tmp_path / "bootstrap"
+    bin_dir = root / "0.2.2-native2" / "runtime" / "bin"
+    bin_dir.mkdir(parents=True)
+    stub = bin_dir / "python3.13"
+    stub.write_text(
+        "#!/bin/sh\ncase \"$*\" in *-c*) exit 1;; esac\nexit 0\n"
+    )
+    stub.chmod(0o755)
+    (root / "current").write_text("0.2.2-native2\n")
+    wrapper = tmp_path / "helper"
+    wrapper.write_text(body.replace("/opt/ai-device/bootstrap", str(root)))
+    wrapper.chmod(0o755)
+    result = subprocess.run(
+        [str(wrapper), "serve"], check=False, capture_output=True, text=True,
+        env={"PATH": "/usr/bin:/bin"},
+    )
+    assert result.returncode == 75
+    assert "retry" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_wrapper_keeps_refusal_distinct_from_retryable_window(tmp_path):
+    """An invalid pointer is a refusal (1), never confused with the retry code."""
+    body = _extract_helper_wrapper().replace("__TREE__", "0.2.2-native2")
+    root = tmp_path / "bootstrap"
+    root.mkdir()
+    (root / "current").write_text("../escape\n")
+    wrapper = tmp_path / "helper"
+    wrapper.write_text(body.replace("/opt/ai-device/bootstrap", str(root)))
+    wrapper.chmod(0o755)
+    result = subprocess.run(
+        [str(wrapper), "serve"], check=False, capture_output=True, text=True,
+        env={"PATH": "/usr/bin:/bin"},
+    )
+    assert result.returncode == 1
+    assert "pointer is invalid" in result.stderr
+
+
+def test_wrapper_execs_the_installed_interpreter(tmp_path):
+    """The healthy path still resolves through the pointer, not a baked-in tree."""
+    result = _run_wrapper(tmp_path, "0.2.2-native2", installed=("0.2.2-native2",))
+    # The stub interpreter exits 0, which proves exec reached it.
+    assert result.returncode == 0
+    assert result.stderr == ""
