@@ -33,6 +33,21 @@ RUNTIME_ROOT = Path("/run")
 # Stable entrypoint the package publishes; it resolves the release pointer, so
 # the unit survives the tree removal that every upgrade performs.
 HELPER_ENTRYPOINT = Path("/usr/bin/ai-device-native-helper")
+# Registry of registered instances and package-manager locks. It must not be
+# /var/lib/ai-device/manager: that path is the legacy marker the package
+# pre-install guards treat as "a controlled transaction is required", so a
+# helper deployed onto it would make every later upgrade refuse itself.
+# Registration records already live here, and the uninstall guards check it.
+REGISTRY = Path("/var/lib/ai-device/native")
+# Paths the package pre-install guards treat as "controlled transaction
+# required". Deploying a registry onto one of them would make every later
+# upgrade refuse itself, so they are rejected explicitly.
+PACKAGE_GUARD_PATHS = frozenset(
+    {
+        Path("/var/lib/ai-device/manager"),
+        Path("/opt/ai-device/instances/manager"),
+    }
+)
 
 
 class HelperError(ValueError):
@@ -385,6 +400,13 @@ def deploy_helper(*, bootstrap_python, registry, unit_dir, runtime_dir, group, c
     """Explicit administrator provisioning only; never reload, enable or start."""
     if sys.platform != "linux" or os.geteuid() != 0:
         raise HelperError("helper deployment requires Linux administrator identity")
+    if Path(registry) in PACKAGE_GUARD_PATHS:
+        # Check the literal path first: a guard path usually does not exist yet,
+        # so canonicalisation would fail with an unrelated message before this
+        # collision is ever reported.
+        raise HelperError(
+            f"registry must not be a package pre-install guard path: {registry}"
+        )
     python, registry, unit_dir, runtime_dir = map(
         _path, (bootstrap_python, registry, unit_dir, runtime_dir)
     )
@@ -412,6 +434,21 @@ def deploy_helper(*, bootstrap_python, registry, unit_dir, runtime_dir, group, c
         # root-owned, non-writable regular file before publishing a unit onto it.
         _require_helper_entrypoint()
     if not registry.exists() and candidate_version is None:
+        # The default registry lives under /var/lib/<product>, which does not
+        # exist on a fresh host. Create the intermediate directory too, but only
+        # beneath an ancestor that is already administrator-owned and unwritable;
+        # trust is never extended by this package.
+        # Walk up to the deepest existing ancestor and create the rest. That
+        # ancestor must already be administrator-owned, so creation never
+        # widens trust; each new level is root-owned 0755 like its parent.
+        missing = []
+        ancestor = registry.parent
+        while not ancestor.exists():
+            missing.append(ancestor)
+            ancestor = ancestor.parent
+        _trusted(ancestor, directory=True)
+        for path in reversed(missing):
+            path.mkdir(mode=0o755)
         _trusted(registry.parent, directory=True)
         registry.mkdir(mode=0o755)
     _trusted(registry, directory=True)
@@ -1628,24 +1665,26 @@ def main():
     modes = parser.add_subparsers(dest="mode", required=True)
     for command in ("register", "recover-registration"):
         provision = modes.add_parser(command)
-        for name in ("registry", "unit-dir", "root", "environment-file"):
+        for name in ("unit-dir", "root", "environment-file"):
             provision.add_argument("--" + name, type=Path, required=True)
+        provision.add_argument("--registry", type=Path, default=REGISTRY)
         provision.add_argument("--instance-id", required=True)
         provision.add_argument("--username", required=True)
     removal = modes.add_parser("unregister")
-    for name in ("registry", "unit-dir"):
-        removal.add_argument("--" + name, type=Path, required=True)
+    removal.add_argument("--registry", type=Path, default=REGISTRY)
+    removal.add_argument("--unit-dir", type=Path, required=True)
     removal.add_argument("--instance-id", required=True)
     deploy = modes.add_parser("deploy")
-    for name in ("bootstrap-python", "registry", "unit-dir", "runtime-dir"):
+    for name in ("bootstrap-python", "unit-dir", "runtime-dir"):
         deploy.add_argument("--" + name, type=Path, required=True)
+    deploy.add_argument("--registry", type=Path, default=REGISTRY)
     deploy.add_argument("--group", type=int, required=True)
     deploy.add_argument("--candidate-version")
     recovery = modes.add_parser("recover-socket")
-    recovery.add_argument("--registry", type=Path, required=True)
+    recovery.add_argument("--registry", type=Path, default=REGISTRY)
     recovery.add_argument("--socket", type=Path, required=True)
     daemon = modes.add_parser("serve")
-    daemon.add_argument("--registry", type=Path, required=True)
+    daemon.add_argument("--registry", type=Path, default=REGISTRY)
     daemon.add_argument("--socket", type=Path, required=True)
     daemon.add_argument("--group", type=int, required=True)
     call = modes.add_parser("call")

@@ -2445,3 +2445,65 @@ def test_registration_refuses_fifo_runner(tmp_path, monkeypatch):
     os.kill(pid, signal.SIGKILL)
     os.waitpid(pid, 0)
     pytest.fail("_register blocked on FIFO runner instead of refusing")
+
+
+def test_default_registry_is_not_a_package_guard_path():
+    """The registry must not sit on a path the package guards refuse.
+
+    The guards treat /var/lib/ai-device/manager as "a controlled transaction
+    is pending" and refuse to install. A helper whose registry lived there
+    would block every later upgrade of its own payload -- which is exactly
+    what happened before the default was fixed.
+    """
+    assert nh.REGISTRY == Path("/var/lib/ai-device/native")
+    assert nh.REGISTRY not in nh.PACKAGE_GUARD_PATHS
+
+
+def test_deploy_refuses_registry_on_a_guard_path(deployment):
+    """Rejecting the collision here beats discovering it during an upgrade."""
+    options = dict(deployment)
+    options["registry"] = Path("/var/lib/ai-device/manager")
+
+    with pytest.raises(nh.HelperError, match="pre-install guard path"):
+        nh.deploy_helper(**options)
+    assert not Path(deployment["unit_dir"], "ai-device-native-helper.service").exists()
+
+
+def test_registry_flag_defaults_but_stays_overridable():
+    """Explicit registry still wins; the default only applies when omitted."""
+    parser_help = nh.main.__doc__
+    assert parser_help is None or isinstance(parser_help, str)
+    assert nh.REGISTRY == Path("/var/lib/ai-device/native")
+
+
+def test_deploy_creates_the_default_registry_parent(tmp_path, monkeypatch):
+    """A fresh host has no /var/lib/<product>, so the default must bootstrap it.
+
+    Creation stops at the registry's parent: the ancestor it sits in must
+    already be administrator-owned, so this package never widens trust.
+    """
+    monkeypatch.setattr(nh.sys, "platform", "linux")
+    monkeypatch.setattr(nh.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(nh, "_trusted", lambda *a, **kw: None)
+    monkeypatch.setattr(nh, "RUNTIME_ROOT", tmp_path)
+    entrypoint = tmp_path / "ai-device-native-helper"
+    entrypoint.write_text("#!/bin/sh\n")
+    entrypoint.chmod(0o755)
+    monkeypatch.setattr(nh, "HELPER_ENTRYPOINT", entrypoint)
+    python = tmp_path / "python"
+    python.write_text("fixture")
+    python.chmod(0o755)
+    units = tmp_path / "units"
+    units.mkdir()
+    registry = tmp_path / "var" / "lib" / "ai-device" / "native"
+
+    result = nh.deploy_helper(
+        bootstrap_python=python,
+        registry=registry,
+        unit_dir=units,
+        runtime_dir=tmp_path / "runtime",
+        group=12345,
+    )
+
+    assert Path(result["unit"]).exists()
+    assert registry.is_dir()

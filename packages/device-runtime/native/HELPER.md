@@ -19,9 +19,11 @@
 
 以下是模块入口形态，使用前需有经确认的系统路径、普通用户、凭证和bootstrap。不要把占位值复制到正式机器：
 
+`--registry` 可省略，默认 `/var/lib/ai-device/native`（登记记录与锁所在目录）。**不要指到 `/var/lib/ai-device/manager` 或 `/opt/ai-device/instances/manager`**：包 preinst/pretrans 把这两个路径视为"需受控事务"的拒绝标记，registry 落在那里会让之后每次升级都被自己的门禁拒绝。`deploy` 会直接拒绝这种组合。
+
 ```text
 <独立bootstrap-python> -I -m device_runtime.native_helper register
-  --registry <root-owned-registry> --unit-dir <system-unit-dir>
+  --registry <root-owned-registry, 默认 /var/lib/ai-device/native> --unit-dir <system-unit-dir>
   --root <existing-client-instance> --instance-id <registered-id>
   --username <existing-non-root-user> --environment-file <root-owned-0600-file>
 
