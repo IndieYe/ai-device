@@ -220,7 +220,9 @@ cp -a $root/. %{buildroot}/
 -- versioned tree may proceed; everything else is state we cannot classify.
 -- Legacy management trees predate the versioned layout and may still hold live
 -- instances that no transaction here maintains. Refuse, exactly as dpkg does.
-for _,path in ipairs({'/opt/ai-device/instances', '/var/lib/ai-device/manager'}) do
+-- /opt/ai-device/instances is the normal instance root, so its presence is not
+-- a reason to refuse: only the legacy administrator state inside it is.
+for _,path in ipairs({'/opt/ai-device/instances/manager', '/var/lib/ai-device/manager'}) do
  if posix.stat(path) or posix.readlink(path) then
   error('native package pre-install refused: legacy management layout ' .. path)
  end

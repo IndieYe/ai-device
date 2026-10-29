@@ -25,10 +25,11 @@ from pathlib import Path
 
 PACKAGES = Path("/opt/ai-device/packages")
 BOOTSTRAP = Path("/opt/ai-device/bootstrap")
-INSTANCE_MARKERS = (
-    Path("/opt/ai-device/instances"),
-    Path("/var/lib/ai-device/manager"),
-)
+INSTANCE_ROOT = Path("/opt/ai-device/instances")
+INSTANCE_MARKERS = (Path("/var/lib/ai-device/manager"),)
+# Names that used to hold administrator-managed state inside the instance root.
+# Anything else there is an instance directory, which an upgrade leaves alone.
+INSTANCE_NAMES = ("manager",)
 # A versioned directory name: 0.2.2-native1, 0.3.0-native2, ...
 _VERSIONED = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
 
@@ -105,10 +106,12 @@ def classify():
     ``empty``     nothing installed
     ``upgrade``   one complete versioned payload, safe to add another beside it
     """
-    # Legacy management trees predate the versioned layout and are not
-    # maintained by any transaction here. They may still hold live instances, so
-    # a package write must not proceed on top of them.
-    for marker in INSTANCE_MARKERS:
+    # /opt/ai-device/instances is where a normal install puts its instance, so
+    # requiring it to be absent refused every upgrade on a host that had one --
+    # the exact hosts an upgrade is for. What matters is not the directory but
+    # whether it holds something the package cannot account for.
+    for name in INSTANCE_NAMES:
+        marker = INSTANCE_ROOT / name
         if marker.exists() or marker.is_symlink():
             raise LayoutError(f"legacy management layout {marker} requires explicit migration")
 

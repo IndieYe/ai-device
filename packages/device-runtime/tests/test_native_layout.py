@@ -149,34 +149,56 @@ def test_classification_error_becomes_a_refusal_exit(roots, capsys):
     assert "refused" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("name", ["instances", "manager"])
-def test_legacy_management_layouts_are_refused(tmp_path, roots, monkeypatch, name):
-    """Pre-versioned management trees may still hold live instances.
+@pytest.mark.parametrize("target", [("instances", "manager")])
+def test_legacy_management_layouts_are_refused(tmp_path, roots, monkeypatch, target):
+    """Legacy administrator state blocks a write; a normal instance does not.
 
-    Dropping this check was a real regression while rewriting the guard: the
-    old hooks refused these paths and nothing replaced them.
+    /opt/ai-device/instances is where ai-device-native-install puts an instance,
+    so refusing on its mere presence made every upgrade on a host with a
+    registered instance fail -- the opposite of the intent.
     """
     packages, bootstrap = roots
     _payload(packages)
     _bootstrap(bootstrap)
-    marker = tmp_path / name
-    marker.mkdir()
-    monkeypatch.setattr(layout, "INSTANCE_MARKERS", (marker,))
+    name, child = target
+    root = tmp_path / name
+    monkeypatch.setattr(layout, "INSTANCE_ROOT", root)
+    monkeypatch.setattr(layout, "INSTANCE_MARKERS", (tmp_path / "manager",))
+    marker = root / child if child else tmp_path / "manager"
+    marker.mkdir(parents=True)
 
     with pytest.raises(layout.LayoutError, match="legacy management layout"):
         layout.classify()
 
 
-@pytest.mark.parametrize("name", ["instances", "manager"])
-def test_dangling_management_symlink_is_refused(tmp_path, roots, monkeypatch, name):
-    """A dangling symlink is still state we must not write over."""
-    marker = tmp_path / name
-    monkeypatch.setattr(layout, "INSTANCE_MARKERS", (marker,))
+def test_ordinary_instance_does_not_block_an_upgrade(tmp_path, roots, monkeypatch):
+    packages, bootstrap = roots
+    _payload(packages)
+    _bootstrap(bootstrap)
+    root = tmp_path / "instances"
+    monkeypatch.setattr(layout, "INSTANCE_ROOT", root)
+    monkeypatch.setattr(layout, "INSTANCE_MARKERS", (tmp_path / "manager",))
+    (root / "probe").mkdir(parents=True)
+
+    assert layout.classify()["kind"] == "upgrade"
+
+
+@pytest.mark.parametrize("target", [("instances", "manager")])
+def test_dangling_management_symlink_is_refused(tmp_path, roots, monkeypatch, target):
+    """A dangling symlink still names state we must not write over."""
+    packages, bootstrap = roots
+    _payload(packages)
+    _bootstrap(bootstrap)
+    name, child = target
+    root = tmp_path / name
+    monkeypatch.setattr(layout, "INSTANCE_ROOT", root)
+    monkeypatch.setattr(layout, "INSTANCE_MARKERS", (tmp_path / "manager",))
+    marker = root / child if child else tmp_path / "manager"
+    marker.parent.mkdir(parents=True, exist_ok=True)
     marker.symlink_to(tmp_path / "missing")
 
     with pytest.raises(layout.LayoutError, match="legacy management layout"):
         layout.classify()
-
 
 def test_pointer_beside_versioned_trees_is_accepted(roots):
     """The pointer lives next to the trees it selects, so it is part of the layout.
