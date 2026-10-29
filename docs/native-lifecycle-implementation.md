@@ -3203,3 +3203,45 @@ bootstrap `native_helper.py` 含 4 处指针/launcher 判定；DEB `prerm` 含 `
 - RPM 以 `--nodeps` 安装，因 spec 设 `AutoReqProv:no`，**不构成依赖闭环验收**。
 - 容器无 systemd，unit 层"activate 不触发 systemctl"仍未验证。
 - 制品未签名，不得作为发布件。
+
+### E1a systemd 层验收
+
+镜像 `device-qual-systemd-amd64:probe`，按 Containerfile 契约启动：
+`--cap-add ALL --rosetta /sbin/init`。缺这两项时 PID1 立即退出（此前误判为
+"Rosetta 下 systemd 不可用"），补齐后 `systemctl is-system-running` 返回 `degraded`
+（容器内正常）。
+
+制品 `build/native-packages-p1-e1a3/…0.2.2-1_amd64.deb`
+（105299216 B，`f9308883267a9391aa6faf2fcdcd6499556687b96add1b49b68201f8a678e5de`，
+源码 `a18822e`，device 轮 `c75ad932…`）。
+
+| 验证项 | 结果 |
+| --- | --- |
+| 包内 helper 最小 bootstrap | 修前 `ModuleNotFoundError`，修后可正常运行 |
+| 普通用户建实例 | 成功（R1 `0.2.2-96c3aef7…`） |
+| helper `register` | 通过，生成 `ai-device-client-e1a.service` |
+| `systemctl start` | `active (running)`，MainPID 属 cgroup |
+| 进程树 | `run-runner <release> client` + `device_runtime.cli client` |
+| `activate` 切换 | 成功，current 指向 R2 |
+| unit 文件 sha256 | 切换前后一致 |
+| `run`/`run-runner` sha256 | 切换前后一致 |
+| 重启后进程树 | 两进程均指向 R2 目录 |
+| 有注册实例时 `dpkg -r` | **拒绝**，要求先 unregister |
+| `unregister` 后 `dpkg -r` | 成功 |
+| 卸包后实例 | 仍可启动（runtime 与入口完好） |
+
+生命周期模块（`lifecycle.py`/`installation.py`/`upgrader.py`/`entrypoint.py`）
+不包含任何 `systemctl`/`systemd` 引用，且新增测试固定该性质：激活只移动指针，
+从不启停或 reload unit。
+
+### systemd 验收边界
+- `activate` 要求 `stopped=True`；实例运行中调用会被安装锁拒绝
+  （`instance is running or another installation is active`），这是设计门禁。
+- 已注册实例**不能**直接用 `lifecycle.activate_release` 切 release：
+  `.native-management.json` marker 会拒绝（`requires the native lifecycle manager`），
+  正确入口是签名升级路径 `native_prepare.prepare_runtime_candidate`，该路径尚未完成签名交付。
+  因此 systemd 切换验证使用未注册实例 + 等价手写 unit；这**不是**注册实例的升级验收。
+- client 需要 `DEVICE_RUNTIME_TOKEN`（≥16 字符）才会启动；此前多轮"client 配置错误"
+  即缺该变量，非安装缺陷。
+- helper 守护进程（`deploy`）未部署，`helper.sock` 不存在，`call query/start` 未验证。
+- 容器无 journald 持久化，unit 退出原因靠 `systemctl show` 与手动复现。
