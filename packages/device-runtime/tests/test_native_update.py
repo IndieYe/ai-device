@@ -2044,3 +2044,94 @@ def test_read_regular_returns_bytes(tmp_path):
     path = tmp_path / "keys.json"
     path.write_bytes(b'{"k":1}')
     assert nu._read_regular(path, "trusted keys must be a regular file") == b'{"k":1}'
+
+
+@pytest.fixture
+def applied(update, tmp_path, monkeypatch):
+    """A completed apply, with a bootstrap pointer and two versioned trees."""
+    manager, packages, _helper, _package = update
+    bootstrap_root = tmp_path / "bootstrap"
+    for name in ("0.2.2-native1", "0.2.2-native2"):
+        (bootstrap_root / name / "runtime" / "bin").mkdir(parents=True)
+        (bootstrap_root / name / "runtime" / "bin" / "python3.13").write_text("#!/bin/sh\n")
+    pointer = bootstrap_root / "current"
+    pointer.write_text("0.2.2-native1\n")
+    monkeypatch.setattr(nu.nb, "BOOTSTRAP_ROOT", bootstrap_root)
+    monkeypatch.setattr(nu.nb, "BOOTSTRAP_POINTER", pointer)
+    monkeypatch.setattr(
+        nu.nb,
+        "TRUSTED_HELPER_BOOTSTRAP",
+        bootstrap_root / "0.2.2-native1" / "runtime",
+    )
+    manager.apply("probe", "one")
+    return manager, packages, bootstrap_root, pointer
+
+
+def test_apply_records_applied_state(applied):
+    """The applied record is what makes the helper switch meaningful."""
+    manager, _packages, _root, _pointer = applied
+    stem = manager.registry / "updates/5-probe--one"
+    record = json.loads(stem.with_suffix(".applied.json").read_text())
+
+    assert record["state"] == "applied_package"
+    assert record["package_observation"]["version"] == "2"
+    # Captured before dpkg ran, when the old directory still existed.
+    assert record["bootstrap_before"] == "0.2.2-native1"
+
+
+def test_switch_helper_moves_the_pointer(applied, monkeypatch):
+    manager, _packages, _root, pointer = applied
+    monkeypatch.setattr(
+        nu.subprocess,
+        "run",
+        lambda *a, **kw: subprocess.CompletedProcess(a, 0, b"", b""),
+    )
+
+    result = manager.switch_helper("probe", "one", expected_version="0.2.2-native2")
+
+    assert pointer.read_text() == "0.2.2-native2\n"
+    assert result["next_step"] == "activate"
+    assert result["helper_switched"]["previous"] == "0.2.2-native1"
+
+
+def test_switch_helper_is_idempotent(applied, monkeypatch):
+    """A caller that lost the result must be able to confirm, not guess."""
+    manager, _packages, _root, pointer = applied
+    monkeypatch.setattr(
+        nu.subprocess,
+        "run",
+        lambda *a, **kw: subprocess.CompletedProcess(a, 0, b"", b""),
+    )
+    manager.switch_helper("probe", "one", expected_version="0.2.2-native2")
+
+    again = manager.switch_helper("probe", "one", expected_version="0.2.2-native2")
+
+    assert pointer.read_text() == "0.2.2-native2\n"
+    assert again["next_step"] == "activate"
+
+
+def test_switch_helper_restores_pointer_when_probe_fails(applied, monkeypatch):
+    """A pointer to a tree that cannot start is worse than the old one."""
+    manager, _packages, _root, pointer = applied
+    monkeypatch.setattr(
+        nu.subprocess,
+        "run",
+        lambda *a, **kw: subprocess.CompletedProcess(a, 1, b"", b"boom"),
+    )
+
+    with pytest.raises(nu.UpdateError, match="failed its probe"):
+        manager.switch_helper("probe", "one", expected_version="0.2.2-native2")
+
+    assert pointer.read_text() == "0.2.2-native1\n"
+    # The applied record survives: the package really is installed.
+    stem = manager.registry / "updates/5-probe--one"
+    assert json.loads(stem.with_suffix(".applied.json").read_text())["state"] == "applied_package"
+
+
+def test_switch_helper_requires_an_applied_package(applied):
+    manager, _packages, _root, _pointer = applied
+    stem = manager.registry / "updates/5-probe--one"
+    stem.with_suffix(".applied.json").unlink()
+
+    with pytest.raises(nu.UpdateError, match="not applied"):
+        manager.switch_helper("probe", "one", expected_version="0.2.2-native2")

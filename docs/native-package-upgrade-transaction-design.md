@@ -88,59 +88,83 @@ TRUSTED_HELPER_BOOTSTRAP_ROOT = Path("/opt/ai-device/bootstrap")
 
 **preinst 的实际职责**相应收窄：它不负责「保留旧目录」，只负责判断既有布局能否被安全替换——拒绝不可分类布局、拒绝同版本原地重装、拒绝多版本歧义、拒绝 legacy 管理布局。这些已实现并有真实容器验证。
 
-## 5. 事务状态机
+## 5. 事务状态机（已实现）
 
-在现有 `native_update` 基础上扩展，沿用 `registry` 与 lease：
+在 `native_update` 上扩展，沿用 registry 与 package lease。状态落在更新事务目录的
+独立证据文件里，不改动既有 `.prepared/.apply-intent/.outcome/.recovery` 语义：
 
 ```
-prepared          — 已验签、已提取到隔离目录
-applied_package   — 新包已安装，旧布局仍在
-helper_switched   — bootstrap/current 指向新 helper
-activated         — 实例 current 指向新 release
-pending_activation — 包已装，等待显式 activate（现有终态）
+applied_package   .applied.json   包已装，记录包观测与切换前指针
+helper_switched   .helper.json    bootstrap/current 已指向新版本并通过探测
+pending_activation                包与 helper 就位，等待 owner 侧 activate
 ```
 
-关键门禁：
+`updates reconcile` 是只读的，返回 `next_step` 建议：`apply` / `switch_helper` /
+`activate` / `manual_review`。它**不执行**下一步——切换 helper 与激活都会改变宿主
+上实际运行的东西。
 
-- `prepared → applied_package` 需要补的正是**解除 preinst 拒绝**，改为条件放行
-- `helper_switched` 前必须验证新 helper 可服务旧实例（只读探测）
-- 任何一步失败停在明确状态，**不自动回退**，与现有永拒语义一致
+### 5.1 为什么 helper 切换是独立状态
 
-## 6. 恢复语义
+包安装会删除旧版本目录（见 4.3），所以 `apply` 成功的瞬间存在一个窗口：
+`bootstrap/current` 仍指向已被删除的路径。这个窗口必须由事务自己关闭，不能留给
+运维记忆。`switch-helper` 因此是显式动作，不是 apply 的副作用。
 
-| 失败点 | 状态 | 处理 |
+### 5.2 switch-helper 的执行契约
+
+- 双 lease：instance lease + package-manager exclusive lease。指针是宿主全局的，
+  两个实例同时切换必须互斥。
+- 前置条件：`.applied.json` 存在且为 `applied_package`；包数据库仍显示目标版本。
+- 写入：`native_bootstrap.publish_pointer` 原子 replace + 父目录 fsync，只接受目录名。
+- 验证：用新解释器实际 `import device_runtime.native_helper`，失败则把指针写回旧值
+  并报错——指向不可运行的树比指向旧树更糟。
+- 幂等：`expected_version` 已是当前值时只观测、不写入，让丢失结果的调用方可以确认。
+
+### 5.3 失败语义
+
+任何一步失败停在明确状态，不自动回退，不自动重放：
+
+| 失败点 | 记录 | 下一步 |
 | --- | --- | --- |
-| 包安装前 | `prepared` | 保留隔离目录，可重试或显式退役 |
-| 包安装后、helper 切换前 | `applied_package` | 旧 helper 仍可用；可显式切换或停留 |
-| helper 切换后、激活前 | `helper_switched` | 实例仍跑旧 release，可继续或回退指针 |
-| 激活后 | `activated` | 完成 |
-| 未知 | `unknown` | 保留现场，不重放，需管理员裁决 |
+| apply 前 | 无 `.applied.json` | `apply` |
+| apply 成功、未切换 | `applied_package` | `switch-helper` |
+| 切换探测失败 | `applied_package`（指针已回滚） | 人工核查 |
+| 切换成功 | `helper_switched` | owner 侧 `activate` |
+| 未知 | 既有 `unknown` 门禁 | 管理员裁决 |
 
-新增 `updates reconcile` 需要的分支：识别 `applied_package` 与 `helper_switched` 并给出下一步建议，但**不自动执行**。
+### 5.4 未实现
 
-## 7. 明确不做
+- `activated` 不由 root 侧写入：激活是 owner 权限内的动作，仍走
+  `native_prepare.activate_candidate`。root 侧只报告 `pending_activation`。
+- 多实例共享包的排空（drain）仍拒绝，需要先实现多实例协调。
+- 回退到旧版本不提供：包已删除旧目录，回退等于重新安装旧包。
+
+## 6. 明确不做
 
 - 不自动清理旧版本目录（保留数量策略未定，且属数据删除）
 - 不自动回退到旧 release（软件回退 ≠ 数据恢复）
 - 不做跨 glibc / 跨 Python 主版本迁移
 - 不解除任何现有永拒门禁
-- 本轮不构建新制品，不做真实 `dpkg -i` 升级验收
+- 不提供包级回退：旧目录已被删除，回退等于重装旧包
 
-## 8. 实施顺序
+## 7. 实施顺序（完成情况）
 
-1. `bootstrap/current` 指针 + helper 读取改造（含兜底与校验）
-2. `preinst` 从拒绝改为条件放行，保留对未知布局的拒绝
-3. `native_update` 状态机扩展与 reconcile 分支
-4. 定向单元测试（状态迁移、失败停留、指针校验绕过）
-5. 待腾出磁盘后：构建双版本 DEB，真实升级验收
+| 步骤 | 状态 |
+| --- | --- |
+| 1. `bootstrap/current` 指针 + helper 读取改造 | 完成（`2bf3238`） |
+| 2. `preinst` 条件放行 + 分类器随包携带 | 完成（`2bf3238`、`dd34e23`） |
+| 3. `native_update` 状态机与 reconcile 分支 | 完成 |
+| 4. 定向单元测试 | 完成 |
+| 5. 双版本 DEB 真实升级验收 | 完成（Ubuntu 24.04，见 §9） |
 
-## 9. 待决策
+## 8. 待决策
 
-- **旧版本目录保留几个**：影响磁盘，需用户定策略
-- **新包是否要求旧 helper 已被新 helper 取代**：决定升级是否强制两阶段
-- **RPM 的 `rpm -U` 是否需要同版本并存**：RPM 不支持同名多版本共存，可能需改为 `rpm -i` 或不同 Name
+- **是否提供包级回退**：需要包显式不拥有旧路径才能并存，属独立立项。
+- **多实例共享同一包时的排空顺序**：当前 apply 直接拒绝多实例，需要先设计协调。
+- **helper 切换是否需要管理员批准消费**：当前 switch-helper 由 root 侧事务自己完成，
+  未接入签名批准链。
+- **RPM 真实验收**：Rocky9 隔离容器没有 `rpmbuild`，脚本层已对齐但未实测。
 
-## 8. 真实验收记录（2026-10-29）
+## 9. 真实验收记录（2026-10-29）
 
 环境：Apple container 1.5.0，`--platform linux/amd64 --network none --memory 3G`，
 Ubuntu 24.04.5 镜像 `device-qual-systemd-amd64:probe`（digest 前缀 `7b5d57b39d1f`），

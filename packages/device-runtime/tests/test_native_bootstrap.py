@@ -1,4 +1,5 @@
 import os
+import shutil
 
 import pytest
 
@@ -765,3 +766,59 @@ def test_bootstrap_pointer_must_be_regular_file(tmp_path, monkeypatch):
 
     with pytest.raises(bootstrap.BootstrapError, match="regular file"):
         bootstrap.trusted_helper_bootstrap()
+
+
+@pytest.fixture
+def switchable(tmp_path, monkeypatch):
+    root = tmp_path / "bootstrap"
+    for name in ("0.2.2-native1", "0.2.2-native2"):
+        (root / name / "runtime" / "bin").mkdir(parents=True)
+        (root / name / "runtime" / "bin" / "python3.13").write_text("#!/bin/sh\n")
+    pointer = root / "current"
+    pointer.write_text("0.2.2-native1\n")
+    monkeypatch.setattr(bootstrap, "BOOTSTRAP_ROOT", root)
+    monkeypatch.setattr(bootstrap, "BOOTSTRAP_POINTER", pointer)
+    monkeypatch.setattr(bootstrap.helper, "_trusted", lambda *a, **kw: None)
+    return root, pointer
+
+
+def test_publish_pointer_switches_atomically(switchable):
+    root, pointer = switchable
+
+    assert bootstrap.publish_pointer("0.2.2-native2") == "0.2.2-native2"
+
+    assert pointer.read_text() == "0.2.2-native2\n"
+    assert bootstrap.trusted_helper_bootstrap() == root / "0.2.2-native2" / "runtime"
+    # No temporary file may survive the replace.
+    assert sorted(p.name for p in root.iterdir()) == ["0.2.2-native1", "0.2.2-native2", "current"]
+
+
+@pytest.mark.parametrize("name", ["../escape", "/abs", "a/b", ".hidden", "-flag", "", "x" * 200])
+def test_publish_pointer_refuses_paths(switchable, name):
+    """The pointer names a directory inside BOOTSTRAP_ROOT, never a path."""
+    _root, pointer = switchable
+    before = pointer.read_text()
+
+    with pytest.raises(bootstrap.BootstrapError):
+        bootstrap.publish_pointer(name)
+
+    assert pointer.read_text() == before
+
+
+def test_publish_pointer_requires_an_installed_tree(switchable):
+    """A pointer to a tree that is not there would break every later start."""
+    _root, pointer = switchable
+    before = pointer.read_text()
+
+    with pytest.raises(bootstrap.BootstrapError, match="not an installed directory"):
+        bootstrap.publish_pointer("0.9.9-missing")
+
+    assert pointer.read_text() == before
+
+
+def test_current_name_reads_pointer_without_resolving_the_tree(switchable):
+    """After an upgrade the named tree is gone; the name must still be readable."""
+    root, _pointer = switchable
+    shutil.rmtree(root / "0.2.2-native1")
+
+    assert bootstrap.current_name() == "0.2.2-native1"

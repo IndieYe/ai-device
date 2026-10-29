@@ -19,6 +19,7 @@ import socket
 import stat
 import struct
 import sys
+import tempfile
 import threading
 import time
 from contextlib import contextmanager
@@ -62,6 +63,74 @@ def trusted_helper_bootstrap():
     helper._trusted(BOOTSTRAP_POINTER)
     helper._trusted(resolved, directory=False)
     return resolved
+
+
+def current_name():
+    """Return the name the pointer holds, without requiring the tree to exist.
+
+    An upgrade deletes the directory the pointer names, so resolving the
+    bootstrap after ``dpkg`` runs fails by design. Recording which version was
+    in use before the package changed therefore has to read the pointer itself.
+    """
+    try:
+        info = BOOTSTRAP_POINTER.lstat()
+    except FileNotFoundError:
+        return TRUSTED_HELPER_BOOTSTRAP.parent.name
+    if not stat.S_ISREG(info.st_mode):
+        raise BootstrapError("bootstrap pointer must be a regular file")
+    helper._trusted(BOOTSTRAP_POINTER)
+    name = BOOTSTRAP_POINTER.read_text(encoding="utf-8").strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", name):
+        raise BootstrapError("bootstrap pointer names an invalid directory")
+    return name
+
+
+def publish_pointer(name):
+    """Point the helper entrypoint at ``name`` after verifying that tree.
+
+    A package upgrade replaces the versioned directory; the pointer is the only
+    record of which one the entrypoints run. It is written atomically and its
+    parent directory is fsynced, because a crash between the write and the
+    directory update would restore the previous name on many filesystems.
+
+    The caller must already hold the package transaction lease. This validates
+    only that the target is a runnable, trusted bootstrap -- it does not decide
+    whether switching is authorised.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", name):
+        raise BootstrapError("bootstrap pointer names an invalid directory")
+    directory = BOOTSTRAP_ROOT / name
+    if directory.is_symlink() or not directory.is_dir():
+        raise BootstrapError("bootstrap pointer target is not an installed directory")
+    runtime = directory / "runtime"
+    if not (runtime / "bin" / "python3.13").is_file():
+        raise BootstrapError("bootstrap pointer target has no runtime")
+    helper._trusted(runtime, directory=False)
+    try:
+        info = BOOTSTRAP_POINTER.lstat()
+    except FileNotFoundError:
+        info = None
+    if info is not None and not stat.S_ISREG(info.st_mode):
+        raise BootstrapError("bootstrap pointer must be a regular file")
+    descriptor, tmp = tempfile.mkstemp(prefix=".current-", dir=BOOTSTRAP_ROOT)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(name + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp, BOOTSTRAP_POINTER)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
+    fd = os.open(BOOTSTRAP_ROOT, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    return name
 
 
 def _digest(path):

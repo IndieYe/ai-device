@@ -626,6 +626,9 @@ class Updates:
                         "architecture": value["metadata"]["Architecture"],
                     }
                 _atomic(started, apply_intent)
+                # Recorded before dpkg runs: afterwards the directory this names
+                # is gone, so the "before" value cannot be recovered.
+                bootstrap_before = self._bootstrap_name()
                 try:
                     self.packages.apply(
                         Path(value["package_path"]),
@@ -651,7 +654,40 @@ class Updates:
                             raise UpdateError("package guard outcome intent differs")
                 else:
                     _atomic(outcome, {"state": state, "package_observation": observed})
+                # Record the applied state even when the outcome is unknown: the
+                # package really was touched, and reconcile has to be able to say
+                # so. A known failure publishes applied_package only when the
+                # database shows the target, which is exactly what makes the
+                # helper switch meaningful.
+                installed = self.packages.installed(value["metadata"]["Package"])
+                if self._target(value, installed):
+                    applied = {
+                        "state": "applied_package",
+                        "package_observation": installed,
+                        "source_package": value["source_package"],
+                        # The pointer still names the tree the package replaced.
+                        # Capturing it here is what lets reconcile explain the
+                        # window instead of guessing.
+                        "bootstrap_before": bootstrap_before,
+                        "target_bootstrap": value.get("bootstrap_version"),
+                    }
+                    path = stem.with_suffix(".applied.json")
+                    if os.path.lexists(path):
+                        nh._trusted(path)
+                        if not nh._same_json(json.loads(path.read_text()), applied):
+                            raise UpdateError(
+                                "applied evidence changed; explicit review required"
+                            )
+                    else:
+                        _atomic(path, applied)
             return self._observation(stem, value)
+
+    @staticmethod
+    def _bootstrap_name():
+        try:
+            return nb.current_name()
+        except (nb.BootstrapError, OSError, nh.HelperError):
+            return None
 
     @staticmethod
     def _target(value, observation):
@@ -660,6 +696,85 @@ class Updates:
             and observation.get("version") == value["metadata"]["Version"]
             and observation.get("architecture") == value["metadata"]["Architecture"]
         )
+
+    def switch_helper(self, instance_id, operation_id, *, expected_version):
+        """Move ``bootstrap/current`` to the installed version and record it.
+
+        Applying the package already replaced the versioned bootstrap directory,
+        so between ``apply`` and this call the pointer may name a tree that no
+        longer exists. This is the step that closes that window, which is why it
+        is a transaction state of its own rather than a side effect of apply.
+
+        It takes the package-manager lease as well as the instance lease: the
+        pointer is host-global, so two instances switching at once must not
+        interleave, and neither may run while another package action is in
+        flight. Success is published as ``helper_switched``; a failure leaves
+        ``applied_package`` intact and is never retried automatically.
+        """
+        # `observing` only says an apply intent already exists; it is the normal
+        # case here, since a package must have been applied before switching.
+        with self._apply_transaction(instance_id, operation_id) as (binding, stem, _observing):
+            with self._apply_lease(self.registry / "package-manager"):
+                # Already holding the exclusive package lease, so read the record
+                # directly: _prepared_for_mutation would take a shared lease on
+                # the same file and deadlock against ourselves.
+                value = self._prepared(binding, stem)
+                applied = stem.with_suffix(".applied.json")
+                if not os.path.lexists(applied):
+                    raise UpdateError("package is not applied; nothing to switch")
+                nh._trusted(applied)
+                record = json.loads(applied.read_text())
+                if not isinstance(record, dict) or record.get("state") != "applied_package":
+                    raise UpdateError("package apply is not in a switchable state")
+                installed = self.packages.installed(value["metadata"]["Package"])
+                if not self._target(value, installed):
+                    raise UpdateError("installed package no longer matches the applied record")
+                current = nb.trusted_helper_bootstrap()
+                previous = current.parent.name
+                if expected_version == previous:
+                    # Idempotent observation: the switch already happened. Report
+                    # it without writing, so a caller that lost the result can
+                    # confirm rather than guess.
+                    return {**self._observation(stem, value), "helper_switched": record.get(
+                        "helper_switched"
+                    )}
+                published = nb.publish_pointer(expected_version)
+                # Prove the new entrypoint actually runs before recording success.
+                # A pointer that names an unrunnable tree is worse than the old
+                # one: it would turn every later start into a hard failure.
+                probe = subprocess.run(
+                    [
+                        str(nb.BOOTSTRAP_ROOT / published / "runtime/bin/python3.13"),
+                        "-I",
+                        "-B",
+                        "-c",
+                        "from device_runtime import native_helper",
+                    ],
+                    check=False,
+                    capture_output=True,
+                    timeout=60,
+                    env={"PATH": "/usr/bin:/bin", "LANG": "C"},
+                )
+                if probe.returncode != 0:
+                    # Put the old pointer back: it still names a directory the
+                    # applied package replaced, but restoring beats leaving a
+                    # known-broken entrypoint recorded as success.
+                    nb.publish_pointer(previous)
+                    raise UpdateError("new helper entrypoint failed its probe")
+                receipt = {
+                    "state": "helper_switched",
+                    "previous": previous,
+                    "release": published,
+                    "probe": "ok",
+                }
+                path = stem.with_suffix(".helper.json")
+                if os.path.lexists(path):
+                    nh._trusted(path)
+                    if not nh._same_json(json.loads(path.read_text()), receipt):
+                        raise UpdateError("helper switch evidence changed; explicit review required")
+                else:
+                    _atomic(path, receipt)
+            return {**self._observation(stem, value), "helper_switched": receipt}
 
     def _observation(self, stem, value):
         def read(suffix):
@@ -674,11 +789,17 @@ class Updates:
             except nh.HelperError as exc:
                 raise UpdateError("update observation evidence is not trusted") from exc
 
+        applied = read(".applied.json")
+        switched = read(".helper.json")
         return {
             "prepared": value,
             "apply_intent": read(".apply-intent.json"),
             "outcome": read(".outcome.json"),
             "recovery": read(".recovery.json"),
+            "applied": applied,
+            "helper_switched": switched,
+            "bootstrap_now": self._bootstrap_name(),
+            "next_step": _next_step(applied, switched),
             "installed_package": self.packages.installed(value["metadata"]["Package"]),
             "active_sha256": nh._digest(
                 Path(self.helper._binding(value["instance_id"])["root"]) / "active.json"
@@ -782,6 +903,24 @@ class Updates:
             return self._observation(stem, value)
 
 
+def _next_step(applied, switched):
+    """Name what the transaction still needs, without performing it.
+
+    Reconcile is read-only on purpose: the next move -- switching the helper,
+    activating a release, or accepting a partial state -- changes what runs on
+    the host, so it stays an explicit call.
+    """
+    if applied is None:
+        return "apply"
+    if applied.get("state") != "applied_package":
+        return "manual_review"
+    if switched is None:
+        return "switch_helper"
+    if switched.get("state") != "helper_switched":
+        return "manual_review"
+    return "activate"
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--registry", type=Path, required=True)
@@ -805,6 +944,8 @@ def main():
     ):
         signed.add_argument("--" + name, required=True)
     modes.add_parser("apply")
+    switch = modes.add_parser("switch-helper")
+    switch.add_argument("--expected-version", required=True)
     modes.add_parser("reconcile")
     modes.add_parser("recover")
     args = vars(parser.parse_args())
