@@ -168,6 +168,26 @@ pending_activation                包与 helper 就位，等待 owner 侧 activa
 实测（隔离 systemd 容器）：v1→v2 升级后仅剩 v2 树、指针正确、零告警；
 `remove` 后 327MB 全部消失；重装回到干净首次安装态；`purge` 同样全删。
 
+### 6.2 包完整性校验的已知限制
+
+Staging 发布让两个包管理器都拥有 `%post` 会 rename 走的 `.staging` 路径，因此
+`dpkg -V` 与 `rpm -V` 都把整个 payload 报为 missing（实测 9762 条）；rpm 另在
+升级时逐个打印 "remove failed"。`%ghost` 不是解法：它会让 payload 根本不进包
+（实测 106MB → 723KB）。
+
+**决定：不为此新增机制。** 损坏不会静默发生，运行时自检已覆盖：
+
+| 损坏形态 | 实际表现（实测） |
+| --- | --- |
+| 解释器缺失 | wrapper 以 75 退出并提示 "payload being replaced; retry" |
+| 指针所指树缺失 | 分类器拒绝安装，报 "names no installed bootstrap" |
+| 树不完整（缺 runtime/bundle） | 分类器拒绝，报 "is missing or incomplete" |
+| 模块被删 | 解释器报 `No module named ...`，退出码 1 |
+
+替代方案（签名清单、重做归属）都要引入密钥与信任根轮换链路，或退回非原子
+发布，超出当前本地单用户环境的需要。真正需要防篡改时再按 6.1 之外的独立
+设计处理，届时以签名清单为准，而不是指望 `-V`。
+
 ## 7. 实施顺序（完成情况）
 
 | 步骤 | 状态 |
