@@ -61,32 +61,66 @@ TRUSTED_HELPER_BOOTSTRAP_ROOT = Path("/opt/ai-device/bootstrap")
 
 保留常量作为**兜底默认**，仅在指针缺失时使用（兼容既有安装）。指针本身也要过 `_trusted` 校验，不能成为新的绕过点。
 
-### 4.3 dpkg/rpm 的路径所有权（已用真实升级更正）
+### 4.3 dpkg/rpm 的路径所有权（2026-10-30 改为归档归属）
 
-> 本节结论来自 2026-10-29 的隔离容器真实升级验收，推翻了本节此前的草案假设。
+> 本节结论来自隔离容器实测：早期针对 staging 布局的升级时机验证，以及 2026-10-30 对归档布局的完整 dpkg/RPM 验收。
 
-草案原假设「升级时旧版本目录转为 dpkg 未跟踪的残留」。**实测不成立**：`dpkg -i` 升级会先按旧包清单删除旧版本拥有的全部路径，再解开新版本。升级完成后 `packages/` 与 `bootstrap/` 下只剩新版本目录，旧目录直接消失：
+#### 早期 staging 布局的问题
+
+最初的设计让包拥有 `/opt/ai-device/.staging/<tree>`，postinst 再把它 rename 到 `packages/<tree>`。这保住了「运行时树不被半写」的目标，但**包清单记录的是安装后并不存在的路径**：
+
+- `dpkg -V` 报告 9762 项 missing；
+- `rpm -V` 同样大量 missing；
+- 每次 rpm 升级输出 9762 条 `remove failed`（逐文件一条）。
+
+安装本身正确，但两个包管理器都无法校验载荷完整性。
+
+#### 时机实测（决定方案边界）
+
+隔离容器中用最小 demo 包实测，两个管理器的删除窗口不同：
+
+| 管理器 | preinst/%pre | postinst/%post | 结论 |
+| --- | --- | --- | --- |
+| dpkg，不同 tree | 旧 tree 仍在 | 旧 tree 已消失 | 删除发生在 preinst 之后、解包期间 |
+| rpm，不同 tree | 旧 tree 仍在 | 旧 tree 仍在 | 删除发生在新包 %post 之后 |
+| dpkg，同名 tree | 旧 tree 仍在 | 旧 tree 仍在，内容已替换 | **原地逐文件覆盖**，非原子 |
+
+同名 tree 的原地覆盖是关键发现：直接让包拥有 `packages/<tree>` 会让升级把运行中的解释器逐文件替换掉，正是 staging 想避免的情况。
+
+#### 采用的布局：包拥有归档
+
+包内不再展开目录，而是每棵树一个未压缩归档：
 
 ```
-升级前: packages/0.2.2-native2 + bootstrap/0.2.2-native2
-升级后: packages/0.2.2-native3 + bootstrap/0.2.2-native3   ← native2 已被删除
+包内（真实存在，被包管理器拥有并校验）:
+  /opt/ai-device/payloads/<tree>.tar
+  /opt/ai-device/payloads/<tree>-bootstrap.tar
+
+安装后（派生内容，不被包管理器拥有）:
+  /opt/ai-device/packages/<tree>/        ← postinst 解包 + rename
+  /opt/ai-device/bootstrap/<tree>/
+  /opt/ai-device/bootstrap/current       ← 指针
 ```
 
-实测命令与结果：老包 `e1a7`（不含 `native_layout`）升级到 `0.2.2-2` 成功，`ls /opt/ai-device/packages` 只剩 `0.2.2-native2`；`v2 → v3` 同样只剩 `0.2.2-native3`。
+postinst / `%post` 的流程：`tar -xf` 到私有 `.incoming-XXXXXX` 工作目录 → 校验 `runtime` 存在 → 写入 `.payload-sha256` → 单次 `mv` 发布 → 切换指针 → 回收旧树。
 
-**后果**：
+这样包管理器只写、只删一个文件，无论 dpkg 还是 rpm 都不会在解包阶段碰到运行中的树；而清单记录真实存在，`dpkg -V` 与 `rpm -V` 都能通过。
 
-- 「并存」不是升级的自然结果，而是需要包刻意不拥有旧路径才能做到的额外工程。当前两包都用绝对路径写 `%files`/清单，做不到并存。
-- 已装实例仍然安全，原因是实例 `releases/` 里是**私有 runtime 副本**，不引用 `/opt/ai-device/packages`。升级后实例私有解释器、`current`、`instance.json` 权限与内容均未改变，实测可正常 import 与 `--version`。
-- 真正的风险不是「旧目录被删」，而是**升级窗口内新 helper 已就位、旧 helper 已不存在**：如果实例或 systemd 单元仍指向旧 bootstrap 路径，会 203/EXEC。这一点必须由事务与 `bootstrap/current` 一起解决，不能靠「旧目录保留」。
+#### 幂等判定必须按摘要
 
-**因此**：
+目录存在性不能作为「已发布」的依据：同名 tree 重装时目录一直在，hook 会跳过解包，导致归档已更新而运行时树仍是旧内容，同时 `dpkg -V` 依然通过（它只校验归档）。
 
-- 不再以「旧目录转为残留」为设计前提。
-- 若确实需要回退能力，必须让包显式不拥有旧版本路径（或改用不受包管理的发布目录），并在事务中记录 release 与目录的对应关系；这需要单独立项，不在本轮范围内。
-- `rpm -U` 与 `dpkg -i` 在这里语义一致：都会移除旧版本拥有的路径。RPM 的「同名只能一个版本」不是要绕开的限制，而是与 dpkg 行为一致的事实。
+因此每个已发布树旁写 `.payload-sha256`，重装时比对归档摘要：摘要一致才跳过；不一致则**拒绝**并提示换 tree 名，不覆盖运行中的树。
 
-**preinst 的实际职责**相应收窄：它不负责「保留旧目录」，只负责判断既有布局能否被安全替换——拒绝不可分类布局、拒绝同版本原地重装、拒绝多版本歧义、拒绝 legacy 管理布局。这些已实现并有真实容器验证。
+#### 仍然存在的行为
+
+- 升级时旧树由 postinst 的 `retire()` 删除，时机受控。已装实例不受影响：实例 `releases/` 内是私有 runtime 副本，不引用 `packages/`。
+- 包管理器不再能逐文件校验运行时树，只能校验归档。逐文件校验需自行比对 `.payload-sha256` 或解包后比对内容。
+- `rpm` 的 `%ghost` 已排除：它让包不再携带文件（实测 106MB → 723KB），是回避而非解决。
+
+#### preinst 的职责
+
+不负责「保留旧目录」，只判断既有布局能否被安全替换：拒绝不可分类布局、拒绝同版本原地重装、拒绝多版本歧义、拒绝 legacy 管理布局。已实现并有真实容器验证。
 
 ## 5. 事务状态机（已实现）
 

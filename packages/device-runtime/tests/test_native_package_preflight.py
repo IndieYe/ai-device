@@ -12,9 +12,9 @@ def test_builder_uses_isolated_offline_uv_for_explicit_runtime():
     assert 'env -i PATH=/usr/bin:/bin HOME="$work" TMPDIR="$work"' in source
     # The payload is assembled in the staging tree; the post-install step renames
     # it into place so a running caller never sees a half-written interpreter.
-    assert '"$root$stage/tools/uv" pip install --offline --no-cache --no-config --system' in source
-    assert '--python "$root$stage/runtime/bin/python3.13" --no-index --no-deps --link-mode copy' in source
-    assert '"$root$stage/bundle/wheels/"*.whl "$root$stage/bundle/dependencies/"*.whl' in source
+    assert '"$stage/tools/uv" pip install --offline --no-cache --no-config --system' in source
+    assert '--python "$stage/runtime/bin/python3.13" --no-index --no-deps --link-mode copy' in source
+    assert '"$stage/bundle/wheels/"*.whl "$stage/bundle/dependencies/"*.whl' in source
     assert ' -m pip ' not in source
 
 
@@ -88,7 +88,7 @@ def test_bootstrap_extract_excludes_bytecode_but_keeps_source(tmp_path):
     builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
     line = next(
         line for line in builder.read_text().splitlines()
-        if line.startswith("tar --exclude=") and '"$root$stage_boot"' in line
+        if line.startswith("tar --exclude=") and '"$stage_boot"' in line
     )
     source = tmp_path / "source/python/lib/python3.13/encodings"
     (source / "__pycache__").mkdir(parents=True)
@@ -98,12 +98,12 @@ def test_bootstrap_extract_excludes_bytecode_but_keeps_source(tmp_path):
     archive = tmp_path / "runtime.tar.gz"
     with tarfile.open(archive, "w:gz") as stream:
         stream.add(tmp_path / "source/python", arcname="python")
-    output = tmp_path / "root/.staging-bootstrap/0.2.2-native1"
+    output = tmp_path / "stage-boot/0.2.2-native1"
     output.mkdir(parents=True)
     subprocess.run(
         ["sh", "-c", line], check=True,
-        env={"PATH": "/usr/bin:/bin", "archive": str(archive), "root": str(tmp_path / "root"),
-             "stage_boot": "/.staging-bootstrap/0.2.2-native1"},
+        env={"PATH": "/usr/bin:/bin", "archive": str(archive),
+             "stage_boot": str(output)},
     )
     extracted = output / "python/lib/python3.13/encodings"
     assert (extracted / "__init__.py").read_text() == "source"
@@ -293,7 +293,7 @@ def test_deb_preflight_carries_its_own_classifier():
     assert '"$here/classify.py" check' in script
     # The classifier must be copied into the control area, not just referenced.
     assert 'cp "$work/classify.py" "$root/DEBIAN/classify.py"' in source
-    assert 'cp "$root$stage/runtime/lib/python3.13/site-packages/device_runtime/native_layout.py"' in source
+    assert 'cp "$stage/runtime/lib/python3.13/site-packages/device_runtime/native_layout.py"' in source
 
 
 def test_rpm_preflight_matches_deb_protections():
@@ -321,7 +321,7 @@ def test_rpm_preflight_matches_deb_protections():
 
 
 def test_both_package_managers_publish_the_pointer():
-    """Both managers must publish the same way: rename the staged trees, then flip.
+    """Both managers must publish the same way: expand the archive, rename, then flip.
 
     dpkg got a postinst first; rpm had nothing, which would have left an RPM
     upgrade with a working package and an entrypoint naming a deleted path.
@@ -335,14 +335,45 @@ def test_both_package_managers_publish_the_pointer():
 
     spec = source.split("%post", 1)[1].split("%preun", 1)[0]
     assert "mv -f" in spec and "current" in spec
-    # Both hooks publish the same way: the packaged trees land in a staging path
-    # the managers do not treat as a versioned layout, and are renamed into place
-    # before the pointer flips. The spec is an unquoted heredoc, so install-time
-    # values are escaped and the tree name stays a placeholder for substitution.
+    # Both hooks publish the same way: the package ships one archive per tree,
+    # the hook expands it into a private work directory and renames the finished
+    # tree into place before the pointer flips. The spec is an unquoted heredoc,
+    # so install-time values are escaped and the tree name stays a placeholder.
     for body, prefix in ((deb, ""), (spec, "\\")):
-        assert f'{prefix}$stage' in body or "stage" in body
+        assert f'{prefix}$payload' in body
+        assert 'tar -xf' in body
         assert "mv" in body
+        # The tree must never be written in place: the expansion goes to a work
+        # directory that only becomes the live tree through one rename.
+        assert "mktemp -d /opt/ai-device/.incoming-" in body
     assert 'sed -i "s#__TREE__#$tree#g" "$work/rpm/SPECS/native.spec"' in source
+
+
+def test_rpm_pointer_writes_a_real_newline():
+    """The spec's double escaping is easy to get wrong in a way that still runs.
+
+    Measured on a real rpm build: with '\\\\n' in the spec the pointer file held
+    ``T1\\n`` -- a literal backslash and n -- because the unquoted heredoc halved
+    the escape and sh's printf then emitted it verbatim. The wrapper reads the
+    pointer with ``cat`` and uses the result as a directory name, so that value
+    names a tree that cannot exist. Nothing fails at install time, which is what
+    made it survive.
+    """
+    builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
+    source = builder.read_text()
+    spec = source.split("\n%post\n", 1)[1].split("%preun", 1)[0]
+    # Compare on the literal source text. After the unquoted heredoc halves the
+    # escapes, sh must receive '%s\\n'; four backslashes would arrive as a
+    # literal backslash-n and never become a newline.
+    pointer = [l for l in spec.splitlines() if '__TREE__' in l and 'printf' in l]
+    assert len(pointer) == 1, pointer
+    assert "%s" + chr(92) + "n" in pointer[0], pointer[0]
+    assert chr(92) * 2 + "n" not in pointer[0], pointer[0]
+    # The digest is compared byte-for-byte against $(cat ...), same rule.
+    digest = [l for l in spec.splitlines() if 'digest' in l and 'printf' in l]
+    assert len(digest) == 1, digest
+    assert "%s" + chr(92) + "n" in digest[0], digest[0]
+    assert chr(92) * 2 + "n" not in digest[0], digest[0]
 
 
 def _extract_helper_wrapper():
@@ -476,29 +507,74 @@ def test_wrapper_execs_the_installed_interpreter(tmp_path):
     assert result.stderr == ""
 
 
-def test_staging_ownership_tradeoff_is_documented():
-    """Both managers own paths that %post renames away; that must stay visible.
+def test_manifest_owns_the_archives_not_the_derived_trees():
+    """The package must own paths that exist after installation.
 
-    Measured on the shipped packages: `dpkg -V` reports the whole payload
-    missing (9762 entries) and an rpm upgrade prints one "remove failed" per
-    file. Installation is still correct, but neither tool can verify payload
-    integrity. This is an accepted tradeoff, not a solved problem, so the
-    builder must keep saying so rather than dropping the note and letting the
-    next reader assume verification works.
+    The previous layout owned the staging trees, which %post renamed away, so
+    `dpkg -V` reported the whole payload missing (9762 entries) and an rpm
+    upgrade printed one "remove failed" per file. Owning the archive instead
+    makes the record true: the file is shipped, stays in place, and both
+    managers can verify it.
+
+    The derived trees must stay out of the manifest. Listing one would make an
+    upgrade delete the tree a running caller is executing, which is what the
+    expansion step exists to prevent.
     """
     builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
     source = builder.read_text()
     files = source.split("%files", 1)[1].split("%preun", 1)[0]
-    assert "/opt/ai-device/.staging/$tree" in files
+    assert "/opt/ai-device/payloads/$tree.tar" in files
+    assert "/opt/ai-device/payloads/$tree-bootstrap.tar" in files
     # A published tree in the manifest would make the upgrade delete the tree a
-    # running caller is executing, which is what staging exists to prevent.
+    # running caller is executing, which is what expansion-into-work-dir prevents.
     assert "/opt/ai-device/packages/$tree" not in files
     assert "/opt/ai-device/bootstrap/$tree" not in files
+    # The old ownership record named staging paths that never exist at run time.
+    assert "/opt/ai-device/.staging/$tree" not in files
     # %ghost was tried and rejected: it silently stops shipping the payload.
     # Only directives count, not the comment recording why it was rejected.
     directives = [l for l in files.splitlines() if not l.lstrip().startswith("#")]
     assert not any(l.startswith("%ghost") for l in directives)
     assert "stops shipping" in files
+
+
+def test_publish_compares_archive_digest_not_directory_existence():
+    """Idempotence must be decided by content, not by the tree being present.
+
+    Measured on a same-name reinstall with a directory-existence check: the
+    archive was replaced, the hook saw an existing tree and skipped expansion,
+    and the live tree kept the old contents while the package manager reported
+    the new archive as installed. dpkg -V still passed because it only verifies
+    the archive. The digest file beside each published tree is what makes the
+    difference observable.
+    """
+    builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
+    source = builder.read_text()
+
+    deb = source.split('cat > "$root/DEBIAN/postinst"', 1)[1].split("\nEOF", 1)[0]
+    spec = source.split("%post", 1)[1].split("%preun", 1)[0]
+    for body, escaper in ((deb, ""), (spec, "\\")):
+        assert ".payload-sha256" in body
+        assert "sha256sum" in body
+        # A digest mismatch is a refusal, not a silent overwrite of a live tree.
+        assert "holds different contents" in body
+
+
+def test_package_ships_one_archive_per_tree():
+    """Both trees are archived from a build path outside the package root.
+
+    The build stages the payload outside the package root so no unarchived copy
+    ships, and no compression is applied: dpkg and rpm already compress, so
+    gzip here would only add an install-time decompression pass.
+    """
+    builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
+    source = builder.read_text()
+    assert 'payload_tar=$payload_dir/$tree.tar' in source
+    assert 'payload_boot_tar=$payload_dir/$tree-bootstrap.tar' in source
+    assert 'tar -cf "$root$payload_tar"' in source
+    assert 'tar -cf "$root$payload_boot_tar"' in source
+    # Uncompressed on purpose: -cf, never -czf, for the shipped archives.
+    assert 'tar -czf "$root$payload' not in source
 
 
 def _heredoc(source: str, header: str) -> str:

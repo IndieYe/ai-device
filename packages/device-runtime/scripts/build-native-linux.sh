@@ -23,21 +23,30 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 root=$work/root
 home_final=/opt/ai-device/packages/$tree
-# The package unpacks into a staging path that neither package manager manages as
-# a versioned tree. dpkg and rpm delete files they own before unpacking the new
-# version, so unpacking directly into the live tree lets a running caller observe
-# a half-written interpreter. The post-install step renames the finished tree into
-# place instead, which is atomic within one filesystem.
-stage=/opt/ai-device/.staging/$tree
-stage_boot=/opt/ai-device/.staging-bootstrap/$tree
-mkdir -p "$root$stage" "$root$stage_boot" "$root/usr/bin"
-cp -R "$payload/." "$root$stage/"
-tar -xzf "$archive" -C "$root$stage"
-mv "$root$stage/python" "$root$stage/runtime"
+# The package ships one archive per tree instead of the expanded tree itself.
+# A package manager deletes the files it owns before unpacking a new version, so
+# owning a published tree would let an upgrade remove the interpreter a running
+# caller is executing. Owning a single archive keeps the ownership record true
+# (`dpkg -V`/`rpm -V` can compare it) while the post-install step still controls
+# when the live tree changes.
+#
+# The previous layout owned the staging trees instead, which never exist after
+# installation: both managers reported the whole payload missing, and every rpm
+# upgrade printed one "remove failed" per file.
+payload_dir=/opt/ai-device/payloads
+payload_tar=$payload_dir/$tree.tar
+payload_boot_tar=$payload_dir/$tree-bootstrap.tar
+# Assembled in a work path outside the package root, then archived into it.
+stage=$work/stage/$tree
+stage_boot=$work/stage-boot/$tree
+mkdir -p "$stage" "$stage_boot" "$root$payload_dir" "$root/usr/bin"
+cp -R "$payload/." "$stage/"
+tar -xzf "$archive" -C "$stage"
+mv "$stage/python" "$stage/runtime"
 env -i PATH=/usr/bin:/bin HOME="$work" TMPDIR="$work" \
- "$root$stage/tools/uv" pip install --offline --no-cache --no-config --system \
- --python "$root$stage/runtime/bin/python3.13" --no-index --no-deps --link-mode copy \
- "$root$stage/bundle/wheels/"*.whl "$root$stage/bundle/dependencies/"*.whl > "$work/bootstrap.log" 2>&1
+ "$stage/tools/uv" pip install --offline --no-cache --no-config --system \
+ --python "$stage/runtime/bin/python3.13" --no-index --no-deps --link-mode copy \
+ "$stage/bundle/wheels/"*.whl "$stage/bundle/dependencies/"*.whl > "$work/bootstrap.log" 2>&1
 cat > "$root/usr/bin/ai-device-native-install" <<'EOF'
 #!/bin/sh
 set -eu
@@ -50,13 +59,13 @@ chmod 755 "$root/usr/bin/ai-device-native-install"
 bootstrap=/opt/ai-device/bootstrap/$tree
 # Exclude upstream bytecode while creating this new bootstrap, not by altering
 # an existing installation. Candidate identity checks require source-only code.
-tar --exclude='*/__pycache__' --exclude='*.pyc' --exclude='*.pyo' -xzf "$archive" -C "$root$stage_boot"
-mv "$root$stage_boot/python" "$root$stage_boot/runtime"
-site="$root$stage_boot/runtime/lib/python3.13/site-packages"
+tar --exclude='*/__pycache__' --exclude='*.pyc' --exclude='*.pyo' -xzf "$archive" -C "$stage_boot"
+mv "$stage_boot/python" "$stage_boot/runtime"
+site="$stage_boot/runtime/lib/python3.13/site-packages"
 rm -rf "$site"
 mkdir -p "$site/device_runtime"
 for module in __init__.py entrypoint.py native_helper.py management_lock.py native_bootstrap.py; do
- cp "$root$stage/runtime/lib/python3.13/site-packages/device_runtime/$module" "$site/device_runtime/"
+ cp "$stage/runtime/lib/python3.13/site-packages/device_runtime/$module" "$site/device_runtime/"
 done
 # The entrypoint resolves the versioned bootstrap through the pointer rather
 # than naming one build's tree. A hard-coded path is what made an upgrade leave
@@ -106,12 +115,24 @@ sed -i "s#__TREE__#$tree#g" "$root/usr/bin/ai-device-native-helper"
 chmod 755 "$root/usr/bin/ai-device-native-helper"
 # Upstream CPython files can be group-writable. Published system programs must
 # not be writable by the client or group before a root helper trusts them.
-chmod -R go-w "$root$stage"
-chmod -R go-w "$root$stage_boot"
+chmod -R go-w "$stage"
+chmod -R go-w "$stage_boot"
 # Building the bootstrap imports CPython modules, which leaves __pycache__ trees
 # inside the payload. Bytecode belongs to the running interpreter, not to the
 # package, so ship a clean tree and let erase handle only caches created later.
-find "$root$stage" "$root$stage_boot" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
+find "$stage" "$stage_boot" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
+# Package the finished trees as archives. The expansion happens on the target
+# host, in the post-install hook, where the pointer is also moved: the package
+# manager only ever writes and removes one file per tree.
+#
+# No compression: dpkg and rpm already compress their payload, and gzip here
+# would only add a decompression pass at install time for no size win.
+(cd "$stage" && tar -cf "$root$payload_tar" --owner=0 --group=0 .)
+(cd "$stage_boot" && tar -cf "$root$payload_boot_tar" --owner=0 --group=0 .)
+chmod 644 "$root$payload_tar" "$root$payload_boot_tar"
+# The digest is written by the hooks after expansion, so the published tree can
+# be compared against the archive it came from. It ships beside the archive as a
+# reference only; nothing may trust it before the expansion succeeds.
 # Guard the existing layout with the classifier that ships in this package.
 # dpkg runs preinst before unpacking, so our own tree is not on disk yet and the
 # only interpreter present belongs to the payload being replaced. An older
@@ -119,7 +140,7 @@ find "$root$stage" "$root$stage_boot" -type d -name __pycache__ -prune -exec rm 
 # module on exactly the hosts that need to upgrade. Emit the classifier as a
 # standalone script next to the hook and run it with whatever interpreter
 # exists: one authoritative source, no dependency on the installed version.
-cp "$root$stage/runtime/lib/python3.13/site-packages/device_runtime/native_layout.py" "$work/classify.py"
+cp "$stage/runtime/lib/python3.13/site-packages/device_runtime/native_layout.py" "$work/classify.py"
 cat > "$work/preflight" <<'EOF'
 #!/bin/sh
 set -eu
@@ -160,42 +181,53 @@ EOF
  cp "$work/preflight" "$root/DEBIAN/preinst"
  cp "$work/classify.py" "$root/DEBIAN/classify.py"
  # Publishing the pointer here is what closes the upgrade window on the package
- # side. Both trees arrive in a staging path the package managers do not treat as
- # a versioned layout, so the live trees are never partially written: each rename
- # below is atomic within the filesystem, and the pointer flips only after both
- # are in place.
+ # side. The package owns one archive per tree; expanding it, renaming the
+ # finished tree into place and flipping the pointer all happen here, so the live
+ # trees are never partially written: each rename is atomic within the filesystem
+ # and the pointer flips only after both trees are in place.
  cat > "$root/DEBIAN/postinst" <<'EOF'
 #!/bin/sh
 set -eu
-stage=/opt/ai-device/.staging/__TREE__
-stage_boot=/opt/ai-device/.staging-bootstrap/__TREE__
+payload=/opt/ai-device/payloads/__TREE__.tar
+payload_boot=/opt/ai-device/payloads/__TREE__-bootstrap.tar
 pkg=/opt/ai-device/packages/__TREE__
 boot=/opt/ai-device/bootstrap/__TREE__
 wanted=__TREE__
 mkdir -p /opt/ai-device/packages /opt/ai-device/bootstrap
-# dpkg runs this hook again on a retry or a repair, by which time the staged trees
-# are already published. Publishing twice must be a no-op, not a failure: an
-# interrupted earlier run that got the rename done but not the pointer is exactly
-# the case this hook exists to finish.
+# The archive is the package's file; the tree is derived from it. Record the
+# archive digest beside the tree so a reinstall can tell "already published from
+# exactly this archive" from "a different archive now wants the same tree name".
+# Directory existence alone was not enough: a reinstall of the same tree name
+# would skip expansion and leave the live tree at the old contents while the
+# package manager reported the new archive as present.
 publish() {
- stage=$1; final=$2
+ tar=$1; final=$2
+ [ -f "$tar" ] || { echo "native package post-install: payload $tar is missing" >&2; exit 1; }
+ digest=$(sha256sum "$tar") || { echo "native package post-install: cannot digest $tar" >&2; exit 1; }
+ digest=${digest%% *}
  if [ -d "$final/runtime" ]; then
-  [ ! -e "$stage" ] || {
-   echo "native package post-install: $stage and $final both exist" >&2
-   exit 1
-  }
-  return 0
- fi
- [ -d "$stage/runtime" ] || {
-  echo "native package post-install: staged tree $stage is missing" >&2
+  if [ -f "$final/.payload-sha256" ] && [ "$(cat "$final/.payload-sha256")" = "$digest" ]; then
+   # Already published from this exact archive; a retry only has to finish the
+   # pointer.
+   return 0
+  fi
+  echo "native package post-install: $final holds different contents than $tar; remove it or install a new tree name" >&2
   exit 1
- }
+ fi
+ work=$(mktemp -d /opt/ai-device/.incoming-XXXXXX)
+ trap 'rm -rf "$work"' EXIT
+ tar -xf "$tar" -C "$work" || { echo "native package post-install: cannot expand $tar" >&2; exit 1; }
+ [ -d "$work/runtime" ] || { echo "native package post-install: $tar has no runtime" >&2; exit 1; }
+ printf '%s\n' "$digest" > "$work/.payload-sha256"
+ chmod 644 "$work/.payload-sha256"
  # A tree that is present but incomplete would be overwritten by this rename,
- # which is what the staging split is meant to prevent. Refuse instead.
- mv "$stage" "$final"
+ # which is what the expansion step is meant to prevent. Refuse instead.
+ [ ! -e "$final" ] || { echo "native package post-install: $final exists without a complete runtime" >&2; exit 1; }
+ mv "$work" "$final"
+ trap - EXIT
 }
-publish "$stage" "$pkg"
-publish "$stage_boot" "$boot"
+publish "$payload" "$pkg"
+publish "$payload_boot" "$boot"
 root=/opt/ai-device/bootstrap
 tmp=$(mktemp "$root/.current-XXXXXX")
 printf '%s\n' "$wanted" > "$tmp"
@@ -230,10 +262,11 @@ exit 0
 EOF
  sed -i "s#__TREE__#$tree#g" "$root/DEBIAN/postinst"
  chmod 755 "$root/DEBIAN/postinst"
- # Nothing owns the published trees once %post has renamed them out of staging,
- # so an erase has to remove them itself or ~330MB per version is stranded.
- # prerm has already refused the erase while any instance, registration record
- # or unit still exists, so reaching here means no consumer remains.
+ # Nothing owns the published trees: the package owns one archive per tree and
+ # %post derives them from it, so an erase has to remove them itself or ~330MB
+ # per version is stranded. prerm has already refused the erase while any
+ # instance, registration record or unit still exists, so reaching here means no
+ # consumer remains.
  cat > "$root/DEBIAN/postrm" <<'EOF'
 #!/bin/sh
 set -eu
@@ -262,10 +295,13 @@ if [ -f /opt/ai-device/bootstrap/current ] && [ ! -L /opt/ai-device/bootstrap/cu
 fi
 drop /opt/ai-device/packages
 drop /opt/ai-device/bootstrap
-# Remove the now-empty parents and staging dirs the package created, so the
-# pre-install classifier sees a clean first-install layout afterwards.
+# Remove the now-empty parents and the payload directory the package created, so
+# the pre-install classifier sees a clean first-install layout afterwards. Rows
+# left behind by an interrupted expansion are removed first; the trap in postinst
+# handles the normal case, this covers a crash that skipped it.
+rm -rf /opt/ai-device/.incoming-* 2>/dev/null || true
 rmdir /opt/ai-device/packages /opt/ai-device/bootstrap \
-      /opt/ai-device/.staging /opt/ai-device/.staging-bootstrap 2>/dev/null || true
+      /opt/ai-device/payloads 2>/dev/null || true
 rmdir /opt/ai-device 2>/dev/null || true
 exit 0
 EOF
@@ -463,33 +499,55 @@ if live == '$tree' then
  error('native package pre-install refused: $tree is already installed')
 end
 %post
-# Publish the pointer after the files are in place. rpm -U removes the previous
-# version's paths, so until this runs the pointer (if any) names a directory
-# that no longer exists. The dpkg postinst does the same thing; both must, or
-# an upgrade through one package manager leaves a working entrypoint while the
+# Publish the pointer after the files are in place. The package owns one archive
+# per tree; this hook expands it, renames the finished tree into place and only
+# then flips the pointer. The dpkg postinst does the same thing, and the two must
+# agree, or an upgrade through one manager leaves a working entrypoint while the
 # other leaves a broken one.
 # The spec is written through an unquoted heredoc so the tree name is baked in,
 # which means every other $ must be escaped to survive until install time.
 root=/opt/ai-device/bootstrap
-stage=/opt/ai-device/.staging/__TREE__
-stage_boot=/opt/ai-device/.staging-bootstrap/__TREE__
+payload=/opt/ai-device/payloads/__TREE__.tar
+payload_boot=/opt/ai-device/payloads/__TREE__-bootstrap.tar
 pkg=/opt/ai-device/packages/__TREE__
 boot=/opt/ai-device/bootstrap/__TREE__
 mkdir -p /opt/ai-device/packages /opt/ai-device/bootstrap
-# Same idempotence as the dpkg postinst: a retry after a completed rename must
-# finish the pointer instead of failing on the tree it already published.
+# Same digest rule as the dpkg postinst: the archive is the package's file, the
+# tree is derived from it. Comparing directory existence alone would let a
+# reinstall of the same tree name keep the old contents while the package manager
+# reported the new archive as installed.
 publish() {
+ [ -f "\$1" ] || { echo "native package post-install: payload \$1 is missing" >&2; exit 1; }
+ digest=\$(sha256sum "\$1") || { echo "native package post-install: cannot digest \$1" >&2; exit 1; }
+ digest=\${digest%% *}
  if [ -d "\$2/runtime" ]; then
-  [ ! -e "\$1" ] || { echo "native package post-install: \$1 and \$2 both exist" >&2; exit 1; }
-  return 0
+  if [ -f "\$2/.payload-sha256" ] && [ "\$(cat "\$2/.payload-sha256")" = "\$digest" ]; then
+   return 0
+  fi
+  echo "native package post-install: \$2 holds different contents than \$1; remove it or install a new tree name" >&2
+  exit 1
  fi
- [ -d "\$1/runtime" ] || { echo "native package post-install: staged tree \$1 is missing" >&2; exit 1; }
- mv "\$1" "\$2"
+ work=\$(mktemp -d /opt/ai-device/.incoming-XXXXXX)
+ trap 'rm -rf "\$work"' EXIT
+ tar -xf "\$1" -C "\$work" || { echo "native package post-install: cannot expand \$1" >&2; exit 1; }
+ [ -d "\$work/runtime" ] || { echo "native package post-install: \$1 has no runtime" >&2; exit 1; }
+ # One backslash-n: the unquoted heredoc halves each escape, so sh's printf sees
+ # \\n and emits a newline. The digest is read back with $(cat ...) and compared
+ # literally, so a trailing newline has to be the real one, not a backslash-n.
+ printf '%s\n' "\$digest" > "\$work/.payload-sha256"
+ chmod 644 "\$work/.payload-sha256"
+ [ ! -e "\$2" ] || { echo "native package post-install: \$2 exists without a complete runtime" >&2; exit 1; }
+ mv "\$work" "\$2"
+ trap - EXIT
 }
-publish "\$stage" "\$pkg"
-publish "\$stage_boot" "\$boot"
+publish "\$payload" "\$pkg"
+publish "\$payload_boot" "\$boot"
 tmp=\$(mktemp "\$root/.current-XXXXXX")
-printf '%s\\n' "__TREE__" > "\$tmp"
+# One backslash-n, not four. The spec goes through two escapes: the unquoted
+# heredoc turns \\\\n into \\n, and sh's printf then turns that into a newline.
+# Writing '%s\\\\n' here left the pointer holding a literal backslash-n, so the
+# tree name the wrapper read back was never a valid directory name.
+printf '%s\n' "__TREE__" > "\$tmp"
 chmod 644 "\$tmp"
 mv -f "\$tmp" "\$root/current"
 # Retire the replaced trees, with the same rule as the dpkg postinst: instances
@@ -572,16 +630,18 @@ drop_caches('/opt/ai-device/bootstrap/$tree')
 
 %postun
 # %preun has refused the erase while any instance, registration record or unit
-# remains, so a real erase means nothing consumes the payload. The trees were
-# renamed out of staging by %post and own no rpm file, so rpm leaves them all
+# remains, so a real erase means nothing consumes the payload. The trees are
+# derived from the archives by %post and own no rpm file, so rpm leaves them all
 # behind; remove them here. rpm passes the count of remaining instances, so an
 # upgrade (1 or more) stays under %post's control instead.
 if [ "\$1" -gt 0 ] 2>/dev/null; then exit 0; fi
 # Drop the pointer first: one naming a vanished tree makes the next install
 # refuse the layout as a broken one.
 [ ! -f /opt/ai-device/bootstrap/current ] || rm -f /opt/ai-device/bootstrap/current
-for dir in /opt/ai-device/packages /opt/ai-device/bootstrap \
-           /opt/ai-device/.staging /opt/ai-device/.staging-bootstrap; do
+# Directories left by an interrupted expansion are removed first; the trap in
+# %post handles the normal case, this covers a crash that skipped it.
+rm -rf /opt/ai-device/.incoming-* 2>/dev/null || true
+for dir in /opt/ai-device/packages /opt/ai-device/bootstrap; do
  [ -d "\$dir" ] || continue
  for entry in "\$dir"/*; do
   [ -e "\$entry" ] || continue
@@ -604,19 +664,20 @@ exit 0
 # %pretrans guard refuse every later install (dpkg removes its own empty
 # parent directories, rpm only removes what %files owns).
 %dir /opt/ai-device
-# The payload ships into the staging trees and %post renames it into place, so
-# both package managers end up owning paths that no longer exist. On dpkg that
-# shows up only as `dpkg -V` listing the whole payload missing; rpm additionally
-# prints one "remove failed" per file during an upgrade. Either way the ownership
-# record is wrong and neither tool can verify payload integrity. %ghost is not a
-# fix for rpm: it stops shipping the files at all (measured: 106MB -> 723KB).
-# Leaving it as is keeps installation correct but gives up verification.
-/opt/ai-device/.staging/$tree
-/opt/ai-device/.staging-bootstrap/$tree
+# The package owns one archive per tree. %post expands it into the versioned
+# tree and flips the pointer, so the ownership record names a file that really
+# exists and both managers can verify it.
+#
+# The earlier layout owned the staging trees instead. They never exist after
+# installation, so `rpm -V` reported every payload file missing and each upgrade
+# printed one "remove failed" per file for the previous version's paths.
+# %ghost was tried and rejected: it stops shipping the files at all (measured:
+# 106MB -> 723KB).
+/opt/ai-device/payloads/$tree.tar
+/opt/ai-device/payloads/$tree-bootstrap.tar
 %dir /opt/ai-device/packages
 %dir /opt/ai-device/bootstrap
-%dir /opt/ai-device/.staging
-%dir /opt/ai-device/.staging-bootstrap
+%dir /opt/ai-device/payloads
 /usr/bin/ai-device-native-install
 /usr/bin/ai-device-native-helper
 EOF
