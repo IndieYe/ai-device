@@ -499,3 +499,56 @@ def test_staging_ownership_tradeoff_is_documented():
     directives = [l for l in files.splitlines() if not l.lstrip().startswith("#")]
     assert not any(l.startswith("%ghost") for l in directives)
     assert "stops shipping" in files
+
+
+def _heredoc(source: str, header: str) -> str:
+    """Return the body of a `cat > path <<'EOF' ... EOF` block."""
+    start = source.index(header)
+    body = source.index("\n", start) + 1
+    return source[body:source.index("\nEOF", body)]
+
+
+def test_both_managers_retire_replaced_trees():
+    """Old version trees must not accumulate: ~330MB each, no consumer left.
+
+    Instances run from their own releases/ copies and the entrypoint resolves
+    through bootstrap/current, so the trees a package replaced have nothing
+    depending on them. Upgrades delete them; erases delete everything, or an
+    uninstall strands about a gigabyte across three versions.
+    """
+    builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
+    source = builder.read_text()
+
+    dpkg_postinst = _heredoc(source, 'cat > "$root/DEBIAN/postinst"')
+    assert "retire" in dpkg_postinst
+    assert "/opt/ai-device/packages" in dpkg_postinst
+
+    dpkg_postrm = _heredoc(source, 'cat > "$root/DEBIAN/postrm"')
+    # Only an erase drops everything; abort-upgrade/update must not.
+    assert "remove|purge)" in dpkg_postrm
+    assert "bootstrap/current" in dpkg_postrm
+
+    rpm_post = source.split("%post\n", 1)[1].split("%preun", 1)[0]
+    assert "retire" in rpm_post
+    rpm_postun = source.split("%postun", 1)[1].split("%files", 1)[0]
+    # rpm passes the remaining-instance count: an upgrade keeps %post in charge.
+    assert '"\\$1" -gt 0' in rpm_postun
+    assert "bootstrap/current" in rpm_postun
+
+
+def test_retire_never_follows_links():
+    """Deleting a symlinked entry would remove its target, which is not ours.
+
+    Verified against a real package: an entry symlinked to /opt/important left
+    the target intact and the link in place; the layout classifier then refused
+    the install rather than silently deleting foreign data.
+    """
+    builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
+    source = builder.read_text()
+    for hook in (
+        _heredoc(source, 'cat > "$root/DEBIAN/postinst"'),
+        _heredoc(source, 'cat > "$root/DEBIAN/postrm"'),
+        source.split("%post\n", 1)[1].split("%preun", 1)[0],
+        source.split("%postun", 1)[1].split("%files", 1)[0],
+    ):
+        assert "-L" in hook

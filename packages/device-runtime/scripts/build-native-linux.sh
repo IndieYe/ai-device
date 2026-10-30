@@ -205,10 +205,71 @@ mv -f "$tmp" "$root/current"
 # portable (Linux fsyncs the directory via the file descriptor instead), and the
 # host has no syncfs helper worth relying on here.
 sync
+# Retire the trees this package replaced. Instances run from their own
+# releases/ copies, and the entrypoint resolves through the pointer, so no
+# running thing depends on the old trees; keeping them only costs ~330MB each.
+# The pointer was just written, so anything other than $wanted is superseded.
+retire() {
+ dir=$1; keep=$2
+ [ -d "$dir" ] || return 0
+ for entry in "$dir"/*; do
+  [ -e "$entry" ] || continue
+  name=${entry##*/}
+  case $name in .*|-*) continue ;; esac
+  [ "$name" = "$keep" ] && continue
+  # Refuse to follow a link out of the tree: a symlinked entry is not ours to
+  # delete and removing its target would be silent data loss.
+  if [ -L "$entry" ] || [ ! -d "$entry" ]; then continue; fi
+  rm -rf "$entry"
+ done
+}
+retire /opt/ai-device/packages "$wanted"
+retire /opt/ai-device/bootstrap "$wanted"
+sync
 exit 0
 EOF
  sed -i "s#__TREE__#$tree#g" "$root/DEBIAN/postinst"
  chmod 755 "$root/DEBIAN/postinst"
+ # Nothing owns the published trees once %post has renamed them out of staging,
+ # so an erase has to remove them itself or ~330MB per version is stranded.
+ # prerm has already refused the erase while any instance, registration record
+ # or unit still exists, so reaching here means no consumer remains.
+ cat > "$root/DEBIAN/postrm" <<'EOF'
+#!/bin/sh
+set -eu
+# $1 is remove/purge on an erase, update/abort-*/failed-upgrade otherwise. Only
+# a real erase drops the trees; an upgrade's new postinst decides what survives.
+case "${1:-remove}" in
+ remove|purge) ;;
+ *) exit 0 ;;
+esac
+drop() {
+ dir=$1
+ [ -d "$dir" ] || return 0
+ for entry in "$dir"/*; do
+  [ -e "$entry" ] || continue
+  name=${entry##*/}
+  case $name in .*|-*) continue ;; esac
+  # Never follow a link out of the tree; a symlink target is not ours to remove.
+  if [ -L "$entry" ] || [ ! -d "$entry" ]; then continue; fi
+  rm -rf "$entry"
+ done
+}
+# The pointer first: leaving it naming a tree that no longer exists would make
+# the next install refuse the layout as broken.
+if [ -f /opt/ai-device/bootstrap/current ] && [ ! -L /opt/ai-device/bootstrap/current ]; then
+ rm -f /opt/ai-device/bootstrap/current
+fi
+drop /opt/ai-device/packages
+drop /opt/ai-device/bootstrap
+# Remove the now-empty parents and staging dirs the package created, so the
+# pre-install classifier sees a clean first-install layout afterwards.
+rmdir /opt/ai-device/packages /opt/ai-device/bootstrap \
+      /opt/ai-device/.staging /opt/ai-device/.staging-bootstrap 2>/dev/null || true
+rmdir /opt/ai-device 2>/dev/null || true
+exit 0
+EOF
+ chmod 755 "$root/DEBIAN/postrm"
  sed -i "s#__TREE__#$tree#g" "$root/DEBIAN/preinst"
  chmod 755 "$root/DEBIAN/preinst"
  sed -i "s#__PKGVER__#$pkgver#g" "$root/DEBIAN/control"
@@ -431,6 +492,22 @@ tmp=\$(mktemp "\$root/.current-XXXXXX")
 printf '%s\\n' "__TREE__" > "\$tmp"
 chmod 644 "\$tmp"
 mv -f "\$tmp" "\$root/current"
+# Retire the replaced trees, with the same rule as the dpkg postinst: instances
+# run from their own releases/ copies and the entrypoint resolves through the
+# pointer, so nothing running depends on them. Skip links rather than deleting
+# whatever they point at.
+retire() {
+ for entry in "\$1"/*; do
+  [ -e "\$entry" ] || continue
+  name=\${entry##*/}
+  case \$name in .*|-*) continue ;; esac
+  [ "\$name" = "\$2" ] && continue
+  if [ -L "\$entry" ] || [ ! -d "\$entry" ]; then continue; fi
+  rm -rf "\$entry"
+ done
+}
+retire /opt/ai-device/packages __TREE__
+retire /opt/ai-device/bootstrap __TREE__
 sync
 exit 0
 
@@ -492,6 +569,31 @@ local function drop_caches(dir)
 end
 drop_caches('/opt/ai-device/packages/$tree')
 drop_caches('/opt/ai-device/bootstrap/$tree')
+
+%postun
+# %preun has refused the erase while any instance, registration record or unit
+# remains, so a real erase means nothing consumes the payload. The trees were
+# renamed out of staging by %post and own no rpm file, so rpm leaves them all
+# behind; remove them here. rpm passes the count of remaining instances, so an
+# upgrade (1 or more) stays under %post's control instead.
+if [ "\$1" -gt 0 ] 2>/dev/null; then exit 0; fi
+# Drop the pointer first: one naming a vanished tree makes the next install
+# refuse the layout as a broken one.
+[ ! -f /opt/ai-device/bootstrap/current ] || rm -f /opt/ai-device/bootstrap/current
+for dir in /opt/ai-device/packages /opt/ai-device/bootstrap \
+           /opt/ai-device/.staging /opt/ai-device/.staging-bootstrap; do
+ [ -d "\$dir" ] || continue
+ for entry in "\$dir"/*; do
+  [ -e "\$entry" ] || continue
+  name=\${entry##*/}
+  case \$name in .*|-*) continue ;; esac
+  # Never follow a link out of the tree; its target is not ours to delete.
+  if [ -L "\$entry" ] || [ ! -d "\$entry" ]; then continue; fi
+  rm -rf "\$entry"
+ done
+done
+exit 0
+
 %files
 # Own the parent directories so erase removes them when empty. Otherwise an
 # empty /opt/ai-device/packages left behind by a first erase makes the
