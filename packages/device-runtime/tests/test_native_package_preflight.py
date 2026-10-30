@@ -311,8 +311,13 @@ def test_rpm_preflight_matches_deb_protections():
     assert "/var/lib/ai-device/manager" in lua
     assert "posix.readlink(root)" in lua
     assert "posix.readlink(path)" in lua
-    assert "is incomplete" in lua
+    assert "is missing or incomplete" in lua
     assert "directories" in lua or "plain_dir" in lua
+    # The pointer is the authority on both sides. A tree-count rule here would
+    # refuse the second upgrade while dpkg accepts it, so the lua hook must not
+    # carry the old "exactly one tree per root" decision.
+    assert "expected one versioned payload and bootstrap" not in lua
+    assert "bootstrap/current" in lua
 
 
 def test_both_package_managers_publish_the_pointer():

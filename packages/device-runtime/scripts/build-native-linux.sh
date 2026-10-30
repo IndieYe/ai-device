@@ -269,6 +269,9 @@ Offline development payload. Service management and unattended update not enable
 %install
 mkdir -p %{buildroot}
 cp -a $root/. %{buildroot}/
+# The published directories are owned so an erase can remove them when empty,
+# but publishing happens in %post: nothing is in them at build time.
+mkdir -p %{buildroot}/opt/ai-device/packages %{buildroot}/opt/ai-device/bootstrap
 %pretrans -p <lua>
 -- Same decision as the dpkg preinst, expressed in lua because rpm runs this
 -- before it unpacks anything. Only an absent layout or a single complete
@@ -353,27 +356,49 @@ local function versioned(root)
 end
 local packages = versioned('/opt/ai-device/packages')
 local bootstraps = versioned('/opt/ai-device/bootstrap')
-if #packages == 0 and #bootstraps == 0 then return end
-if #packages ~= 1 or #bootstraps ~= 1 then
- error('native package pre-install refused: expected one versioned payload and bootstrap, found ' .. #packages .. '/' .. #bootstraps)
-end
--- Completeness, matching the dpkg classifier: a tree without its runtime or
--- bundle is state we cannot classify, not an upgrade target.
+-- Neither root populated is a first install. Otherwise the bootstrap pointer is
+-- the only authority: several trees may coexist because a running instance keeps
+-- executing the tree it started from, and a new version adds one beside it
+-- rather than replacing it. Counting trees here would refuse every upgrade that
+-- the dpkg classifier accepts.
+local trees = tostring(#packages) .. '/' .. tostring(#bootstraps)
 local function has(path)
  local names = posix.dir(path) or {}
  local seen = {}
  for _,name in ipairs(names) do seen[name] = true end
  return seen
 end
-local payload = has('/opt/ai-device/packages/' .. packages[1])
-if not payload['runtime'] or not payload['bundle'] then
- error('native package pre-install refused: payload ' .. packages[1] .. ' is incomplete')
+local function complete(name)
+ local payload = has('/opt/ai-device/packages/' .. name)
+ if not payload['runtime'] or not payload['bundle'] then return false, 'payload' end
+ local boot = has('/opt/ai-device/bootstrap/' .. name)
+ if not boot['runtime'] then return false, 'bootstrap' end
+ return true
 end
-local boot = has('/opt/ai-device/bootstrap/' .. bootstraps[1])
-if not boot['runtime'] then
- error('native package pre-install refused: bootstrap ' .. bootstraps[1] .. ' is incomplete')
+if #packages == 0 and #bootstraps == 0 then
+ -- An empty layout with a pointer left behind names a tree that is gone; that
+ -- is a broken install, not a fresh one.
+ local pointer = posix.stat('/opt/ai-device/bootstrap/current', 'type')
+ if pointer then
+  error('native package pre-install refused: bootstrap pointer survives but no versioned tree does')
+ end
+ return
 end
-if packages[1] == '$tree' then
+-- The pointer must name a tree that exists on both sides and is complete.
+local handle = io.open('/opt/ai-device/bootstrap/current', 'r')
+if not handle then
+ error('native package pre-install refused: versioned trees exist but the bootstrap pointer does not name one; found ' .. trees)
+end
+local live = handle:read('*l')
+handle:close()
+if type(live) ~= 'string' or #live == 0 then
+ error('native package pre-install refused: versioned trees exist but the bootstrap pointer does not name one; found ' .. trees)
+end
+local ok, side = complete(live)
+if not ok then
+ error('native package pre-install refused: bootstrap pointer names ' .. live .. ' but its ' .. tostring(side) .. ' is missing or incomplete')
+end
+if live == '$tree' then
  error('native package pre-install refused: $tree is already installed')
 end
 %post
@@ -473,13 +498,19 @@ drop_caches('/opt/ai-device/bootstrap/$tree')
 # %pretrans guard refuse every later install (dpkg removes its own empty
 # parent directories, rpm only removes what %files owns).
 %dir /opt/ai-device
+# The payload ships into the staging trees and %post renames it into place. rpm
+# therefore owns paths that are gone after %post: on an upgrade it reports one
+# "remove failed" per file and `rpm -V` lists the payload missing. The files are
+# real, so %ghost cannot be used (it would stop shipping them at all); the noise
+# is a known consequence of publishing by rename and does not affect the
+# installed result.
+/opt/ai-device/.staging/$tree
+/opt/ai-device/.staging-bootstrap/$tree
 %dir /opt/ai-device/packages
 %dir /opt/ai-device/bootstrap
-# The build strips __pycache__ before packaging, so the manifest stays free of
-# bytecode caches without per-path excludes.
-/opt/ai-device/packages/$tree
+%dir /opt/ai-device/.staging
+%dir /opt/ai-device/.staging-bootstrap
 /usr/bin/ai-device-native-install
-/opt/ai-device/bootstrap/$tree
 /usr/bin/ai-device-native-helper
 EOF
  sed -i "s#__TREE__#$tree#g" "$work/rpm/SPECS/native.spec"
