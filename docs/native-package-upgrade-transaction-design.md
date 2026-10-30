@@ -180,6 +180,25 @@ pending_activation                包与 helper 就位，等待 owner 侧 activa
 制品仍是未签名本地开发包：`build-inputs.json` 的 `source_commit` 是基线提交，
 精确字节由 wheel 定义，不构成发布闭环。
 
+### 6.1.2 回收与运行中 helper 的关系（实测）
+
+6.1 的回收会在升级后删除旧树。运行中的 helper 进程原来就在旧树里，因此需要
+确认它不会因为"脚下的目录被删"而崩溃。
+
+实测（隔离 systemd 容器）：
+
+- 在旧树解释器下启动一个长驻进程，执行跨版本升级使其目录被删：进程继续正常
+  运行并持续输出，未受影响。Unix 语义下已打开的文件与映射在目录删除后仍然有效。
+- `_retired_reason()` 在指针未变时返回 None（继续服务），指针切走后返回原因，
+  进程据此主动退出。实测升级瞬间从 `retired=False` 转为 `True`。
+
+因此排空依赖的是指针变化这一显式信号，而不是"文件消失"这种副作用；回收
+不会把干净排空变成崩溃。`_serve` 在两次请求之间判定，同一时刻只有一个连接在
+处理，退出时不留下 socket。
+
+已知限制不变：`systemctl restart` 直接发 SIGTERM，不经过该判定点，socket 仍会
+残留，需要 `recover-socket` 或自然排空。
+
 ### 6.2 包完整性校验的已知限制
 
 Staging 发布让两个包管理器都拥有 `%post` 会 rename 走的 `.staging` 路径，因此
