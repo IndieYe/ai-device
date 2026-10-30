@@ -1,0 +1,47 @@
+# Disposable systemd qualification image (amd64, run under Rosetta).
+#
+# Used by the native lifecycle probes in scripts/ that need a real PID1 systemd
+# with cgroup v2. Units created there are inert fixtures; nothing in this image
+# touches a real device or an installed AI Device instance.
+#
+# Build:
+#   container build --platform linux/amd64 \
+#     -t device-qual-systemd-amd64:probe \
+#     -f scripts/containers/systemd-probe/Containerfile \
+#     scripts/containers/systemd-probe
+#
+# Run (detached so PID1 is systemd, not the exec'd command):
+#   container run --detach --name <name> --network none --platform linux/amd64 \
+#     --memory 3G --cap-add ALL --rosetta <image> /sbin/init
+#
+# --cap-add ALL is required: with the default capability set systemd exits
+# during startup. --network none keeps probes offline. Exec into the container
+# with `container exec <name> ...`; do not pass a command to `container run`,
+# that replaces PID1 and systemd never starts.
+FROM docker.io/library/ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    container=apple
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        systemd \
+        systemd-sysv \
+        dbus \
+        python3 \
+        ca-certificates \
+        procps \
+        util-linux \
+    && rm -rf /var/lib/apt/lists/*
+
+# systemd's own expectations inside a container.
+RUN systemctl mask \
+        systemd-firstboot.service \
+        systemd-udev-trigger.service \
+        systemd-udevd.service \
+        systemd-modules-load.service \
+        systemd-journald-audit.socket \
+    || true
+
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

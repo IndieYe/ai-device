@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import zipfile
+from pathlib import Path
 
 import pytest
 from test_bundle import make_wheel
@@ -54,7 +55,23 @@ def fake_uv(monkeypatch):
     return commands
 
 
-def create(root, delivery, roles=("client",)):
+def make_runtime(root, python=None):
+    """Build a minimal runtime tree to hand to install_instance.
+
+    Native installs always pass a runtime payload; supplying one here makes the
+    fixture exercise the launcher layout instead of the legacy single file.
+    """
+    if python is None:
+        python = sys.executable
+    source = Path(root).parent / (Path(root).name + "-runtime-src")
+    target = source / "bin" / "python3.13"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(f"#!/bin/sh\nexec {python} \"$@\"\n")
+    target.chmod(0o755)
+    return source
+
+
+def create(root, delivery, roles=("client",), runtime=True):
     return install_instance(
         delivery,
         root=root,
@@ -62,7 +79,26 @@ def create(root, delivery, roles=("client",)):
         roles=roles,
         server_url="http://127.0.0.1:28765",
         port=28765,
+        runtime_source=make_runtime(root) if runtime else None,
     )
+
+
+def add_runtime(root, release=None, python=None):
+    """Give a release the interpreter the launcher resolves from the pointer.
+
+    The launcher execs releases/<release>/runtime/bin/python3.13, so tests that
+    start ``run`` need that path to exist; without it the entry fails closed.
+    """
+    if release is None:
+        release = (root / "current").read_text().strip()
+    target = root / "releases" / release / "runtime" / "bin" / "python3.13"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if python is None:
+        python = sys.executable
+    if not target.exists():
+        target.write_text(f"#!/bin/sh\nexec {python} \"$@\"\n")
+        target.chmod(0o755)
+    return target
 
 
 def persistent(root):
@@ -84,7 +120,7 @@ def test_environment_uses_bootstrap_python_not_uv_discovery(
 
     root = tmp_path / "instance"
     if operation != "install":
-        create(root, delivery)
+        create(root, delivery, runtime=False)
         fake_uv.clear()
     # Simulate a transient bootstrap venv backed by a durable interpreter.
     interpreter = tmp_path / "shared python" / "python3.13"
@@ -96,7 +132,7 @@ def test_environment_uses_bootstrap_python_not_uv_discovery(
     monkeypatch.setenv("UV_PYTHON", "/root/private/python")
     monkeypatch.setenv("UV_PYTHON_INSTALL_DIR", "/root/private/managed")
     if operation == "install":
-        create(root, delivery, ("center", "client", "mcp"))
+        create(root, delivery, ("center", "client", "mcp"), runtime=False)
     elif operation == "rebuild":
         rebuild_instance(root)
     else:
@@ -138,7 +174,9 @@ def test_real_uv_venv_uses_bootstrap_base_with_hostile_uv_environment(
 
     monkeypatch.setattr(module, "_invoke", invoke)
     root = tmp_path / "instance"
-    active = create(root, delivery)
+    # This checks the venv base against the bootstrap interpreter, so it must
+    # not route the environment through a copied private runtime.
+    active = create(root, delivery, runtime=False)
     python = root / "releases" / active["release"] / "client/venv/bin/python"
     actual = json.loads(
         subprocess.check_output(
@@ -189,6 +227,53 @@ def test_three_roles_and_stable_entry(tmp_path, delivery, fake_uv):
         else:
             assert sum(".whl" in arg for arg in args) == 1
     assert all(kwargs["cwd"].is_relative_to(root) for _, kwargs in fake_uv)
+
+
+def test_install_existing_instance_remains_untouched(tmp_path, delivery, fake_uv):
+    root = tmp_path / "existing"
+    root.mkdir()
+    (root / "keep").write_bytes(b"preserve")
+    with pytest.raises(InstallationError, match="destination already exists"):
+        install_instance(delivery, instance_id="fixture", roles=["client"], root=root,
+                         server_url="http://127.0.0.1:9")
+    assert sorted(p.name for p in root.iterdir()) == ["keep"]
+    assert (root / "keep").read_bytes() == b"preserve"
+
+
+def test_install_directory_creation_permission_error_is_not_existing(tmp_path, delivery, fake_uv, monkeypatch):
+    root = tmp_path / "denied"
+    original = module.Path.mkdir
+
+    def denied(path, *args, **kwargs):
+        if path == root:
+            raise PermissionError(13, "fixture failure")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(module.Path, "mkdir", denied)
+    with pytest.raises(InstallationError, match=r"cannot create instance directory \(errno 13\)") as captured:
+        install_instance(delivery, instance_id="fixture", roles=["client"], root=root,
+                         server_url="http://127.0.0.1:9")
+    assert isinstance(captured.value.__cause__, PermissionError)
+    assert not root.exists()
+
+
+@pytest.mark.parametrize("error_number", [13, 28])
+def test_install_io_failure_keeps_partial_state_and_reports_cause(tmp_path, delivery, fake_uv, monkeypatch, error_number):
+    root = tmp_path / "partial-instance"
+
+    def fail_prepare(root, *args, **kwargs):
+        (root / "partial-evidence").write_bytes(b"preserve")
+        raise OSError(error_number, "fixture failure")
+
+    monkeypatch.setattr(module, "_prepare", fail_prepare)
+    with pytest.raises(InstallationError, match="partial.*retained") as captured:
+        install_instance(delivery, instance_id="fixture", roles=["client"], root=root,
+                         server_url="http://127.0.0.1:9")
+    assert isinstance(captured.value.__cause__, OSError)
+    assert captured.value.__cause__.errno == error_number
+    assert str(error_number) in str(captured.value)
+    assert (root / "partial-evidence").read_bytes() == b"preserve"
+    assert not (root / "active.json").exists()
 
 
 def test_rebuild_preserves_identity_configuration_journal_output(tmp_path, delivery, fake_uv):
@@ -359,8 +444,9 @@ def test_corrupt_bundle_rejected_before_writes(tmp_path, delivery, fake_uv):
 def test_runner_error_is_controlled_and_keeps_config_private(tmp_path, delivery, fake_uv):
     root = tmp_path / "instance"
     create(root, delivery)
+    add_runtime(root)
     result = subprocess.run(
-        [sys.executable, str(root / "run"), "mcp"], capture_output=True, text=True, check=False
+        [str(root / "run"), "mcp"], capture_output=True, text=True, check=False
     )
     assert result.returncode == 2 and "Traceback" not in result.stderr
 
@@ -412,8 +498,9 @@ def test_runner_holds_lease_and_forwards_termination(tmp_path, delivery, fake_uv
         "while True: time.sleep(.02)\n"
     )
     executable.chmod(0o755)
+    add_runtime(root)
     process = subprocess.Popen(
-        [sys.executable, str(root / "run"), "center"],
+        [str(root / "run"), "center"],
         env={**os.environ, "TEST_READY": str(ready), "TEST_DONE": str(done)},
     )
     try:
@@ -487,11 +574,14 @@ def test_termination_while_popen_has_child_but_has_not_returned(
         f"    os.kill(os.getpid(), {signum})\n"
         "    return child\n"
         "subprocess.Popen = delayed\n"
-        f"entry = {str(root / 'run')!r}\n"
-        "exec(compile(Path(entry).read_text(),entry,'exec'),{'__file__':entry})\n"
+        f"entry = {str(root / 'run-runner')!r}\n"
+        f"release = {installed['release']!r}\n"
+        "exec(compile(Path(entry).read_text(),entry,'exec'),"
+        "{'__file__':entry,'__name__':'__main__'})\n"
     )
+    add_runtime(root)
     process = subprocess.Popen(
-        [sys.executable, "-c", injection, "center"],
+        [sys.executable, "-c", injection, installed["release"], "center"],
         env={**os.environ, "TEST_READY": str(ready), "TEST_DONE": str(done)},
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -756,8 +846,11 @@ def test_runner_client_concurrency_config(tmp_path, delivery, fake_uv, invalid):
         "#!/usr/bin/env python3\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n"
     )
     executable.chmod(0o755)
+    # The launcher resolves its interpreter from the pointer, so the release
+    # needs that path even though these cases only inspect the venv argv.
+    add_runtime(root, release=installed["release"])
     result = subprocess.run(
-        [sys.executable, str(root / "run"), "client"],
+        [str(root / "run"), "client"],
         capture_output=True,
         text=True,
         check=False,
@@ -775,3 +868,76 @@ def test_runner_client_concurrency_config(tmp_path, delivery, fake_uv, invalid):
             ("--max-active-tasks", "16"),
         ]:
             assert argv[argv.index(flag) + 1] == value
+
+
+def test_native_runner_is_written_before_active(tmp_path, delivery, fake_uv, monkeypatch):
+    root = tmp_path / "native-instance"
+    python = module.Path(sys.executable).resolve()
+    original = module._json
+
+    def save(path, value):
+        if path == root / "active.json":
+            # The stable entry is the launcher, and its interpreter choice comes
+            # from the pointer, so the shebang is no longer the call-site python.
+            assert (root / "run").read_text() == module.LAUNCHER
+            assert (root / "run-runner").read_text() == module.RUNNER_BODY
+            assert (root / "current").read_text().strip() == value["release"]
+        return original(path, value)
+
+    monkeypatch.setattr(module, "_json", save)
+    install_instance(
+        delivery,
+        root=root,
+        instance_id="native",
+        roles=["client"],
+        server_url="https://example.invalid",
+        runtime_source=make_runtime(root, python),
+    )
+
+
+def test_invalid_native_runner_rejected_before_instance(tmp_path, delivery, fake_uv):
+    root = tmp_path / "native-instance"
+    with pytest.raises(InstallationError, match="shebang"):
+        install_instance(
+            delivery,
+            root=root,
+            instance_id="native",
+            roles=["client"],
+            server_url="https://example.invalid",
+            runner_python="relative/python",
+        )
+    assert not root.exists()
+
+
+def test_prepare_explicit_native_uv_ignores_path(tmp_path, delivery, fake_uv, monkeypatch):
+    root = tmp_path / "instance"
+    create(root, delivery)
+    before = (root / "active.json").read_bytes()
+    executable = tmp_path / "packaged-tools" / "uv"
+    executable.parent.mkdir()
+    executable.write_text("#!/bin/sh\nexit 99\n")
+    executable.chmod(0o700)
+    monkeypatch.setattr(module.shutil, "which", lambda _: pytest.fail("PATH lookup not allowed"))
+    fake_uv.clear()
+    result = module._prepare(
+        root, delivery, module.inspect_bundle(delivery), ["client"], uv_executable=executable
+    )
+    assert (root / "active.json").read_bytes() == before
+    tool_calls = [args for args, _ in fake_uv if "--no-config" in args]
+    assert tool_calls and all(args[0] == str(executable.resolve()) for args in tool_calls)
+    assert (root / "releases" / result["release"] / "installation.json").is_file()
+    for args, _ in fake_uv:
+        if args[2] == "venv":
+            assert args[-1] == str(root / "releases" / result["release"] / "client/venv")
+
+
+@pytest.mark.parametrize("tool", ["relative/uv", "/missing-native-uv"])
+def test_invalid_explicit_uv_refused_before_release(tmp_path, delivery, fake_uv, tool):
+    root = tmp_path / "instance"
+    create(root, delivery)
+    before = set((root / "releases").iterdir())
+    with pytest.raises(InstallationError, match="absolute executable"):
+        module._prepare(
+            root, delivery, module.inspect_bundle(delivery), ["client"], uv_executable=tool
+        )
+    assert set((root / "releases").iterdir()) == before

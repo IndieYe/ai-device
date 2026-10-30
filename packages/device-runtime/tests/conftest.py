@@ -97,3 +97,66 @@ async def running_client(live_server, state_dir, executor):
     finally:
         await client.close()
         await asyncio.wait_for(task, 10)
+
+
+def ensure_release_runtime(root, release=None, python=None):
+    """Create the interpreter the launcher resolves for a release.
+
+    The stable entry is a shell launcher that execs
+    releases/<release>/runtime/bin/python3.13. Simulated installs in tests do
+    not build a real runtime, so any test that starts ``run`` (or validates the
+    layout) must materialise that path first.
+    """
+    import sys
+    from pathlib import Path
+
+    root = Path(root)
+    if release is None:
+        release = (root / "current").read_text().strip()
+    target = root / "releases" / release / "runtime" / "bin" / "python3.13"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.exists():
+        interpreter = python or sys.executable
+        target.write_text(f'#!/bin/sh\nexec {interpreter} "$@"\n')
+        target.chmod(0o755)
+    return target
+
+
+def write_entry(root, *, release="0.2.0-fixture", python=None):
+    """Give a stub instance a complete stable entry for the legacy layout.
+
+    The helper and lifecycle validate the whole runner body, not just the
+    shebang, so a stub that only writes a first line is rejected by design.
+    """
+    import sys
+    from pathlib import Path
+
+    from device_runtime.installation import RUNNER_BODY
+
+    root = Path(root)
+    interpreter = str(python or Path(sys.executable).resolve())
+    runner = root / "run"
+    runner.write_text(f"#!{interpreter}\n" + RUNNER_BODY)
+    runner.chmod(0o755)
+    return runner
+
+    """Create the interpreter the launcher resolves for a release.
+
+    The stable entry is a shell launcher that execs
+    releases/<release>/runtime/bin/python3.13. Simulated installs in tests do
+    not build a real runtime, so any test that starts ``run`` (or validates the
+    layout) must materialise that path first.
+    """
+    import sys
+    from pathlib import Path
+
+    root = Path(root)
+    if release is None:
+        release = (root / "current").read_text().strip()
+    target = root / "releases" / release / "runtime" / "bin" / "python3.13"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.exists():
+        interpreter = python or sys.executable
+        target.write_text(f'#!/bin/sh\nexec {interpreter} "$@"\n')
+        target.chmod(0o755)
+    return target

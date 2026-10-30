@@ -4,6 +4,7 @@ This module does not start services, replay operations, or write persistent stat
 Failed candidates are retained for inspection and never become active.
 """
 
+import contextvars
 import fcntl
 import hashlib
 import json
@@ -23,6 +24,8 @@ from urllib.parse import urlsplit
 from packaging.requirements import Requirement
 
 from .bundle import COMPONENTS, ROLES, inspect_bundle, with_dependencies
+from .entrypoint import LAUNCHER, POINTER, RUNNER, RUNNER_BODY
+from .management_lock import management_lease
 
 
 class InstallationError(ValueError):
@@ -30,71 +33,45 @@ class InstallationError(ValueError):
 
 
 # Deliberately stdlib-only: rebuilding cannot depend on an intact active venv.
-RUNNER = """#!/usr/bin/env python3
-import fcntl
-import json
-import os
-import platform
-from pathlib import Path
-import subprocess
-import sys
-import signal
-import re
 
-root = Path(__file__).resolve().parent
-try:
-    if len(sys.argv) != 2:
-        raise ValueError("usage: run <center|mcp|client>")
-    role = sys.argv[1]
-    with (root / ".installation.lock").open("rb") as lock:
-        fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
-        active = json.loads((root / "active.json").read_text())
-        config = json.loads((root / "config" / "roles.json").read_text())
-        if role not in active["roles"]:
-            raise ValueError("role is not installed")
-        release = active["release"]
-        if not isinstance(release, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.+!-]*", release):
-            raise ValueError("invalid active release")
-        env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME")}
-        venv = root / "releases" / release / role / "venv"
-        if role == "mcp":
-            env["DEVICE_RUNTIME_API_URL"] = config[role]["server_url"]
-            argv = [str(venv / "bin" / "python"), "-m", "device_runtime.mcp_server"]
-        else:
-            argv = [str(venv / "bin" / "python"), "-m", "device_runtime.cli",
-                    "server" if role == "center" else "client",
-                    "--state-dir", str(root / "state" / role)]
-            if role == "center":
-                argv += ["--host", "127.0.0.1", "--port", str(config[role]["port"])]
-            else:
-                argv += ["--server-url", config[role]["server_url"],
-                         "--device-id", config[role]["device_id"]]
-        if role == "client":
-            for name in ("max_concurrent_requests", "max_concurrent_queries", "max_active_tasks"):
-                if name in config[role]:
-                    value = config[role][name]
-                    if type(value) is not int or value < 1:
-                        raise ValueError("concurrency limits must be positive integers")
-                    argv += ["--" + name.replace("_", "-"), str(value)]
-        # Install handlers BEFORE spawning: signals received while Popen has not
-        # returned are queued until its child handle becomes available.
-        process = None
-        pending_signals = []
-        def forward(signum, frame):
-            if process is None:
-                pending_signals.append(signum)
-            elif process.poll() is None:
-                process.send_signal(signum)
-        signal.signal(signal.SIGTERM, forward)
-        signal.signal(signal.SIGINT, forward)
-        process = subprocess.Popen(argv, cwd=root, env=env, pass_fds=(lock.fileno(),))
-        for signum in pending_signals:
-            forward(signum, None)
-        raise SystemExit(process.wait())
-except (OSError, ValueError, KeyError, TypeError):
-    print("device instance: invalid configuration, unavailable environment or installation busy", file=sys.stderr)
-    raise SystemExit(2)
-"""
+
+def _write_pointer(root, release):
+    """Atomically replace the single-line release pointer.
+
+    The value is validated first so a bug cannot write a path fragment. Callers
+    must already hold the installation lock: the pointer and active.json are
+    read by different processes and must move together.
+    """
+    if not isinstance(release, str) or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9_.+!-]*", release
+    ):
+        raise InstallationError("invalid release pointer value")
+    path = root / POINTER
+    temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
+    try:
+        with temporary.open("x", encoding="utf-8") as stream:
+            stream.write(release + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _has_pointer(root):
+    """Legacy instances installed without a private runtime have no pointer."""
+    path = root / POINTER
+    return path.is_file() and not path.is_symlink()
+
+
+def _read_pointer(root):
+    path = root / POINTER
+    if path.is_symlink() or not path.is_file():
+        raise InstallationError("release pointer is missing or invalid")
+    value = path.read_text(encoding="utf-8")
+    if value.count("\n") > 1:
+        raise InstallationError("release pointer must be a single line")
+    return value.rstrip("\n")
 
 
 def _identity(value):
@@ -123,7 +100,7 @@ def _json(path, value):
 
 @contextmanager
 def _lock(root):
-    with (root / ".installation.lock").open("a+b") as stream:
+    with management_lease(root), (root / ".installation.lock").open("a+b") as stream:
         try:
             fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
@@ -131,6 +108,56 @@ def _lock(root):
                 "instance is running or another installation is active"
             ) from exc
         yield
+
+
+def _write_candidate_record(root, active, prepared):
+    """Write the lifecycle binding that activate_release verifies.
+
+    lifecycle.prepare_upgrade records this itself; the native preparation path
+    builds the release through _prepare directly and therefore has to emit the
+    same record, or the prepared release can never be promoted.
+    """
+    _json(
+        root / "releases" / prepared["release"] / "candidate.json",
+        {
+            "format_version": 1,
+            "binding": _lifecycle_binding(root, active),
+            "candidate": prepared,
+        },
+    )
+
+
+def _lifecycle_binding(root, active):
+    """Mirror lifecycle._binding without importing it (lifecycle imports us)."""
+    return {
+        "active": active,
+        "identity": json.loads((root / "instance.json").read_text()),
+        "identity_sha256": _file_sha256(root / "instance.json"),
+        "config_sha256": _file_sha256(root / "config" / "roles.json"),
+        "state_format": 1,
+    }
+
+
+def _release_runtime_source(root, release):
+    """Private runtime of an existing release, or None for a legacy instance.
+
+    lifecycle._release_runtime returns the same path; it lives here so the native
+    preparation path can reuse it without importing lifecycle at module scope.
+    """
+    if not _has_pointer(root):
+        return None
+    runtime = root / "releases" / release / "runtime"
+    if not runtime.is_dir() or runtime.is_symlink():
+        raise InstallationError("active release has no private runtime")
+    return runtime
+
+
+def _file_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _client_contract(bundle, manifest):
@@ -160,6 +187,18 @@ def _client_contract(bundle, manifest):
             raise InstallationError("core dependency must match the bundle and be client-only")
 
 
+_PREPARATION_SENDER = contextvars.ContextVar("native_preparation_sender", default=None)
+
+
+@contextmanager
+def preparation_sender(sender):
+    token = _PREPARATION_SENDER.set(sender)
+    try:
+        yield
+    finally:
+        _PREPARATION_SENDER.reset(token)
+
+
 def _invoke(argv, *, cwd, log):
     env = {k: v for k, v in os.environ.items() if not k.startswith("UV_")}
     env.pop("PYTHONPATH", None)
@@ -167,15 +206,21 @@ def _invoke(argv, *, cwd, log):
     # Lifecycle diagnostics pass no log: read-only probes must not create files.
     with log.open("ab") if log is not None else nullcontext(subprocess.DEVNULL) as stream:
         try:
-            result = subprocess.run(
-                argv,
-                cwd=cwd,
-                env=env,
-                stdout=stream,
-                stderr=stream,
-                check=False,
-                timeout=60 if log is None else None,
-            )
+            sender = _PREPARATION_SENDER.get()
+            if sender is not None:
+                result = sender.run(
+                    argv, cwd=cwd, env=env, stdout=stream, timeout=60 if log is None else None
+                )
+            else:
+                result = subprocess.run(
+                    argv,
+                    cwd=cwd,
+                    env=env,
+                    stdout=stream,
+                    stderr=stream,
+                    check=False,
+                    timeout=60 if log is None else None,
+                )
         except subprocess.TimeoutExpired as exc:
             raise InstallationError("environment verification timed out") from exc
     if result.returncode:
@@ -291,13 +336,28 @@ def _check_target(manifest, roles):
         raise InstallationError("installed roles are not supported by this bundle target")
 
 
-def _prepare(root, bundle, manifest, roles, *, required_output_map_format=None):
+def _prepare(
+    root,
+    bundle,
+    manifest,
+    roles,
+    *,
+    required_output_map_format=None,
+    uv_executable=None,
+    runtime_source=None,
+):
     _check_target(manifest, roles)
     if required_output_map_format is None:
         required_output_map_format = _required_output_map_format(root)
-    uv = shutil.which("uv")
-    if not uv:
-        raise InstallationError("uv must be installed and available on PATH")
+    if uv_executable is None:
+        uv = shutil.which("uv")
+        if not uv:
+            raise InstallationError("uv must be installed and available on PATH")
+    else:
+        tool = Path(uv_executable)
+        if not tool.is_absolute() or not tool.is_file() or not os.access(tool, os.X_OK):
+            raise InstallationError("explicit uv must be an absolute executable file")
+        uv = str(tool.resolve())
     # UV_* is intentionally filtered by _invoke. Do not ask uv to rediscover
     # "3.13": that may select a different, root-private managed interpreter.
     # Resolve the bootstrap venv symlink so releases do not depend on its lifetime.
@@ -309,6 +369,17 @@ def _prepare(root, bundle, manifest, roles, *, required_output_map_format=None):
     release = manifest["release_version"] + "-" + uuid.uuid4().hex
     directory = root / "releases" / release
     directory.mkdir(parents=True)
+    if runtime_source is not None:
+        # Copy the interpreter into this release so the instance owns everything
+        # it needs to start. A package erase or a newer package version then
+        # leaves the release intact instead of breaking its shebang. The venv is
+        # built from this copy, so venv/bin/python is not a link into the package.
+        private_runtime = directory / "runtime"
+        shutil.copytree(runtime_source, private_runtime, symlinks=True)
+        private_python = private_runtime / "bin" / "python3.13"
+        if not private_python.is_file() or not os.access(private_python, os.X_OK):
+            raise InstallationError("private runtime has no executable interpreter")
+        interpreter = private_python
     snapshot = directory / "bundle"
     shutil.copytree(bundle, snapshot)
     if _fingerprint(inspect_bundle(snapshot)) != _fingerprint(manifest):
@@ -387,8 +458,44 @@ def _prepare(root, bundle, manifest, roles, *, required_output_map_format=None):
 
 
 @with_dependencies
-def install_instance(bundle, *, instance_id, roles, root=None, server_url=None, port=8765):
+def install_instance(
+    bundle,
+    *,
+    instance_id,
+    roles,
+    root=None,
+    server_url=None,
+    port=8765,
+    runner_python=None,
+    runtime_source=None,
+):
     _supported_host()
+    runner_content = RUNNER
+    if runtime_source is not None:
+        # The instance gets its own copy of the interpreter runtime so a package
+        # upgrade or removal cannot pull the interpreter out from under a live
+        # service. runner_python is then resolved inside this copy, after the
+        # release directory exists, so the shebang never names a package path.
+        runtime_source = Path(runtime_source)
+        if not runtime_source.is_dir() or runtime_source.is_symlink():
+            raise InstallationError("runtime source must be a plain directory")
+    if runner_python is not None:
+        runner_python = Path(runner_python)
+        if (
+            not runner_python.is_absolute()
+            or any(char.isspace() for char in str(runner_python))
+            or len(str(runner_python).encode()) > 120
+        ):
+            raise InstallationError("runner Python must be an executable absolute shebang path")
+        # Without a private runtime the caller must already point at a real
+        # executable; with one, the copy is checked once it exists.
+        if runtime_source is None and (
+            not runner_python.is_file() or not os.access(runner_python, os.X_OK)
+        ):
+            raise InstallationError(
+                "runner Python must be an executable absolute shebang path"
+            )
+        runner_content = f"#!{runner_python}\n" + RUNNER.split("\n", 1)[1]
     instance_id = _identity(instance_id)
     roles = sorted(set(roles))
     if not roles or any(r not in ROLES for r in roles):
@@ -415,8 +522,22 @@ def install_instance(bundle, *, instance_id, roles, root=None, server_url=None, 
     )
     try:
         root.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as exc:
+        raise InstallationError("cannot create instance; destination already exists") from exc
+    except OSError as exc:
+        raise InstallationError(f"cannot create instance directory (errno {exc.errno})") from exc
+    try:
         with _lock(root):
-            active = _prepare(root, bundle, manifest, roles)
+            active = _prepare(root, bundle, manifest, roles, runtime_source=runtime_source)
+            if runtime_source is not None:
+                # Point the stable entry at this release's own interpreter, not
+                # at the package path, so the instance survives package removal.
+                private_python = (
+                    root / "releases" / active["release"] / "runtime" / "bin" / "python3.13"
+                )
+                if not private_python.is_file() or not os.access(private_python, os.X_OK):
+                    raise InstallationError("private runtime has no executable interpreter")
+                runner_content = f"#!{private_python}\n" + RUNNER.split("\n", 1)[1]
             (root / "config").mkdir()
             for role in roles:
                 (root / "state" / role).mkdir(parents=True)
@@ -433,14 +554,34 @@ def install_instance(bundle, *, instance_id, roles, root=None, server_url=None, 
             }
             _json(root / "config" / "roles.json", config)
             _json(root / "instance.json", {"format_version": 1, "instance_id": instance_id})
+            # The stable entry is the shell launcher; the Python body lives in a
+            # sibling file so it carries no shebang and cannot be started directly
+            # with a stale interpreter.
+            runner_body = root / "run-runner"
             runner = root / "run"
-            runner.write_text(RUNNER, encoding="utf-8")
-            runner.chmod(0o755)
+            if runtime_source is None:
+                # No private runtime to address, so keep the historical single
+                # file runner. A launcher here would name an interpreter that
+                # does not exist and the instance could never start.
+                runner.write_text(runner_content, encoding="utf-8")
+                runner.chmod(0o755)
+            else:
+                # The stable entry is the shell launcher; the Python body lives in
+                # a sibling file so it carries no shebang and cannot be started
+                # directly with a stale interpreter.
+                runner_body.write_text(RUNNER_BODY, encoding="utf-8")
+                runner_body.chmod(0o755)
+                runner.write_text(LAUNCHER, encoding="utf-8")
+                runner.chmod(0o755)
+                # Pointer first, metadata second, both under the installation
+                # lock. A crash between them leaves the pointer naming a release
+                # that active.json does not describe, which RUNNER rejects.
+                _write_pointer(root, active["release"])
             _json(root / "active.json", active)
         return {"instance_root": str(root), **active}
     except OSError as exc:
         raise InstallationError(
-            "cannot create instance; destination must not already exist"
+            f"instance installation failed (errno {exc.errno}); partial instance retained"
         ) from exc
 
 
@@ -477,13 +618,29 @@ def rebuild_instance(root, *, bundle=None):
             manifest = inspect_bundle(source)
             if _fingerprint(manifest) != active["bundle_sha256"]:
                 raise InstallationError("rebuild requires the identical bundle, not an upgrade")
-            candidate = _prepare(root, source, manifest, roles)
+            # A rebuild must not hand the instance a release it cannot start.
+            # Reuse the live release's private runtime so the new environment is
+            # self-contained; legacy pointer-less instances keep their entry.
+            runtime_source = None
+            if _has_pointer(root):
+                current_runtime = root / "releases" / active["release"] / "runtime"
+                if current_runtime.is_dir() and not current_runtime.is_symlink():
+                    runtime_source = current_runtime
+                else:
+                    raise InstallationError(
+                        "active release has no private runtime; rebuild would break the entrypoint"
+                    )
+            candidate = _prepare(root, source, manifest, roles, runtime_source=runtime_source)
             if "task_output_map_sha256" in active:
                 candidate = {
                     **candidate,
                     "task_output_map_sha256": active["task_output_map_sha256"],
                 }
-            # Last operation: no writes to config/state/identity/runner, no process starts.
+            # Last operations: pointer then metadata, inside the same lock. No
+            # writes to config/state/identity/runner and no process starts, so a
+            # switch only takes effect on the next start by design.
+            if runtime_source is not None:
+                _write_pointer(root, candidate["release"])
             _json(root / "active.json", candidate)
             return {"instance_root": str(root), **candidate}
     except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:

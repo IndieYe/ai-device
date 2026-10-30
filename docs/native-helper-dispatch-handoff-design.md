@@ -1,0 +1,173 @@
+# P1 daemon—更新器持久意图交接设计草案
+
+状态：设计待实现、待隔离验证；生产新 job 派发继续 default-deny。与 `native-helper-peer-protocol-review.md`、`native-lifecycle-p0-design.md` 及 `packages/device-runtime/native/HELPER.md` 一起阅读。此草案不改变普通用户权限、包覆盖保护、真实部署或 P2—P5 授权。
+
+## 前提和当前缺口
+
+用户已确认：helper 运行或存在未终态事务期间，管理员不替换 registry、必要祖先与挂载；不能确认则拒绝启动或恢复。迁移需维护窗口、停用旧入口、确认进程和事务收口，再按另行设计协议处理。旧测试 helper 手动退休，不自动迁移其台账。该前提是可信管理员的操作约束，不是对恶意 root 的 OS 防护。
+
+当前 daemon 持 registry 目录独占锁与原 daemon 文件锁；`start` 在实例锁和 package SH 下检查 job/apply intent。独立 dispatch 目前在创建 intent 前无条件拒绝；其后面的 dormant 路径会在实例锁和 package EX 下保存 job intent，释放锁后调用 systemd。当前 helper socket 同时允许 root 和登记用户使用有限动作，因此不能让登记用户继承 root 更新权限。`scoped_helper_unit_peer` 仅只读观察，不证明候选字节或约束后续不可逆操作。
+
+## 推荐职责分离
+
+1. **监督器和受控 helper**：独立 bootstrap 验证实际候选字节，在受控启动中绑定启动实例与进程；监督器与子进程持有同一个目录/daemon 锁描述，运行和退出语义须另行实现。已确认维护前提下，目录锁限制同时存在的合规 daemon 和 socket 恢复；锁的持有或 peer 自报本身不证明运行代码。
+2. **root 更新管理方**：负责准备、审批、明确目标操作及请求，不自己取得 daemon 长期持有的目录 EX 锁；在同一活连接上核查被受控监督器证明的 daemon 身份，失败即拒绝。管理员本地调用和已有远程升级的单独授权仍需满足，不得把普通用户自启或 `allow_upgrade` 推导为更新授权。
+3. **daemon 作为 intent 提交协调者**：可考虑新增严格、版本化的 root-only 交接消息，**以 socket 接收时内核 peer UID=0 校验**，不接受客户端自报 UID、路径、命令或服务。现有普通用户可调用的 `query/start/reconcile/resolve-*` 权限不变。不得因为消息经受信连接就自动拥有所有更新权限；准备、批准和操作范围须由已存在的权威状态在锁内复核。
+4. **独立 worker**：由受控事务快照运行，不依赖 daemon 活着；运行前取得实例锁→package EX→service 锁，重读固定 operation 的 intent/批准/snapshot，验证未关闭、无冲突且准确匹配。它不需要重新获得 daemon 长期目录 EX 锁，但其所有相关路径与持久意图必须位于同一已确认稳定的 registry；需要显式验证这一假设及所有入口。
+
+具体实现不能仅把现有 `dispatch_job` 搬进 `Helper.handle`：后者已持实例锁，`dispatch_job` 会再次取实例锁而冲突。须拆出明确的锁内核心或协调事务入口，统一一次锁序，禁止在持实例锁时回调重新取得同一锁。root-only 验证须在对普通客户端授权前分支，且不得共享宽松默认逻辑。
+
+
+
+### 已拆出的私有锁内准备（未接入受控 handler）
+
+现有 `dispatch_job` 将已持实例事务内的批准复核、已有 intent 观察、默认拒绝、包锁内检查及 intent 持久化拆至私有 `_prepare_dispatch_locked`；返回待派发参数后由原调用方退出实例事务，再执行固定 systemd-run。该函数不再重入实例事务，也不自行执行外部动作；管理员和 Debian 适配器检查及生产默认拒绝仍在，既有 intent 的同 ID 观察仍不重派。
+
+现有 `Updates._transaction_locked` 可在调用方已持有规范实例锁时，复用相同的 ID 检查、绑定读取、updates 目录可信检查及 registry 目录 fsync，生成无歧义 stem；原 `_transaction` 在持锁后调用它。该私有初始化也不证明调用方持锁或消息来源；须全程持有与 helper 共用的真实实例租约，不能接收消息自报的绑定或路径。局部测试将它与 `_prepare_dispatch_locked` 串联，但尚未接入生产消息或建立受控身份。
+
+这是受控交接的内部结构准备，不是新增授权或可直接使用的 socket 接口。调用者必须持有真实、正确实例事务并提供由该事务生成的绑定和 stem；此私有函数自身无法证明持锁、绑定来源、受控代码、逐消息身份或 invocation。不得把返回的 argv 或 intent 作为已授权或已执行证明；在启动身份、锁交接、逐消息身份及外部 job 生命周期故障矩阵通过前，不能接入 handler 或移除默认拒绝。
+
+
+### 未接入生产监听器的逐段凭据接收组件
+
+`native_helper._receive_root_credential_frame` 是私有接收组件，按单连接单帧逐次 `recvmsg` 检查相同 root PID/UID/GID、有界长度、截断和绝对 deadline；拒绝附带描述符时关闭已交付 FD。它只观察发送字节的内核凭据，不解析业务动作、不调用 handler、不建立受控监督或 invocation 身份、不授权 dispatch；当前 `_serve` 不调用它，原有 socket 协议和权限语义未变。
+
+监听器必须在任何数据排队之前启用 `SO_PASSCRED`，接收端当前开关检查不能追溯证明这一时序；调用方须在成功或失败后关闭连接，不能处理第二帧。进程存活、PID namespace、消息发送者与 handler 执行者、代码身份及持久事务的一致性均须另外证明，不能凭接收结果开启生产 job 门禁。
+
+
+### 未接入监听器的逐凭据只读 query 接线
+
+`_serve_credential_query_once` 使用逐段凭据组件接收单帧，仅接受严格三字段 `query` 和合法 ID，拒绝重复字段、其他动作及额外字段；复用真实 `Helper.handle` 查询，返回一次结果或固定拒绝后关闭连接。它不由生产 `_serve` 调用，未实现受控监督，也不接受 start、job、恢复或其他变更动作。发送者 root 凭据不证明 helper 加载字节、监督器和 invocation，更不能授权未来动作；listener 必须在数据入队前启用 SO_PASSCRED。这个只读接线是局部原型，不替代实际 handler 身份与完整事务交接。
+## 线性化与状态
+
+- `PREPARED`：已经验证来源、准备和 root 批准；不意味着许可派发。
+- `INTENT_DURABLE`：受控 daemon 在实例锁→package EX 下，重新验证绑定、活动/unknown start、批准、snapshot、所有冲突 intent，并把唯一 job intent 用 no-replace、文件 fsync、父目录 fsync 持久发布；内容绑定 instance、operation、prepared/approval、worker snapshot、unit、协议版本和受控启动实例证据。intent 的成功持久发布是在所有参与者均遵守相同包锁和 intent 协议的前提下排除新 start 的线性化点；持久化或响应不确定时按 unknown。
+- **持久化未知与重启缺口**：如果 link 已成功但目录 fsync 未确认，崩溃后 intent 名称可能消失。对当前 dormant `dispatch_job`，代码在 `_save_new` 成功返回后才调用 systemd；隔离单元故障注入显示文件或目录 fsync 抛错时 runner 未被调用，目录失败且文件仍可见时同 ID 不重派。因此，在明确文件系统持久化语义且证明**所有可能引发该外部动作的路径都严格等待成功返回**的前提下，单个“fsync 未返回且文件丢失”并不单独证明存在已派发动作，不应无条件要求额外围栏。然而仍须验证成功返回后持久性、进程崩溃/独立参与者、所有动作入口及原操作 ID 对账；若不能证明上述顺序，必须采用预先 durable 的不干净/事务围栏或等价机制，未知时保持阻塞。当前仅有注入测试，并未证明宿主崩溃、文件系统或全部入口语义。
+- `DISPATCH_UNKNOWN` / `DISPATCH_ACCEPTED`：释放锁后仅针对相同 intent 请求一次固定 systemd unit；响应丢失或进程崩溃保持 unknown。同一 ID 不重派；已存在 intent 必须核验与当前请求全部一致，不能仅因文件存在就视为同一请求。
+- `APPLY_STARTED` / `OUTCOME`：worker 重新取得锁并校验 intent，记录持久 apply intent 后才执行包操作。任何未知、缺 guard 回执或不一致不自动重放、不清 intent，active 与包状态分别观察。
+- `CLOSED/RETIRED`：只允许既有精确 pre-apply close/retire 证据的范围，保持迟到 worker 必须在包锁内检查 close。不得把锁空闲、PID 消失、超时或 systemd unit 不存在当成操作未发生的充分证据。
+
+以上每一步均必须绑定准确摘要和版本，不使用启动实例短寿命 token 替代持久 intent。启动实例失效不能解除已提交围栏；新 daemon 在接收 start 前在 package SH 下检查持久 intent，并保持未知事务封锁。
+
+## 关键故障矩阵
+
+| 时序 | 必需行为 |
+| --- | --- |
+| daemon 验证 peer 前或锁前退出 | 不提交 intent；更新方返回拒绝/未知，查权威状态，不新 ID 自动重试。 |
+| 已取得锁、尚未持久发布 | 锁和进程状态需对账；写入结果不确定时不声称没有 intent。 |
+| 文件已 link、目录 fsync 未确认 | 当前被测 dispatcher 在 `_save_new` 抛错时不调用 runner；文件仍可见则同 ID 不重派。崩溃后名称可能消失，只有在证明所有动作路径均等待成功持久化及相应文件系统语义成立时，才可判断该次未派发；否则需独立 durable 围栏或等价机制并保持阻塞。 |
+| intent durable 后、响应或 systemd 调用前 daemon 退出 | intent 持续围栏；管理方查询原 ID，不能仅凭未见响应重派。 |
+| systemd 调用已受理但回执丢失 | 原 ID unknown；查询对应 unit/job、intent、worker/guard回执和包状态，不重放。 |
+| daemon 重启，旧 guard/worker 仍持锁 | 新 daemon 获目录锁与 socket 后，start 的包 SH 及 intent 检查阻断冲突；缺证据保持 unknown。目录锁不能替代 package guard 或证明 worker 已退出。 |
+| 迟到 worker 与 close 竞争 | 两者在相同实例→包锁下重新检查 close 与 intent；已关闭 worker 必须拒绝。无原子性证明或状态不明则保持封锁。 |
+| registry/祖先/挂载稳定前提不能确认或被违反 | 停止准入和恢复，人工诊断；不能自动重建 registry、删除意图或声称锁有效。运行时检查有竞态，不替代维护前提。 |
+
+## 验收前置
+
+- 先实现受控启动及当前连接、运行实例、systemd invocation 的可信绑定，并覆盖监督器先退出、子进程存活、FD继承和响应丢失。`SO_PEERCRED`、pidfd、FD/inode 和自报各自都不足以单独授权。
+- 明确 root-only 交接方法的可靠认证、可重复操作 ID、无任意路径/命令、版本兼容和普通 UID 负向测试；不扩大现有权限。
+- 验证唯一实例锁序、持久写入故障和竞争：真实多进程/隔离 systemd，故障注入覆盖 intent 前后、fsync 不确定、释放锁/派发间隙、daemon/SIGKILL、guard挂起、迟到worker、宿主重启与显式对账。
+- 完整审查所有 start、注册、恢复、旧维护入口和包事务参与者；旧 helper 手动退休与新协议启用是不同门禁。
+- 新 schema 与已有 close/retire/recovery 的兼容必须明确；不为迁移删除历史台账。正式信任根、RPM、准确包钩子授权、激活和其他 P1 缺口仍需分别完成。任何局部设计/测试不解除生产 default-deny。
+
+
+## 已执行 job 对账的观察窗口限制
+
+现有 `recover_job` 在进入 `Updates.recover` 之前读取 systemd unit 的终态；`Updates.recover` 随后在实例锁和 package EX 下重新核对 job intent 摘要、批准、sender 回执和实际包状态并写恢复证据。六字段严格解析只能拒绝格式不确定，**不把观察与锁内恢复变成原子操作**：当前未把同一 systemd InvocationID 与受控 worker 身份绑定，也不能仅凭锁证明 unit 在观察后未被重启或替换。事后再观察无法撤销已写入的恢复证据；简单前后对比也不能消除检查与提交之间的竞态。
+
+现有 apply intent 已存在时同 ID 迟到 worker 走观察而不重放（实施记录第134节），且恢复证据本身不解除 intent、启动围栏或授权新 ID；这些约束降低了局部风险，但不证明所有并发入口、unit 身份或宿主崩溃恢复。将来启用派发前须为固定 invocation、受控 worker 和不可重放的持久终态设计可验证的协调协议，覆盖恢复锁期间竞态及失败后仍为 unknown；不凭当前只读快照开放派发。
+
+
+### 已复现：终态过期后仍写恢复证据
+
+实施记录第159节以准确 cf18a80 包、隔离 systemd 和测试专属有限延迟，捕获真实终态后重启测试 unit，并在 unit `activating` 时向 `recover_job` 交还旧观察；实际写出 recovery 与 job-recovery。原 intent/fence 保留、active 不变；没有证明真实包动作重复。由此确认观察窗口是可复现限制，不能只因前后快照一致或 package lock 空闲而开放生产派发。真正修复需要同一受控 invocation 的完成证明和与恢复写入共用的可验证协调；尚未实现。
+
+
+### 待验证的 worker / 恢复协调方案（设计，不是已实现契约）
+
+本节是对第159节竞态的候选方案，并非生产启用决定。目标不是让 systemd 的一次观察“永远保持终态”，而是在允许发布可用恢复结论前，证明所有被授权的执行入口都无法再对该事务执行包动作。旧 snapshot 无此约定时不能推断它会遵守新规则；现有旧 job、unknown 和已写回执保持原样并继续封锁，不自动迁移或删除。
+
+1. **绑定与准入**：新协议的持久 job intent 必须明确协议版本、instance/operation、批准和候选摘要、固定 worker snapshot 及受控启动实例标识。只能在证明实际处理者和版本受控、管理员维护前提满足且所有参与入口兼容后创建；生产 default-deny 在前置验证完成前不变。记录 systemd InvocationID 可辅助定位，但文本字段本身不是身份认证。
+2. **统一竞争锁与迟到拒绝**：worker 每次入口，包括重启和同 ID 重入，必须在实例管理租约→package EX 下重验完整 intent、批准、协议、持久封闭标记及冲突；若封闭标记存在，在任何包动作之前拒绝或只读返回。旧 worker、直接 apply、恢复及其他写入口必须逐一纳入兼容审计；不能仅修改新 worker 而推断旧 snapshot 受约束。
+3. **终态证明**：sender/guard 的退出证明只覆盖被其约束并实际回收的进程树；worker 自报退出、锁暂时空闲、systemd Result 或 pidfd 单独均不足。须明确独立事务运行时、子进程/后代、包动作与 inherited FD 的覆盖和持久顺序。guard 异常、回执缺失或目录 fsync 结果不确定时保持 unknown，不能补造成功证明。
+4. **恢复线性化候选**：在相同实例→package EX 保护下，重新校验全部权威证据并以 no-replace 与文件/目录 fsync 发布不可逆的持久封闭标记；只有该标记成功持久化后，允许据明确的完成证据生成恢复结论。成功返回前不得授权后续动作；结果未知时按原 ID 对账，任何冲突保留记录和围栏。该标记不等于包升级成功、许可激活或可重试，也不能覆盖未知的旧 worker 能力。
+5. **故障与竞争验收**：在真实独立进程中验证 worker 在取锁前后、intent 后、包进程与 guard 存活、终态标记写入前后和目录 fsync 不确定时，与恢复同时竞争；确认先获得锁的一方完成后另一方重读标记和全部状态，不重复包动作、不提前提交可用终态。另覆盖同一 unit 重启、新 invocation、父死子活、锁描述符继承或释放、旧 snapshot 迟到、丢响应及显式人工对账；测试须证明真实锁冲突和故障后进程树终结，不以线程调度暂停替代。
+
+**尚未解决**：该方案需要可验证的受控 worker/handler 身份、所有执行入口一致参与和崩溃持久化前提；它不靠记录 InvocationID 或增加一次 `systemctl show` 消除竞态。若无法证明旧 worker 不可执行或无法建立终态证明，则拒绝自动恢复并保持 unknown；管理员处置流程需另行定义，不能擅自删意图、解除包保护或接管旧登记。
+
+
+锁协议初步实验见实施记录第160节：真实独立进程分别验证实例/包锁冲突和恢复先封闭、worker先行动两种 fixture 顺序。实际锁是非阻塞，竞争时拒绝，后续由调用者显式重新执行并重验，不承诺自动等待。该原型未使用真实生产 worker 或完成凭证，不关闭上述待验证前提。
+
+
+第161节对当前源码增加临时默认拒绝：job 专用恢复和带 job 摘要的底层恢复不再写新证据，保留只读诊断、已有记录与围栏。旧冻结 snapshot 不自动获得该门禁；这项收紧不修复旧证据，也不代替上面的受控 worker/终态协议和验收。
+
+
+### 包进程树回执候选（未接入生产）
+
+`native_package_sender.py` 提供未接入任何 dispatch/apply/recovery 的候选 guard：新 intent 显式标注 `debian-package-tree-subreaper-v1`，守卫在启动固定 dpkg 前启用 Linux subreaper，回收收养后代直至 ECHILD，文件 fsync、无覆盖 link、目录 fsync 后发布绑定 intent 的版本化回执。包锁 FD 仅由 guard 保留，dpkg 不继承；协议不使用超时强杀包树。已有回执及协议不匹配在动作前拒绝，但该本地检查不替代锁内的持久 intent 和防重放协调。候选只为独立实验，不承诺它的调用方已经保证 package lease、固定 snapshot 或身份正确。
+
+实施记录第166节的隔离 fixture 验证普通完成、guard 崩溃、旧协议和已有回执拒绝，以及目录 fsync 故障。特别是 guard 崩溃可导致包锁释放但后代活着；缺回执只能保持 unknown。另一个关键边界是 link 后目录 fsync 失败：即使回执当前可读也不能仅凭存在判定已持久发布；可见回执、进程退出码或锁空闲均不单独授权恢复。尚须设计并验证受控观察、崩溃与持久化语义，审计所有旧入口和只读观察对版本的支持，再决定是否接入新动作路径；旧 snapshot 不自动升级，生产派发及恢复门禁不因此开放。
+
+
+### 外部服务管理器委派不属于 subreaper 完成证明
+
+实施记录第178节在无网络的一次性 systemd 容器中，使用未接入生产的候选 guard 和替身 dpkg，让替身通过 `systemd-run` 启动独立 fixture；guard 已完成并发布结构匹配的 tree receipt 时，该 unit 的 MainPID 仍存活且父进程为 PID 1。随后 fixture 显式释放并自然结束。此证据说明 subreaper 到 `ECHILD` 只覆盖其收养的子孙，不覆盖向 systemd 或其他外部管理者委派的工作；并未证明当前真实包钩子发生了这种委派，也未执行真实包动作。
+
+启用任何恢复前必须单独核实受支持包动作与钩子是否存在外部委派，并设计对相关外部工作的可靠绑定与终态证明；不能用一次 unit 观察或只凭回执可见、锁空闲来补足。未知或无法证明时继续保留围栏、默认拒绝。旧 snapshot 不自动获得新约束。
+
+
+### 响应 sender 与动作执行者不是同一事实
+
+实施记录第179节在隔离 systemd 中使用固定 fixture 验证：unit 主进程接收请求后委派子进程完成文件动作、回收子进程并自行发送响应。准确包中的只读 peer scope 在 unit/peer 前后观察一致时成功，`SCM_CREDENTIALS` 的响应发送者也等于 unit 主进程，但 fixture 动作由另一个 PID 完成。它不是生产 helper 的行为证明；它说明即使第177节的真实只读响应 sender 与 peer 一致，也不能倒推出不可逆业务动作的处理者或完整进程树受控。需要单独设计并证明每个动作入口、进程交接、锁与持久终态的联系，不能用响应凭据或事后 unit 快照开放派发与恢复。
+
+
+### 当前源码对既有 job worker 的额外拒绝
+
+第180节在 `Updates.apply` 的锁内新增默认拒绝：带 job intent 摘要且尚无 apply intent 时，即使是既有 job 也不允许启动新动作；已经存在 apply intent 继续只读观察，现有 close 标记保留原拒绝。该防线不改变普通直接 apply 的授权语义，不自动约束已冻结旧 snapshot 或已经运行的 worker，不代表新受控协议完成。未来要解除该门禁，仍需证明实际执行者、受控交接、全部入口和终态协调；不得用测试替身或新源码反推旧 worker 已受约束。
+
+
+### 退休标记可见不等于关闭持久
+
+第182节以真实保存流程故障注入：close 的 hardlink 已可见但目录 fsync 失败；旧退休入口重读可见 close 后仍发布 retired，且退休目录 fsync 也失败；旧结构校验仍返回退休。无法仅凭两个可见文件判断关闭标记在崩溃后仍存在；若之后新事务依赖退休放行，旧 worker 的迟到行为可能不再受该关闭记录约束。实验未模拟掉电，不证明真实竞态已经发生。
+
+在持久关闭及旧 worker 协调的完整协议、恢复和崩溃验收成立前，当前源码拒绝新退休、所有 job intent 均保留包围栏（包括既有结构正确的退休记录）。这不会自动修改旧 helper 或冻结 snapshot 的行为，不能用新代码推断旧进程安全。故障记录保留，不自动删除或放行。
+
+### start sender 的未接入候选
+
+`native_start_sender.py` 提供 `systemd-start-tree-subreaper-v1` 候选，只在直接 systemctl 与被收养后代回收后发布绑定 intent 的结构化回执；独立实验见实施记录第190节。该候选未接入当前 start 或恢复，不能证明 systemd 管理的外部 job 或 unit 完成、回执来源及持久性，也不能在锁空闲或存在回执时解除生产门禁。须先设计绑定受控 handler、invocation、sender、外部 systemd 动作和持久终态的完整协议，并覆盖旧快照、并发与崩溃恢复，再考虑接入。
+
+第191节在一次性隔离 systemd 上运行候选 guard：sender 树回执发布后，fixture unit 仍有 systemd 管理的存活 MainPID 与 InvocationID。该观察不是 Device 故障；它明确区分 sender 已结束与服务仍运行这两类事实，也不提供 invocation 原子绑定或恢复许可。
+
+### root-only 消息的连接身份边界
+
+第199节一次性 Linux fixture 使用真实 Unix listener/connect：root 建立连接后将已连接 FD 继承给降权子进程，子进程发送请求；服务端连接级 `SO_PEERCRED` 仍报告 root 连接创建者，而启用 `SO_PASSCRED` 的 `recvmsg` 得到发送消息的非 root 子进程凭据。该反例需要显式 FD 转交，不证明当前生产客户端发生转交，也不证明当前普通动作存在漏洞。
+
+因此本草案上文“接收时内核 peer UID=0”只能视为连接创建者约束，不能单独视作每个消息的实际发送者或业务动作执行者证明。未来 root-only 交接若依赖连接能力不转交，须明确可信管理员和调用方持有该能力的约束并验证；若需要逐消息身份，必须单独定义分帧、SO_PASSCRED/SCM_CREDENTIALS、凭据缺失或多段数据、进程存活和跨进程交接语义，并与受控 handler、动作和 invocation 绑定一起验证。无论哪种方案，生产新派发与恢复继续默认拒绝，不能据本实验开放权限。
+
+第200节以未接入生产的 Linux fixture 验证一个有限分帧候选：接收端在有任何数据前启用 `SO_PASSCRED`，每次 `recvmsg` 要求唯一完整 `SCM_CREDENTIALS`、相同 PID/UID/GID 且 UID 为 root，限制请求字节、只处理单个换行帧，拒绝截断、无凭据、意外控制数据、混合发送者和不完整帧，拒绝意外 `SCM_RIGHTS` 时关闭已安装 FD。测试覆盖分段与跨身份混合，但不证明生产监听器的启用时机、进程身份持续性、超时/调度、JSON 语义、动作执行者、代码或 systemd invocation；不能替代内核凭据与实际 handler/事务的端到端绑定。接收后的连接应只处理一次并关闭，避免处理同次读取后或后续额外帧。该候选不授予派发权限。
+
+第201节对上述未接入候选使用真实 Unix listener/connect：listener 在 bind/listen 前启用 `SO_PASSCRED`，客户端发送后才 accept，接受 socket 继承开关且可读取预排队 root 发送者凭据；非 root、超长、多帧、半帧断连和停顿超时被拒。单次 recv 超时不构成整帧时限：缓慢分段可让整个请求超过该超时。候选补充单调时钟绝对 deadline，从读取开始限定整帧时间，隔离慢速实验按期拒绝。此 deadline 不含 accept 前排队等待，也不解决线程/事件循环调度、动作执行时间或连接排队容量；实际生产协议仍需定义完整端到端时限并验证。该实验不证明生产 helper 已启用或已绑定动作与 invocation。
+
+第209节修正了现有 close 入口的幂等重试：对内容匹配的既有关闭标记，在原 package EX 锁下重新 fsync 父目录；重试的目录 fsync 再失败则不返回关闭成功。这只解决首次发布文件 fsync 已成功但目录同步结果未知时的重试确认，不证明任意旧文件数据已持久化、实际掉电行为、受控身份或旧 worker 兼容；退休和恢复默认拒绝保持不变。
+
+
+### 查询监督的后代收口候选（设计，尚未实现）
+
+第241节用实际 `Systemd.query` 和测试替身证明：处理进程被终止后查询子进程可继续存活，即使双锁已可重取；直接子回收与监听 FD 不继承不足以证明处理树已停止。新监督候选仍不接入生产，不据此授权任何动作。
+
+候选方向是在专用、单线程、无其他子进程的 Linux 监督者中，在 fork handler **之前**启用并核验 child subreaper；父侧持有原双锁直至 handler 已回收、被收养后代均已完成并被回收，且在受控条件下 `waitpid(-1, WNOHANG)` 确认 ECHILD。必须先验证子孙在原父退出后被该监督者收养的时序；不把空闲锁、直接子 pidfd、单次 `/proc` 扫描、超时或 ECHILD 单独视为权限。保持无人可新增子进程的证明与全部 waiter 归属是 ECHILD 的必要前提。
+
+主动结束仍需安全身份和有界资源策略：禁止仅凭 `/proc` 的裸 PID 或进程组号向可复用身份发信号；要设计并验证对每个受控后代的稳定身份获取、fork/exec 与 PID 复用竞态、不可中断进程、回收失败及未知时持锁。允许先在测试中自然释放有限寿命替身，不能将自然释放实验宣称为强制终止协议。与现有 pidfd 直接子回收的独占 waiter 不得竞争；中间进程活着时不能假设全部后代已收养。控制、监听与租约 FD 的 fork/exec 生命周期需分别证明。
+
+subreaper 只覆盖可被收养的本地后代，无法证明 systemd 或其他外部管理者接收的委派工作完成；监督者 SIGKILL、宿主重启及原锁载体被替换也不受该候选保护。须另外设计可信管理前提下的持久未知状态、可观察诊断及人工处置；永久持锁可能影响可用性。完整协议和故障矩阵未经实现、独立审核和隔离端到端验收前，继续保持 start/job/recovery/包相关生产门禁关闭。
+
+
+### 监督父崩溃后的持久未知围栏（待设计，未授权）
+
+第246节的真实 query handler 测试替身确认监督父 SIGKILL 后，handler 可退出、daemon 双锁可重取，但查询后代仍活着。subreaper 不能跨其自身死亡继续承担收养职责；无持久记录时新进程不能从锁空闲推断旧树收口。现有 start/job 相关的默认拒绝仍有效，不代表已存在完整的 daemon 监督持久围栏。
+
+候选契约必须先冻结覆盖范围和线性化：在持有稳定 registry 的双方租约下，先以 no-replace 和文件/目录 fsync 持久发布不可重用的监督实例意图，完整成功确认后才允许验证器、handler 或可派生子进程启动；任何发布失败或结果未知不得派生新树。每条可能开启、恢复、替换、退休或卸载相关能力的入口需在其正常锁序下查询并拒绝未终态意图，包含旧 CLI、包钩子、daemon 启动和冻结 snapshot；无法覆盖的旧运行环境需管理员在维护窗口手工退休，不能假设旧代码自动理解标记。
+
+结束证据必须绑定准确意图、受控执行者、协议版本和相关工作的完整终态；仍需证明该证据持久发布及外部 systemd 委派的收口。可见 close、锁空闲、PID 不存在、单次 ECHILD 或 link 后 fsync 失败都不单独授权新动作。crash、丢响应、重启、目录 fsync 失败、PID 复用、旧 snapshot 以及并发操作均保留 unknown；不能为重试删除 intent。管理员观察与恢复方式须另行设计并验证，不能根据未完成候选直接开放。
+
+这只是方向，不实现或保证上面的契约；启用 subreaper 与 PIDFD 的当前实验不会自动修复父死亡，不能用于调整既有默认拒绝。
