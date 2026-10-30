@@ -7,7 +7,12 @@ description = "MCP filesystem server using FastMCP"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "pillow>=12.3.0",
+    # The Linux native payload targets glibc 2.17 (CentOS 7 baseline), and Pillow
+    # stopped publishing manylinux_2_17 cp313 x86_64 wheels after 12.2.0 --
+    # 12.3.0 moved to manylinux_2_27. This package reads PNG, JPEG and WEBP
+    # through Image.open/size/load/verify only, all long-stable API, so the
+    # newer line buys nothing here.
+    "pillow>=11.0.0,<=12.2.0",
 ]
 
 [project.optional-dependencies]

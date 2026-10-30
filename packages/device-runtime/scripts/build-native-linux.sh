@@ -532,8 +532,10 @@ publish() {
  tar -xf "\$1" -C "\$work" || { echo "native package post-install: cannot expand \$1" >&2; exit 1; }
  [ -d "\$work/runtime" ] || { echo "native package post-install: \$1 has no runtime" >&2; exit 1; }
  # One backslash-n: the unquoted heredoc halves each escape, so sh's printf sees
- # \\n and emits a newline. The digest is read back with $(cat ...) and compared
- # literally, so a trailing newline has to be the real one, not a backslash-n.
+ # \\n and emits a newline. The digest is read back with cat and compared
+ # literally, so the trailing newline has to be the real one, not a backslash-n.
+ # No backticks or dollar-parens in this block: the spec heredoc is unquoted, so
+ # anything that looks like a command substitution runs at build time.
  printf '%s\n' "\$digest" > "\$work/.payload-sha256"
  chmod 644 "\$work/.payload-sha256"
  [ ! -e "\$2" ] || { echo "native package post-install: \$2 exists without a complete runtime" >&2; exit 1; }
@@ -669,8 +671,9 @@ exit 0
 # exists and both managers can verify it.
 #
 # The earlier layout owned the staging trees instead. They never exist after
-# installation, so `rpm -V` reported every payload file missing and each upgrade
-# printed one "remove failed" per file for the previous version's paths.
+# installation, so rpm -V reported every payload file missing and each upgrade
+# printed one "remove failed" per file for the previous version's paths. No
+# backticks here: this heredoc is unquoted, so they would run at build time.
 # %ghost was tried and rejected: it stops shipping the files at all (measured:
 # 106MB -> 723KB).
 /opt/ai-device/payloads/$tree.tar
