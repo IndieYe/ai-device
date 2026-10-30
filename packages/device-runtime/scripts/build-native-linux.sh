@@ -22,15 +22,22 @@ mkdir -p "$output"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 root=$work/root
-home=/opt/ai-device/packages/$tree
-mkdir -p "$root$home" "$root/usr/bin"
-cp -R "$payload/." "$root$home/"
-tar -xzf "$archive" -C "$root$home"
-mv "$root$home/python" "$root$home/runtime"
+home_final=/opt/ai-device/packages/$tree
+# The package unpacks into a staging path that neither package manager manages as
+# a versioned tree. dpkg and rpm delete files they own before unpacking the new
+# version, so unpacking directly into the live tree lets a running caller observe
+# a half-written interpreter. The post-install step renames the finished tree into
+# place instead, which is atomic within one filesystem.
+stage=/opt/ai-device/.staging/$tree
+stage_boot=/opt/ai-device/.staging-bootstrap/$tree
+mkdir -p "$root$stage" "$root$stage_boot" "$root/usr/bin"
+cp -R "$payload/." "$root$stage/"
+tar -xzf "$archive" -C "$root$stage"
+mv "$root$stage/python" "$root$stage/runtime"
 env -i PATH=/usr/bin:/bin HOME="$work" TMPDIR="$work" \
- "$root$home/tools/uv" pip install --offline --no-cache --no-config --system \
- --python "$root$home/runtime/bin/python3.13" --no-index --no-deps --link-mode copy \
- "$root$home/bundle/wheels/"*.whl "$root$home/bundle/dependencies/"*.whl > "$work/bootstrap.log" 2>&1
+ "$root$stage/tools/uv" pip install --offline --no-cache --no-config --system \
+ --python "$root$stage/runtime/bin/python3.13" --no-index --no-deps --link-mode copy \
+ "$root$stage/bundle/wheels/"*.whl "$root$stage/bundle/dependencies/"*.whl > "$work/bootstrap.log" 2>&1
 cat > "$root/usr/bin/ai-device-native-install" <<'EOF'
 #!/bin/sh
 set -eu
@@ -41,16 +48,15 @@ sed -i "s#__TREE__#$tree#g" "$root/usr/bin/ai-device-native-install"
 chmod 755 "$root/usr/bin/ai-device-native-install"
 # Independent standard-library-only administrator bootstrap, never client imports.
 bootstrap=/opt/ai-device/bootstrap/$tree
-mkdir -p "$root$bootstrap"
 # Exclude upstream bytecode while creating this new bootstrap, not by altering
 # an existing installation. Candidate identity checks require source-only code.
-tar --exclude='*/__pycache__' --exclude='*.pyc' --exclude='*.pyo' -xzf "$archive" -C "$root$bootstrap"
-mv "$root$bootstrap/python" "$root$bootstrap/runtime"
-site="$root$bootstrap/runtime/lib/python3.13/site-packages"
+tar --exclude='*/__pycache__' --exclude='*.pyc' --exclude='*.pyo' -xzf "$archive" -C "$root$stage_boot"
+mv "$root$stage_boot/python" "$root$stage_boot/runtime"
+site="$root$stage_boot/runtime/lib/python3.13/site-packages"
 rm -rf "$site"
 mkdir -p "$site/device_runtime"
 for module in __init__.py entrypoint.py native_helper.py management_lock.py native_bootstrap.py; do
- cp "$root$home/runtime/lib/python3.13/site-packages/device_runtime/$module" "$site/device_runtime/"
+ cp "$root$stage/runtime/lib/python3.13/site-packages/device_runtime/$module" "$site/device_runtime/"
 done
 # The entrypoint resolves the versioned bootstrap through the pointer rather
 # than naming one build's tree. A hard-coded path is what made an upgrade leave
@@ -100,12 +106,12 @@ sed -i "s#__TREE__#$tree#g" "$root/usr/bin/ai-device-native-helper"
 chmod 755 "$root/usr/bin/ai-device-native-helper"
 # Upstream CPython files can be group-writable. Published system programs must
 # not be writable by the client or group before a root helper trusts them.
-chmod -R go-w "$root$home"
-chmod -R go-w "$root$bootstrap"
+chmod -R go-w "$root$stage"
+chmod -R go-w "$root$stage_boot"
 # Building the bootstrap imports CPython modules, which leaves __pycache__ trees
 # inside the payload. Bytecode belongs to the running interpreter, not to the
 # package, so ship a clean tree and let erase handle only caches created later.
-find "$root$home" "$root$bootstrap" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
+find "$root$stage" "$root$stage_boot" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
 # Guard the existing layout with the classifier that ships in this package.
 # dpkg runs preinst before unpacking, so our own tree is not on disk yet and the
 # only interpreter present belongs to the payload being replaced. An older
@@ -113,7 +119,7 @@ find "$root$home" "$root$bootstrap" -type d -name __pycache__ -prune -exec rm -r
 # module on exactly the hosts that need to upgrade. Emit the classifier as a
 # standalone script next to the hook and run it with whatever interpreter
 # exists: one authoritative source, no dependency on the installed version.
-cp "$root$home/runtime/lib/python3.13/site-packages/device_runtime/native_layout.py" "$work/classify.py"
+cp "$root$stage/runtime/lib/python3.13/site-packages/device_runtime/native_layout.py" "$work/classify.py"
 cat > "$work/preflight" <<'EOF'
 #!/bin/sh
 set -eu
@@ -154,17 +160,43 @@ EOF
  cp "$work/preflight" "$root/DEBIAN/preinst"
  cp "$work/classify.py" "$root/DEBIAN/classify.py"
  # Publishing the pointer here is what closes the upgrade window on the package
- # side: unpacking replaced the versioned tree, and until this runs the old
- # pointer (if any) names a directory that no longer exists.
+ # side. Both trees arrive in a staging path the package managers do not treat as
+ # a versioned layout, so the live trees are never partially written: each rename
+ # below is atomic within the filesystem, and the pointer flips only after both
+ # are in place.
  cat > "$root/DEBIAN/postinst" <<'EOF'
 #!/bin/sh
 set -eu
-root=/opt/ai-device/bootstrap
+stage=/opt/ai-device/.staging/__TREE__
+stage_boot=/opt/ai-device/.staging-bootstrap/__TREE__
+pkg=/opt/ai-device/packages/__TREE__
+boot=/opt/ai-device/bootstrap/__TREE__
 wanted=__TREE__
-[ -d "$root/$wanted/runtime" ] || {
- echo "native package post-install: bootstrap directory is missing" >&2
- exit 1
+mkdir -p /opt/ai-device/packages /opt/ai-device/bootstrap
+# dpkg runs this hook again on a retry or a repair, by which time the staged trees
+# are already published. Publishing twice must be a no-op, not a failure: an
+# interrupted earlier run that got the rename done but not the pointer is exactly
+# the case this hook exists to finish.
+publish() {
+ stage=$1; final=$2
+ if [ -d "$final/runtime" ]; then
+  [ ! -e "$stage" ] || {
+   echo "native package post-install: $stage and $final both exist" >&2
+   exit 1
+  }
+  return 0
+ fi
+ [ -d "$stage/runtime" ] || {
+  echo "native package post-install: staged tree $stage is missing" >&2
+  exit 1
+ }
+ # A tree that is present but incomplete would be overwritten by this rename,
+ # which is what the staging split is meant to prevent. Refuse instead.
+ mv "$stage" "$final"
 }
+publish "$stage" "$pkg"
+publish "$stage_boot" "$boot"
+root=/opt/ai-device/bootstrap
 tmp=$(mktemp "$root/.current-XXXXXX")
 printf '%s\n' "$wanted" > "$tmp"
 chmod 644 "$tmp"
@@ -353,10 +385,23 @@ end
 # The spec is written through an unquoted heredoc so the tree name is baked in,
 # which means every other $ must be escaped to survive until install time.
 root=/opt/ai-device/bootstrap
-if [ ! -d "\$root/__TREE__/runtime" ]; then
- echo "native package post-install: bootstrap directory is missing" >&2
- exit 1
-fi
+stage=/opt/ai-device/.staging/__TREE__
+stage_boot=/opt/ai-device/.staging-bootstrap/__TREE__
+pkg=/opt/ai-device/packages/__TREE__
+boot=/opt/ai-device/bootstrap/__TREE__
+mkdir -p /opt/ai-device/packages /opt/ai-device/bootstrap
+# Same idempotence as the dpkg postinst: a retry after a completed rename must
+# finish the pointer instead of failing on the tree it already published.
+publish() {
+ if [ -d "\$2/runtime" ]; then
+  [ ! -e "\$1" ] || { echo "native package post-install: \$1 and \$2 both exist" >&2; exit 1; }
+  return 0
+ fi
+ [ -d "\$1/runtime" ] || { echo "native package post-install: staged tree \$1 is missing" >&2; exit 1; }
+ mv "\$1" "\$2"
+}
+publish "\$stage" "\$pkg"
+publish "\$stage_boot" "\$boot"
 tmp=\$(mktemp "\$root/.current-XXXXXX")
 printf '%s\\n' "__TREE__" > "\$tmp"
 chmod 644 "\$tmp"

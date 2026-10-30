@@ -3,7 +3,8 @@
 The previous hooks refused any existing layout, which was correct while no
 upgrade path existed but also meant a registered instance could never move to a
 new package. The rule these tests pin is narrower: refuse what cannot be
-classified, allow one complete versioned tree to gain a sibling.
+classified. The bootstrap pointer decides what is installed, and it may name one
+tree while retired trees from earlier upgrades stay beside it.
 """
 
 from pathlib import Path
@@ -38,6 +39,12 @@ def _bootstrap(bootstrap, name="0.2.2-native1"):
     return directory
 
 
+def _pointer(bootstrap, name="0.2.2-native1"):
+    """Publish the live pointer the way the post-install step does."""
+    bootstrap.mkdir(parents=True, exist_ok=True)
+    (bootstrap / "current").write_text(name + "\n")
+
+
 def test_empty_layout_is_a_fresh_install(roots):
     assert layout.classify()["kind"] == "empty"
 
@@ -46,11 +53,13 @@ def test_one_complete_versioned_payload_is_an_upgrade(roots):
     packages, bootstrap = roots
     _payload(packages)
     _bootstrap(bootstrap)
+    _pointer(bootstrap)
 
     observation = layout.classify()
 
     assert observation["kind"] == "upgrade"
     assert observation["packages"] == ["0.2.2-native1"]
+    assert observation["live"] == "0.2.2-native1"
 
 
 def test_incomplete_payload_is_refused(roots):
@@ -58,6 +67,7 @@ def test_incomplete_payload_is_refused(roots):
     packages, bootstrap = roots
     (packages / "0.2.2-native1").mkdir(parents=True)
     _bootstrap(bootstrap)
+    _pointer(bootstrap)
 
     with pytest.raises(layout.LayoutError, match="incomplete"):
         layout.classify()
@@ -67,19 +77,50 @@ def test_incomplete_bootstrap_is_refused(roots):
     packages, bootstrap = roots
     _payload(packages)
     (bootstrap / "0.2.2-native1").mkdir(parents=True)
+    _pointer(bootstrap)
 
     with pytest.raises(layout.LayoutError, match="incomplete"):
         layout.classify()
 
 
-def test_two_versions_are_refused(roots):
-    """Without a transaction record we cannot tell which tree is live."""
+def test_a_retired_tree_beside_the_live_one_is_allowed(roots):
+    """An upgrade publishes a new tree and leaves the old one on disk.
+
+    The pointer says which is live, so a second tree is accounted for. Refusing
+    it would make every completed upgrade refuse the next one.
+    """
     packages, bootstrap = roots
     _payload(packages, "0.2.2-native1")
     _payload(packages, "0.3.0-native2")
+    _bootstrap(bootstrap, "0.2.2-native1")
+    _bootstrap(bootstrap, "0.3.0-native2")
+    _pointer(bootstrap, "0.3.0-native2")
+
+    observation = layout.classify()
+
+    assert observation["kind"] == "upgrade"
+    assert observation["live"] == "0.3.0-native2"
+    assert observation["packages"] == ["0.2.2-native1", "0.3.0-native2"]
+
+
+def test_trees_without_a_pointer_are_refused(roots):
+    """An interrupted publish leaves trees but no live pointer."""
+    packages, bootstrap = roots
+    _payload(packages)
     _bootstrap(bootstrap)
 
-    with pytest.raises(layout.LayoutError, match="exactly one"):
+    with pytest.raises(layout.LayoutError, match="pointer"):
+        layout.classify()
+
+
+def test_pointer_naming_an_absent_tree_is_refused(roots):
+    """A pointer must name a tree that is actually installed on both sides."""
+    packages, bootstrap = roots
+    _payload(packages, "0.2.2-native1")
+    _bootstrap(bootstrap, "0.2.2-native1")
+    _pointer(bootstrap, "0.9.9-absent")
+
+    with pytest.raises(layout.LayoutError, match="absent"):
         layout.classify()
 
 
@@ -123,6 +164,7 @@ def test_reinstalling_the_same_version_is_refused(roots, capsys):
     packages, bootstrap = roots
     _payload(packages)
     _bootstrap(bootstrap)
+    _pointer(bootstrap)
 
     assert layout.main(["native_layout", "check", "0.2.2-native1"]) == 1
     assert "already installed" in capsys.readouterr().err
@@ -132,6 +174,7 @@ def test_adding_a_new_version_is_allowed(roots, capsys):
     packages, bootstrap = roots
     _payload(packages)
     _bootstrap(bootstrap)
+    _pointer(bootstrap)
 
     assert layout.main(["native_layout", "check", "0.3.0-native2"]) == 0
     assert "adding 0.3.0-native2" in capsys.readouterr().err
@@ -177,6 +220,7 @@ def test_ordinary_instance_does_not_block_an_upgrade(tmp_path, roots, monkeypatc
     packages, bootstrap = roots
     _payload(packages)
     _bootstrap(bootstrap)
+    _pointer(bootstrap)
     root = tmp_path / "instances"
     monkeypatch.setattr(layout, "INSTANCE_ROOT", root)
     monkeypatch.setattr(layout, "INSTANCE_MARKERS", (tmp_path / "manager",))

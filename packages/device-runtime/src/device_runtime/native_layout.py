@@ -101,10 +101,20 @@ def _bootstrap_complete(bootstrap_name):
 def classify():
     """Describe the current layout in terms the hooks can act on.
 
+    The pointer is the single source of truth. A host is installed when
+    ``bootstrap/current`` names a complete tree and the matching payload tree is
+    complete too; that is the only claim the package needs before adding another
+    version beside it.
+
+    Several versioned trees may coexist. An upgrade publishes its own tree and
+    then moves the pointer, so the outgoing version stays on disk until the
+    operator retires it. Refusing a second tree would make every completed
+    upgrade refuse the next one, which is what the previous rule did.
+
     Returns a dict with ``kind``:
 
     ``empty``     nothing installed
-    ``upgrade``   one complete versioned payload, safe to add another beside it
+    ``upgrade``   a pointer naming one complete payload, safe to add another
     """
     # /opt/ai-device/instances is where a normal install puts its instance, so
     # requiring it to be absent refused every upgrade on a host that had one --
@@ -122,29 +132,38 @@ def classify():
     packages = _versioned_directories(PACKAGES)
     bootstraps = _versioned_directories(BOOTSTRAP)
 
+    # Nothing on disk at all: a fresh install, with nothing to classify.
     if not packages and not bootstraps:
         return {"kind": "empty", "packages": [], "bootstraps": []}
 
-    if len(packages) != 1 or len(bootstraps) != 1:
-        # More than one version already present means a previous upgrade or a
-        # manual copy left state we have no transaction record for. Adding a
-        # third tree without knowing which one is live would make the bootstrap
-        # pointer ambiguous, so stop and require an explicit decision.
+    # Trees without a pointer and a pointer without trees are both states this
+    # package cannot account for. A completed install always has both, because
+    # the post-install step publishes the pointer after the trees are in place.
+    pointer = BOOTSTRAP / POINTER_NAME
+    if not bootstraps or not pointer.exists():
         raise LayoutError(
-            "expected exactly one versioned payload and bootstrap; "
+            "versioned trees exist but the bootstrap pointer does not name one; "
             f"found packages={packages} bootstrap={bootstraps}"
         )
+    live = pointer.read_text(encoding="utf-8").strip()
 
-    package, bootstrap = packages[0], bootstraps[0]
-    if not _looks_complete(package):
-        raise LayoutError(f"payload {package} is incomplete")
-    if not _bootstrap_complete(bootstrap):
-        raise LayoutError(f"bootstrap {bootstrap} is incomplete")
+    # The pointer must name a tree that is actually present and complete on both
+    # sides. A pointer naming anything else means an interrupted publish, and
+    # adding a version on top of that would hide it.
+    if live not in bootstraps:
+        raise LayoutError(f"bootstrap pointer {live} names no installed bootstrap")
+    if live not in packages:
+        raise LayoutError(f"bootstrap pointer {live} names no installed payload")
+    if not _looks_complete(live):
+        raise LayoutError(f"payload {live} is incomplete")
+    if not _bootstrap_complete(live):
+        raise LayoutError(f"bootstrap {live} is incomplete")
 
     return {
         "kind": "upgrade",
-        "packages": [package],
-        "bootstraps": [bootstrap],
+        "packages": packages,
+        "bootstraps": bootstraps,
+        "live": live,
         "package_complete": True,
         "bootstrap_complete": True,
     }
@@ -167,16 +186,18 @@ def main(argv):
         print(json.dumps(observation, sort_keys=True))
         return 0
     if target in observation["packages"]:
-        # Reinstalling the same version in place is not an upgrade; dpkg would
-        # overwrite files this package already owns while instances still run
-        # from them. Refuse and let the operator choose an explicit path.
+        # Reinstalling a version that is already on disk is not an upgrade; dpkg
+        # would overwrite files this package already owns while instances still
+        # run from them. Refuse and let the operator choose an explicit path.
+        # This now covers retired trees too: they stay beside the live one, so
+        # the check no longer relies on there being exactly one tree.
         print(
             f"native package pre-install refused: {target} is already installed",
             file=sys.stderr,
         )
         return 1
     print(
-        f"native package pre-install: adding {target} beside {observation['packages'][0]}",
+        f"native package pre-install: adding {target} beside current {observation['live']}",
         file=sys.stderr,
     )
     return 0

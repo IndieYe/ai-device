@@ -10,9 +10,11 @@ def test_builder_uses_isolated_offline_uv_for_explicit_runtime():
     builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
     source = builder.read_text()
     assert 'env -i PATH=/usr/bin:/bin HOME="$work" TMPDIR="$work"' in source
-    assert '"$root$home/tools/uv" pip install --offline --no-cache --no-config --system' in source
-    assert '--python "$root$home/runtime/bin/python3.13" --no-index --no-deps --link-mode copy' in source
-    assert '"$root$home/bundle/wheels/"*.whl "$root$home/bundle/dependencies/"*.whl' in source
+    # The payload is assembled in the staging tree; the post-install step renames
+    # it into place so a running caller never sees a half-written interpreter.
+    assert '"$root$stage/tools/uv" pip install --offline --no-cache --no-config --system' in source
+    assert '--python "$root$stage/runtime/bin/python3.13" --no-index --no-deps --link-mode copy' in source
+    assert '"$root$stage/bundle/wheels/"*.whl "$root$stage/bundle/dependencies/"*.whl' in source
     assert ' -m pip ' not in source
 
 
@@ -86,7 +88,7 @@ def test_bootstrap_extract_excludes_bytecode_but_keeps_source(tmp_path):
     builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
     line = next(
         line for line in builder.read_text().splitlines()
-        if line.startswith("tar --exclude=") and '"$root$bootstrap"' in line
+        if line.startswith("tar --exclude=") and '"$root$stage_boot"' in line
     )
     source = tmp_path / "source/python/lib/python3.13/encodings"
     (source / "__pycache__").mkdir(parents=True)
@@ -96,12 +98,12 @@ def test_bootstrap_extract_excludes_bytecode_but_keeps_source(tmp_path):
     archive = tmp_path / "runtime.tar.gz"
     with tarfile.open(archive, "w:gz") as stream:
         stream.add(tmp_path / "source/python", arcname="python")
-    output = tmp_path / "root/bootstrap"
+    output = tmp_path / "root/.staging-bootstrap/0.2.2-native1"
     output.mkdir(parents=True)
     subprocess.run(
         ["sh", "-c", line], check=True,
         env={"PATH": "/usr/bin:/bin", "archive": str(archive), "root": str(tmp_path / "root"),
-             "bootstrap": "/bootstrap"},
+             "stage_boot": "/.staging-bootstrap/0.2.2-native1"},
     )
     extracted = output / "python/lib/python3.13/encodings"
     assert (extracted / "__init__.py").read_text() == "source"
@@ -291,7 +293,7 @@ def test_deb_preflight_carries_its_own_classifier():
     assert '"$here/classify.py" check' in script
     # The classifier must be copied into the control area, not just referenced.
     assert 'cp "$work/classify.py" "$root/DEBIAN/classify.py"' in source
-    assert 'cp "$root$home/runtime/lib/python3.13/site-packages/device_runtime/native_layout.py"' in source
+    assert 'cp "$root$stage/runtime/lib/python3.13/site-packages/device_runtime/native_layout.py"' in source
 
 
 def test_rpm_preflight_matches_deb_protections():
@@ -314,10 +316,11 @@ def test_rpm_preflight_matches_deb_protections():
 
 
 def test_both_package_managers_publish_the_pointer():
-    """An upgrade deletes the old tree, so both managers must repoint it.
+    """Both managers must publish the same way: rename the staged trees, then flip.
 
     dpkg got a postinst first; rpm had nothing, which would have left an RPM
     upgrade with a working package and an entrypoint naming a deleted path.
+    Now both also rename instead of leaving the live tree to be written in place.
     """
     builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
     source = builder.read_text()
@@ -327,10 +330,13 @@ def test_both_package_managers_publish_the_pointer():
 
     spec = source.split("%post", 1)[1].split("%preun", 1)[0]
     assert "mv -f" in spec and "current" in spec
-    # Same guard as dpkg: never point at a tree that is not there. The spec is
-    # an unquoted heredoc, so install-time values are escaped and the tree name
-    # is left as a placeholder for the substitution step.
-    assert '-d "\\$root/__TREE__/runtime"' in spec
+    # Both hooks publish the same way: the packaged trees land in a staging path
+    # the managers do not treat as a versioned layout, and are renamed into place
+    # before the pointer flips. The spec is an unquoted heredoc, so install-time
+    # values are escaped and the tree name stays a placeholder for substitution.
+    for body, prefix in ((deb, ""), (spec, "\\")):
+        assert f'{prefix}$stage' in body or "stage" in body
+        assert "mv" in body
     assert 'sed -i "s#__TREE__#$tree#g" "$work/rpm/SPECS/native.spec"' in source
 
 
