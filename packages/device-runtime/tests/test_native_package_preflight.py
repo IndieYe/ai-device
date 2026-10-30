@@ -474,3 +474,28 @@ def test_wrapper_execs_the_installed_interpreter(tmp_path):
     # The stub interpreter exits 0, which proves exec reached it.
     assert result.returncode == 0
     assert result.stderr == ""
+
+
+def test_staging_ownership_tradeoff_is_documented():
+    """Both managers own paths that %post renames away; that must stay visible.
+
+    Measured on the shipped packages: `dpkg -V` reports the whole payload
+    missing (9762 entries) and an rpm upgrade prints one "remove failed" per
+    file. Installation is still correct, but neither tool can verify payload
+    integrity. This is an accepted tradeoff, not a solved problem, so the
+    builder must keep saying so rather than dropping the note and letting the
+    next reader assume verification works.
+    """
+    builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
+    source = builder.read_text()
+    files = source.split("%files", 1)[1].split("%preun", 1)[0]
+    assert "/opt/ai-device/.staging/$tree" in files
+    # A published tree in the manifest would make the upgrade delete the tree a
+    # running caller is executing, which is what staging exists to prevent.
+    assert "/opt/ai-device/packages/$tree" not in files
+    assert "/opt/ai-device/bootstrap/$tree" not in files
+    # %ghost was tried and rejected: it silently stops shipping the payload.
+    # Only directives count, not the comment recording why it was rejected.
+    directives = [l for l in files.splitlines() if not l.lstrip().startswith("#")]
+    assert not any(l.startswith("%ghost") for l in directives)
+    assert "stops shipping" in files

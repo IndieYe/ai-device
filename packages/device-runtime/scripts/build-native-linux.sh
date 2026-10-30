@@ -498,12 +498,13 @@ drop_caches('/opt/ai-device/bootstrap/$tree')
 # %pretrans guard refuse every later install (dpkg removes its own empty
 # parent directories, rpm only removes what %files owns).
 %dir /opt/ai-device
-# The payload ships into the staging trees and %post renames it into place. rpm
-# therefore owns paths that are gone after %post: on an upgrade it reports one
-# "remove failed" per file and `rpm -V` lists the payload missing. The files are
-# real, so %ghost cannot be used (it would stop shipping them at all); the noise
-# is a known consequence of publishing by rename and does not affect the
-# installed result.
+# The payload ships into the staging trees and %post renames it into place, so
+# both package managers end up owning paths that no longer exist. On dpkg that
+# shows up only as `dpkg -V` listing the whole payload missing; rpm additionally
+# prints one "remove failed" per file during an upgrade. Either way the ownership
+# record is wrong and neither tool can verify payload integrity. %ghost is not a
+# fix for rpm: it stops shipping the files at all (measured: 106MB -> 723KB).
+# Leaving it as is keeps installation correct but gives up verification.
 /opt/ai-device/.staging/$tree
 /opt/ai-device/.staging-bootstrap/$tree
 %dir /opt/ai-device/packages
