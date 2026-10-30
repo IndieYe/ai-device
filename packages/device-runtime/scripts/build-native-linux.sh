@@ -591,7 +591,11 @@ for dir in /opt/ai-device/packages /opt/ai-device/bootstrap \
   if [ -L "\$entry" ] || [ ! -d "\$entry" ]; then continue; fi
   rm -rf "\$entry"
  done
+ # rmdir, not rm -rf: only remove these when empty, so anything a user put here
+ # survives and we never take out a directory we did not create.
+ rmdir "\$dir" 2>/dev/null || true
 done
+rmdir /opt/ai-device 2>/dev/null || true
 exit 0
 
 %files
