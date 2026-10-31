@@ -1,7 +1,9 @@
 # 原生包级升级事务设计
 
-> 状态：设计草案，尚未实现。  
+> 状态：设计草案，尚未实现。
 > 约束：本轮磁盘仅余约 8G，不构建新 DEB/RPM 制品；真实包升级验收留待腾出空间后单独进行。
+>
+> **2026-10-31：** Linux/RPM 已从支持范围移除（见第 8.5 节与 `native-lifecycle-p0-design.md` 第 2 节）。下文 8.1—8.4 的 RPM 实测结论作为历史证据保留，不表示 RPM 仍在交付范围；构建脚本现已默认拒绝产出 rpm。
 
 ## 1. 问题
 
@@ -275,6 +277,8 @@ Staging 发布让两个包管理器都拥有 `%post` 会 rename 走的 `.staging
 - **包级回退**：不提供。升级会删旧树，回退等于重装旧包（见 6.1）。
 - **RPM 真实验收**：已完成。Rocky 9.3 隔离容器内 `dnf install rpm-build` 后实测
   `rpm -i`、`rpm -U` 连续升级、`rpm -e` 与重装；结论见 6.1。
+- **Linux/RPM 支持范围**：2026-10-31 决定不纳入首批交付，原因见 8.5。实测结论不变，
+  但不再作为支持声明；构建脚本默认拒绝产出 rpm。
 
 ## 9. 真实验收记录（2026-10-29）
 
@@ -378,19 +382,30 @@ is-system-running` 返回 `running`）。镜像定义见
 2. 换用户重建实例前要清掉旧 uid 的 `~/.cache/uv`，否则 uv 缓存目录属主不符会
    让安装失败。
 
-### 8.5 RPM 侧的能力缺口（本轮确认，未修复）
+### 8.5 RPM 侧的能力缺口（已决定：不纳入首批交付）
 
 签名候选链**只支持 `linux-amd64-deb`**：
 
-- `native_candidate.py` 的 CLI 与 `prepare_candidate` 调用都把 `target` 写死为
-  `linux-amd64-deb`，并校验 `target != "linux-amd64-deb"` 即报
-  `unsupported native package target`。
+- `native_candidate.py` 的 target 校验对照 `TARGET`（现为 `linux-amd64-deb`），
+  不符即报 `unsupported native package target`。其他调用方（`native_prepare`、
+  `native_update`）统一引用该常量，不再各自写字符串字面量。
 - 解包路径只认 Debian `ar` 归档（`data.tar` / control 三字段），没有 rpm
   `cpio` payload 的对应实现。
 - `native_update.py` 的包事务全部走 `/usr/bin/dpkg-deb`、`dpkg-query`、
   `dpkg --install`，没有 rpm 分支。
 
 因此「RPM 包可安装、可升级、可卸载、可由 systemd 托管」成立，但「RPM 走
-签名 prepare→activate 的受控升级」**不成立**。`0.2.3-3` 这类 RPM 目前只是
-开发制品，不能进入需要验签的交付路径。补齐需要产品决策：是给 candidate 与
-update 增加 rpm(target + cpio 提取) 分支，还是首期 Linux 只交付 DEB。
+签名 prepare→activate 的受控升级」**不成立**。
+
+**决定（2026-10-31）：** 首期 Linux 只交付 DEB，RPM 从支持矩阵移除。理由：P1
+目标本就不含中心升级，而为 RPM 补验签链需要为 candidate 增加 rpm target 与
+cpio 安全提取、为 update 抽出包管理器接口，投入较大且会与 P3 的升级工作重叠。
+
+现有措施：
+
+- `build-native-linux.sh` 默认拒绝产出 rpm（提示 `rpm is not a declared
+  support target`），仅 `DEVICE_NATIVE_ALLOW_UNDELIVERED_RPM=1` 时保留，用于
+  重跑共享布局钩子的快速检查。
+- rpm 分支及其 15 处测试、Rocky systemd 镜像定义均保留：它们是已验能力，删掉
+  只会让后续重启该工作的成本更高。
+- 补链属后续阶段工作，不由改声明替代。

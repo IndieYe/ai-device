@@ -425,7 +425,7 @@ def prepare_runtime_candidate(
         signed,
         trusted_keys,
         release_id=release_id,
-        target="linux-amd64-deb",
+        target=candidate.TARGET,
         source_version=active["release_version"],
         bootstrap_version=bootstrap_version,
     )
@@ -506,7 +506,7 @@ def prepare_runtime_candidate(
                 extracted,
                 trusted_keys=trusted_keys,
                 release_id=release_id,
-                target="linux-amd64-deb",
+                target=candidate.TARGET,
                 source_version=active["release_version"],
                 bootstrap_version=bootstrap_version,
             )

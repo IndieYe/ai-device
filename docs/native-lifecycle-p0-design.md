@@ -19,10 +19,11 @@ P0 冻结的是计划支持范围、接口、状态、权限和验证要求。�
 | 目标 | 包型 | 首批架构 | 基线与服务 | 验收边界 |
 | --- | --- | --- | --- | --- |
 | Ubuntu 24.04 LTS | deb | x86_64/amd64 | 系统 systemd，指定普通用户 | 干净系统安装、更新、卸载及实机恢复 |
-| Rocky Linux 9 | rpm | x86_64 | glibc 2.34，系统 systemd，指定普通用户 | 原生 RPM 事务与实机恢复，不用 Ubuntu 结果替代 |
 | macOS 14 或更新的受支持版本 | pkg | arm64 | 登录级 LaunchAgent；有限系统安装 helper | arm64 实机、登录与休眠恢复、机器重启后登录恢复 |
 
-这是首批新增支持目标，不是“已支持”。macOS x86_64、Linux arm64、CentOS 7/glibc 2.17 原生包不作为本期完成条件；已有相关能力不能回归破坏。后续扩矩阵须新增准确制品和平台验收，不按“同属 Linux”推断。
+**Linux/RPM 不在首批支持范围（2026-10-31 决定）。** 原矩阵含 Rocky Linux 9，但其受控更新无法闭合：验签候选链 `native_candidate` 的 target 固定为 `linux-amd64-deb`，只解 ar 成员并驱动 dpkg；`native_update` 同样只调用 dpkg 工具。实测 RPM 可完成 `rpm -i`/`-U`/`-e` 与 systemd 托管（见 `native-package-upgrade-transaction-design.md` 8.4），但无法进入验签 prepare→activate，属能力半实现。构建脚本据此默认拒绝产出 rpm，仅在设置 `DEVICE_NATIVE_ALLOW_UNDELIVERED_RPM=1` 时保留布局检查用途。补链需要为 candidate 增加 rpm 目标与 cpio 提取、为 update 抽出包管理器接口，属后续阶段工作，不由改声明替代。
+
+这是首批新增支持目标，不是“已支持”。macOS x86_64、Linux arm64、Linux/RPM、CentOS 7/glibc 2.17 原生包不作为本期完成条件；已有相关能力不能回归破坏。后续扩矩阵须新增准确制品和平台验收，不按“同属 Linux”推断。
 
 北京服务器先做身份和系统只读探测；若不匹配矩阵，可申请隔离虚拟机作为相应发行版目标。不得修改服务器系统来迁就计划，也不能把容器与仿真结果充当真实 systemd 验收。既有 glibc 2.17 工作保持独立，集成其修改前重跑安装依赖回归。
 
@@ -88,13 +89,13 @@ macOS 系统程序放 `/Library/Application Support/ai-device/`，对应 bootstr
 
 同一任务只有一个管理锁所有者；远程 prepare 可在不阻塞旧服务的阶段完成，但不同升级、手工包操作、卸载不能并发激活。系统包事务还要取得包管理器原生锁。
 
-Linux `preinst/pretrans` 与 macOS installer preflight 必须在任何替换前联系独立管理器，校验本次事务 ID。手工 `dpkg -i`/`rpm`/Installer 调用使用同一入口：全新安装可完成软件部署后运行用户向导；已有运行实例则在无已批准维护事务时拒绝并给出 `device-runtime manage install` 入口，不能在包钩子里强停。首次安装脚本不能自动配对、开启升级或启动未配置服务。
+Linux `preinst/pretrans` 与 macOS installer preflight 必须在任何替换前联系独立管理器，校验本次事务 ID。手工 `dpkg -i`/Installer 调用使用同一入口：全新安装可完成软件部署后运行用户向导；已有运行实例则在无已批准维护事务时拒绝并给出 `device-runtime manage install` 入口，不能在包钩子里强停。首次安装脚本不能自动配对、开启升级或启动未配置服务。
 
 包脚本不得调用任意网络下载、修改用户数据或自主更换 active。首次安装尚无管理器时，由包内独立、仅用内置运行时的 preflight 完成“无已有实例、无冲突进程、准确平台和路径”的只读核查，post-install 只部署 bootstrap/helper 及待配置状态；不套用已有实例的升级许可。后续更新前把当前 bootstrap 校验复制到管理器拥有、非包管理器移除范围的事务目录，独立 job 从该目录运行；否则包管理器移除旧包文件可能破坏仍活跃的解释器。候选 bootstrap 通过自检后才在后续事务引用切换，关键事务结束前不删除事务运行副本。无人值守时不能临时弹密码后僵停，缺少预授权 helper 就明确阻塞。
 
 ### 4.3 包脚本重入与恢复
 
-包事务标识与预期摘要持久化；脚本重复调用幂等核对同一记录。包事务结果未知时查看 dpkg/rpm/Installer 回执及准确文件摘要，不重复申请另一升级。不手改包数据库，不默认运行系统级修复命令。
+包事务标识与预期摘要持久化；脚本重复调用幂等核对同一记录。包事务结果未知时查看 dpkg/Installer 回执及准确文件摘要，不重复申请另一升级。不手改包数据库，不默认运行系统级修复命令。
 
 | 现场 | 恢复动作 |
 | --- | --- |

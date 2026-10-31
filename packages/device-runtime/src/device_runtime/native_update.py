@@ -430,7 +430,7 @@ class Updates:
                 envelope,
                 trusted_keys,
                 release_id=release_id,
-                target="linux-amd64-deb",
+                target=nc.TARGET,
                 source_version=active["release_version"],
                 bootstrap_version=bootstrap_version,
             )
@@ -441,7 +441,7 @@ class Updates:
                     Path(temporary) / "candidate",
                     trusted_keys=trusted_keys,
                     release_id=release_id,
-                    target="linux-amd64-deb",
+                    target=nc.TARGET,
                     source_version=active["release_version"],
                     bootstrap_version=bootstrap_version,
                 )

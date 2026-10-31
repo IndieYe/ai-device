@@ -1,6 +1,15 @@
 #!/bin/sh
 # Build a local, unsigned development package inside a disposable Linux builder.
 # Inputs: preassembled payload, locked CPython archive, output directory.
+#
+# Delivery scope: only the Debian package is a deliverable. Linux/RPM is not a
+# declared support target, because the signed update path (native_candidate +
+# native_update) only understands Debian packages: its target is fixed to
+# linux-amd64-deb, it extracts ar members, and it drives dpkg. A .rpm installs,
+# upgrades and erases correctly, but it cannot enter the verified update path, so
+# shipping one would hand out a package whose lifecycle is half implemented.
+# The rpm branch stays because it is the fastest way to re-check the shared
+# layout hooks; it refuses unless DEVICE_NATIVE_ALLOW_UNDELIVERED_RPM=1.
 set -eu
 [ "$#" -ge 4 ] && [ "$#" -le 6 ] || { echo 'usage: build-native-linux.sh deb|rpm PAYLOAD RUNTIME_ARCHIVE OUTPUT [TREE [PKGVER]]' >&2; exit 2; }
 kind=$1; payload=$2; archive=$3; output=$4
@@ -14,6 +23,11 @@ case $pkgver in ''|*[!A-Za-z0-9.+~-]*) echo 'PKGVER must be a plain package vers
 rpmver=${pkgver%-*}
 rpmrel=${pkgver##*-}
 [ "$kind" = deb ] || [ "$kind" = rpm ] || exit 2
+if [ "$kind" = rpm ] && [ "${DEVICE_NATIVE_ALLOW_UNDELIVERED_RPM:-0}" != 1 ]; then
+ echo 'native package build refused: rpm is not a declared support target' >&2
+ echo 'only .deb enters the signed update path; set DEVICE_NATIVE_ALLOW_UNDELIVERED_RPM=1 for a layout-only check' >&2
+ exit 1
+fi
 [ "$(uname -m)" = x86_64 ] || exit 2
 # Match native/runtime-lock.json before any extraction/execution.
 [ "$(wc -c < "$archive" | tr -d ' ')" = 35356674 ] || { echo 'runtime size mismatch' >&2; exit 2; }

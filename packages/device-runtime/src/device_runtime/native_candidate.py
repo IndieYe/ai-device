@@ -2,6 +2,12 @@
 
 Trust roots are supplied out of band. The native extra provides cryptography;
 no bundled key, network lookup or executable from the candidate is trusted.
+
+Only Debian packages are a declared support target. `TARGET` is the single place
+that decision lives: creating other artefacts (rpm) is refused at the builder
+because this module extracts ar members and drives dpkg, so an rpm would install
+but have no verified update path. Widening support means adding the extraction
+and package-manager work here and in native_update, not just changing this value.
 """
 
 import argparse
@@ -25,6 +31,8 @@ MAX_PACKAGE = 1_000_000_000
 MAX_EXPANDED = 4_000_000_000
 MAX_MEMBERS = 100000
 MAX_ENVELOPE = 256000
+# The only package target this build supports end to end.
+TARGET = "linux-amd64-deb"
 
 
 class CandidateError(ValueError):
@@ -178,7 +186,7 @@ def verify_release(
     if (
         package["name"] != "ai-device-native-client"
         or package["architecture"] != "amd64"
-        or target != "linux-amd64-deb"
+        or target != TARGET
     ):
         raise CandidateError("unsupported native package target")
     if type(package["size"]) is not int or not 0 < package["size"] <= MAX_PACKAGE:
@@ -541,7 +549,7 @@ def main():
         args.destination,
         trusted_keys=keys,
         release_id=args.release_id,
-        target="linux-amd64-deb",
+        target=TARGET,
         source_version=args.source_version,
         bootstrap_version=args.bootstrap_version,
     )

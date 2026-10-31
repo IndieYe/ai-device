@@ -267,6 +267,11 @@ Linux 首期开放 client 角色，macOS 三角色保持不变。构建 Linux bu
 `bundle build --target-system linux`；默认仍构建 darwin bundle。安装及生命周期
 按主机平台和 bundle 角色校验，不能跨平台安装/恢复，也不支持 Linux center/mcp 正式交付。
 
+**原生包只交付 `.deb`（Ubuntu 24.04 amd64）。** RPM 不在支持范围：验签候选链只接受
+`linux-amd64-deb` 目标并驱动 dpkg，RPM 包能安装和升级但无法进入受控更新路径。
+`scripts/build-native-linux.sh rpm` 因此默认拒绝，仅在
+`DEVICE_NATIVE_ALLOW_UNDELIVERED_RPM=1` 时用于布局检查。
+
 详细边界、Ubuntu Python 3.13 工具链、凭证与容器验收说明见
 [Linux 客户端指南](../../docs/device-linux-client.md)。容器验证不代表公网、systemd、主机重启或其他架构已验收。
 

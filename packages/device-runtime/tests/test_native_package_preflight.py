@@ -106,6 +106,55 @@ def test_deb_preflight_rejects_existing_versioned_layout(tmp_path, existing):
     assert sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*")) == before
 
 
+def test_builder_refuses_rpm_because_only_deb_is_delivered():
+    """rpm is kept for layout checks but must not be produced as a package.
+
+    The signed update path fixes its target to linux-amd64-deb, extracts ar
+    members and drives dpkg. An rpm installs and upgrades, but has no verified
+    update path, so building one as a deliverable would ship a half-implemented
+    lifecycle. The refusal has to happen before any work, not after a build.
+    """
+    builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
+    source = builder.read_text()
+    assert "rpm is not a declared support target" in source
+    assert "DEVICE_NATIVE_ALLOW_UNDELIVERED_RPM" in source
+
+
+def test_builder_rpm_refusal_precedes_extraction():
+    """A refused rpm build must exit before touching the payload or output."""
+    builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
+    source = builder.read_text()
+    guard = source.index("rpm is not a declared support target")
+    # The archive digest check and every tar/uv step come later, so a rejected
+    # build cannot leave a partially assembled tree behind.
+    assert guard < source.index("runtime size mismatch")
+    assert guard < source.index("tar -xzf")
+
+
+def test_builder_rpm_refusal_is_off_by_default(tmp_path):
+    """Run the real guard: unset means refuse, =1 means continue past it."""
+    builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
+    source = builder.read_text()
+    guard = source[
+        source.index('if [ "$kind" = rpm ]') : source.index("[ \"$(uname -m)\" = x86_64 ]")
+    ]
+    script = "set -eu\nkind=rpm\n" + guard
+    refused = subprocess.run(
+        ["/bin/sh"], input=script, text=True, capture_output=True, check=False, env={}
+    )
+    assert refused.returncode == 1
+    assert "rpm is not a declared support target" in refused.stderr
+    allowed = subprocess.run(
+        ["/bin/sh"],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+        env={"DEVICE_NATIVE_ALLOW_UNDELIVERED_RPM": "1"},
+    )
+    assert allowed.returncode == 0
+
+
 def test_rpm_preflight_guards_layout_roots():
     """rpm must classify the layout, not refuse unconditionally.
 
