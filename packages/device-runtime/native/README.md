@@ -67,7 +67,7 @@ macOS 将 target 改为 `darwin-arm64`，使用对应归档。目的目录必须
 
 以 root 运行 `ai-device-native-install --root <new> --instance-id <id> --server-url <url> --username <account> --environment-file <env> [--register [--start]]` 时，会先在子进程降权到 `--username` 创建实例，再以 root 注册 unit，可选 `--start` 直接 daemon-reload/enable/start。不带 `--register` 时行为与之前完全一致。
 
-升级入口 `ai-device-native-update --registry <dir> --instance-id <id> --operation-id <op> --package <deb> --envelope <json> --release-id <id> --bootstrap-version <tree> --stopped` 以 root 运行，内部按 prepare(降权)/prepare-signed/approve/apply/switch-helper/activate(降权) 顺序推进。`--stopped` 是必填确认，该命令**不停不启**服务。任何一步失败即停，不重试、不回滚，各步证据文件保留；同 operation-id 重跑观察已有证据而非重放。
+升级入口 `ai-device-native-update --registry <dir> --instance-id <id> --operation-id <op> --package <deb> --envelope <json> --release-id <id> --bootstrap-version <version> [--bootstrap-tree <tree>] --stopped` 以 root 运行，内部按 prepare(降权)/prepare-signed/approve/apply/switch-helper/activate(降权) 顺序推进。`--bootstrap-version` 是用于与信封 `bootstrap_min` 比较的版本号；`--bootstrap-tree` 是切换后 `bootstrap/current` 应指向的版本化目录名，省略时沿用版本号。两者的区别不是措辞问题：把版本号当树名写入指针，会让入口指向一个从未安装过的目录。`--stopped` 是必填确认，该命令**不停不启**服务。apply 未得到 `applied_package` 或 switch 未得到 `helper_switched` 即停，不继续激活；任何一步失败即停，不重试、不回滚，各步证据文件保留；同 operation-id 重跑观察已有证据而非重放。
 
 新实例安装前检查目标已有祖先所在文件系统的可用空间，至少须容纳已验证 bundle 所列文件的一份复制；空间不足或无法检查时在创建实例前拒绝。这只是必要下界，不包括 venv 解压、文件系统开销或配额，不预留空间；并发占用或挂载变化仍可能导致安装失败并保留现场。
 

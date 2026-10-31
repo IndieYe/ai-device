@@ -104,6 +104,34 @@ def install_payload(payload, *, root, instance_id, server_url):
             os.environ["PATH"] = previous
 
 
+def _drop_identity(uid, gid):
+    """Become ``uid``/``gid`` and reset the home-derived state that follows it.
+
+    The child inherits root's environment. Leaving ``HOME=/root`` in place makes
+    the packaged uv try to create its cache under a directory the new identity
+    cannot write, so the instance creation fails on a permission error that
+    looks unrelated to the privilege drop.
+    """
+    import pwd
+
+    os.setgroups([])
+    os.setgid(gid)
+    os.setuid(uid)
+    if os.geteuid() != uid or os.geteuid() == 0:
+        raise InstallationError("privilege drop failed")
+    try:
+        account = pwd.getpwuid(uid)
+    except KeyError as exc:
+        raise InstallationError("owner account has no home directory") from exc
+    if not account.pw_dir:
+        raise InstallationError("owner account has no home directory")
+    os.environ["HOME"] = account.pw_dir
+    os.environ["USER"] = account.pw_name
+    os.environ["LOGNAME"] = account.pw_name
+    os.environ["XDG_CACHE_HOME"] = account.pw_dir + "/.cache"
+    os.environ["XDG_CONFIG_HOME"] = account.pw_dir + "/.config"
+
+
 def _fork_as(uid, gid, work):
     """Run ``work`` in a child dropped to ``uid``/``gid`` and return its result.
 
@@ -116,11 +144,7 @@ def _fork_as(uid, gid, work):
     if pid == 0:  # child
         try:
             os.close(read_fd)
-            os.setgroups([])
-            os.setgid(gid)
-            os.setuid(uid)
-            if os.geteuid() != uid or os.geteuid() == 0:
-                raise InstallationError("privilege drop failed")
+            _drop_identity(uid, gid)
             payload = json.dumps(work(), sort_keys=True).encode()
             with os.fdopen(write_fd, "wb") as stream:
                 stream.write(payload)

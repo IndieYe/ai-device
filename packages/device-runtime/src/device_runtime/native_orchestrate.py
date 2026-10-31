@@ -107,6 +107,36 @@ def _bootstrap_tree(name):
     return name
 
 
+def _drop_identity(uid, gid):
+    """Become ``uid``/``gid`` and reset the home-derived state that follows it.
+
+    The child inherits this process's environment, which belongs to root: with
+    ``HOME=/root`` still set, the packaged uv cannot create its cache after the
+    drop and the owner step fails on a permission error that looks like nothing
+    to do with identity. The home directory is read from the account database
+    here rather than taken from the environment, and the per-user cache and
+    config roots move with it for the tools that consult them.
+    """
+    import pwd
+
+    os.setgroups([])
+    os.setgid(gid)
+    os.setuid(uid)
+    if os.geteuid() != uid or os.geteuid() == 0:
+        raise OrchestrationError("privilege drop failed")
+    try:
+        home = pwd.getpwuid(uid).pw_dir
+    except KeyError as exc:
+        raise OrchestrationError("owner account has no home directory") from exc
+    if not home:
+        raise OrchestrationError("owner account has no home directory")
+    os.environ["HOME"] = home
+    os.environ["USER"] = pwd.getpwuid(uid).pw_name
+    os.environ["LOGNAME"] = os.environ["USER"]
+    os.environ["XDG_CACHE_HOME"] = home + "/.cache"
+    os.environ["XDG_CONFIG_HOME"] = home + "/.config"
+
+
 def _fork_as(uid, gid, work):
     """Run ``work`` in a child dropped to ``uid``/``gid`` and return its result.
 
@@ -119,11 +149,7 @@ def _fork_as(uid, gid, work):
     if pid == 0:  # child
         try:
             os.close(read_fd)
-            os.setgroups([])
-            os.setgid(gid)
-            os.setuid(uid)
-            if os.geteuid() != uid or os.geteuid() == 0:
-                raise OrchestrationError("privilege drop failed")
+            _drop_identity(uid, gid)
             payload = json.dumps(work(), sort_keys=True).encode()
             with os.fdopen(write_fd, "wb") as stream:
                 stream.write(payload)

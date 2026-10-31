@@ -477,6 +477,54 @@ def test_instance_owner_refuses_privileged_or_invalid_ids(monkeypatch, tmp_path,
         orchestrate._instance_owner(tmp_path, "probe")
 
 
+@pytest.mark.parametrize(
+    "module,error",
+    [(orchestrate, orchestrate.OrchestrationError), (install, install.InstallationError)],
+)
+def test_drop_identity_moves_home_with_the_account(monkeypatch, module, error):
+    """Dropping to the owner must not leave root's HOME behind.
+
+    The environment is inherited across the fork, so a child that only calls
+    setuid still points uv at ``/root/.cache``. That failure surfaces as a
+    permission error during venv preparation, far from the identity change that
+    caused it.
+    """
+    import pwd as pwd_module
+
+    account = type("A", (), {"pw_dir": "/home/owner", "pw_name": "owner"})()
+    monkeypatch.setattr(pwd_module, "getpwuid", lambda uid: account)
+    monkeypatch.setattr(module.os, "setgroups", lambda groups: None)
+    monkeypatch.setattr(module.os, "setgid", lambda gid: None)
+    monkeypatch.setattr(module.os, "setuid", lambda uid: None)
+    monkeypatch.setattr(module.os, "geteuid", lambda: 12345)
+    monkeypatch.setattr(
+        module.os,
+        "environ",
+        {"HOME": "/root", "USER": "root", "LOGNAME": "root"},
+    )
+
+    module._drop_identity(12345, 12345)
+
+    assert module.os.environ["HOME"] == "/home/owner"
+    assert module.os.environ["USER"] == "owner"
+    assert module.os.environ["XDG_CACHE_HOME"] == "/home/owner/.cache"
+
+
+@pytest.mark.parametrize("module", [orchestrate, install])
+def test_drop_identity_refuses_an_account_without_a_home(monkeypatch, module):
+    import pwd as pwd_module
+
+    account = type("A", (), {"pw_dir": "", "pw_name": "owner"})()
+    monkeypatch.setattr(pwd_module, "getpwuid", lambda uid: account)
+    monkeypatch.setattr(module.os, "setgroups", lambda groups: None)
+    monkeypatch.setattr(module.os, "setgid", lambda gid: None)
+    monkeypatch.setattr(module.os, "setuid", lambda uid: None)
+    monkeypatch.setattr(module.os, "geteuid", lambda: 12345)
+
+    with pytest.raises(ValueError, match="home directory"):
+        module._drop_identity(12345, 12345)
+
+
 def test_uv_defaults_to_the_packaged_copy(monkeypatch, tmp_path):
     """uv is a requirement of the preparation step, not an optional hint."""
     tools = tmp_path / "tools"
