@@ -19,121 +19,154 @@ Example:
 
 import argparse
 import base64
+import contextlib
 import hashlib
 import io
 import json
+import os
+import stat
 import sys
 import tarfile
 from pathlib import Path
 
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from device_runtime.native_candidate import MAX_PACKAGE, _json
+from device_runtime.native_candidate import MAX_PACKAGE, TARGET, _json
 from device_runtime.protocol import canonical
+
+MAX_MANIFEST = 256_000
 
 
 def _ar_members(path):
-    """Yield (name, bytes) for a Debian ar archive without spawning ar."""
+    """Return {name: bytes} for a Debian ar archive without spawning ar."""
     parts = {}
     with path.open("rb") as stream:
         if stream.read(8) != b"!<arch>\n":
-            raise SystemExit("not a Debian archive: %s" % path)
+            raise SystemExit(f"not a Debian archive: {path}")
         while header := stream.read(60):
             if len(header) < 60:
                 raise SystemExit("truncated ar header")
             name = header[:16].decode().strip().rstrip("/")
             size = int(header[48:58].decode().strip())
             if not 0 <= size <= MAX_PACKAGE or name in parts:
-                raise SystemExit("invalid ar member: %s" % name)
+                raise SystemExit(f"invalid ar member: {name}")
             parts[name] = stream.read(size)
             if size % 2:
                 stream.read(1)
     return parts
 
 
-def _control(data_name, body):
-    """Return the control fields plus the compressed data digest."""
+def _open_tar(data_name, body):
+    """Open the tar inside a dpkg data/control member by its compression suffix."""
     suffix = data_name.rsplit(".", 1)[-1]
     if suffix == "zst":
         from zstandard import ZstdDecompressor
 
         reader = ZstdDecompressor(max_window_size=134217728).stream_reader(io.BytesIO(body))
-        archive = tarfile.open(fileobj=reader, mode="r|")
-    elif suffix == "xz":
+        return contextlib.closing(reader), tarfile.open(fileobj=reader, mode="r|")
+    if suffix == "xz":
         import lzma
 
-        archive = tarfile.open(fileobj=io.BytesIO(lzma.decompress(body)), mode="r:")
-    elif suffix == "gz":
+        return None, tarfile.open(fileobj=io.BytesIO(lzma.decompress(body)), mode="r:")
+    if suffix == "gz":
         import gzip
 
-        archive = tarfile.open(fileobj=io.BytesIO(gzip.decompress(body)), mode="r:")
-    else:
-        archive = tarfile.open(fileobj=io.BytesIO(body), mode="r:")
-    fields = {}
+        return None, tarfile.open(fileobj=io.BytesIO(gzip.decompress(body)), mode="r:")
+    return None, tarfile.open(fileobj=io.BytesIO(body), mode="r:")
+
+
+@contextlib.contextmanager
+def _archive(data_name, body):
+    """Yield the outer tar for a member, closing the decompressor with it."""
+    closer, archive = _open_tar(data_name, body)
     try:
         with archive:
-            for member in archive:
-                if member.name.lstrip("./") == "control":
-                    text = archive.extractfile(member).read().decode("utf-8")
-                    for line in text.splitlines():
-                        if line and not line.startswith((" ", "\t")) and ":" in line:
-                            key, value = line.split(":", 1)
-                            fields[key] = value.strip()
+            yield archive
     finally:
-        pass
+        if closer is not None:
+            closer.close()
+
+
+def _control(data_name, body):
+    """Return the control fields of a control member."""
+    fields = {}
+    with _archive(data_name, body) as archive:
+        for member in archive:
+            if member.name.removeprefix("./") != "control":
+                continue
+            if not member.isfile() or member.size > MAX_MANIFEST:
+                raise SystemExit("invalid control member")
+            text = archive.extractfile(member).read().decode("utf-8")
+            for line in text.splitlines():
+                if line and not line.startswith((" ", "\t")) and ":" in line:
+                    key, value = line.split(":", 1)
+                    fields[key.strip()] = value.strip()
+    for required in ("Package", "Version", "Architecture"):
+        if not fields.get(required):
+            raise SystemExit(f"control is missing {required}")
     return fields
 
 
 def _manifest(data_name, body):
-    """Read bundle/manifest.json out of the payload archive inside data.tar."""
-    # data.tar holds opt/ai-device/payloads/<tree>.tar, which in turn holds
-    # bundle/manifest.json. Both layers are opened read-only and bounded.
-    suffix = data_name.rsplit(".", 1)[-1]
-    if suffix == "zst":
-        from zstandard import ZstdDecompressor
+    """Read bundle/manifest.json out of the payload archive inside data.tar.
 
-        reader = ZstdDecompressor(max_window_size=134217728).stream_reader(io.BytesIO(body))
-        outer = tarfile.open(fileobj=reader, mode="r|")
-    elif suffix == "xz":
-        import lzma
-
-        outer = tarfile.open(fileobj=io.BytesIO(lzma.decompress(body)), mode="r:")
-    elif suffix == "gz":
-        import gzip
-
-        outer = tarfile.open(fileobj=io.BytesIO(gzip.decompress(body)), mode="r:")
-    else:
-        outer = tarfile.open(fileobj=io.BytesIO(body), mode="r:")
-
+    data.tar holds opt/ai-device/payloads/<tree>.tar, which in turn holds
+    bundle/manifest.json. Only one payload member may carry it, so a package
+    with two candidate trees cannot be signed ambiguously.
+    """
     found = None
     payload_root = None
-    with outer:
+    with _archive(data_name, body) as outer:
         for member in outer:
-            name = member.name[2:] if member.name.startswith("./") else member.name
+            name = member.name.removeprefix("./")
             # The payload archive is the tree being signed, e.g.
             # opt/ai-device/payloads/<tree>.tar. Only that member can carry the
             # manifest this release refers to.
             if not name.startswith("opt/ai-device/payloads/") or not name.endswith(".tar"):
                 continue
+            if not member.isfile():
+                raise SystemExit(f"payload member is not a regular file: {name}")
             if member.size > MAX_PACKAGE:
                 raise SystemExit("payload archive exceeds budget")
-            body = outer.extractfile(member).read()
-            with tarfile.open(fileobj=io.BytesIO(body), mode="r:") as inner:
+            inner_body = outer.extractfile(member).read()
+            # The payload archive is stored uncompressed, but honour a suffix so
+            # a compressed variant fails loudly here instead of silently.
+            with _archive(name, inner_body) as inner:
                 for item in inner:
-                    inner_name = item.name[2:] if item.name.startswith("./") else item.name
-                    if inner_name != "bundle/manifest.json":
+                    if item.name.removeprefix("./") != "bundle/manifest.json":
                         continue
-                    if found is not None or not item.isfile() or item.size > 256000:
+                    if found is not None or not item.isfile() or item.size > MAX_MANIFEST:
                         raise SystemExit("duplicate or oversized manifest")
                     found = inner.extractfile(item).read()
+                    # Only the member that actually carries the manifest may be
+                    # named as payload_root: <tree>.tar and <tree>-bootstrap.tar
+                    # are both shipped, and only one of them is the bundle.
                     payload_root = name
     if found is None:
         raise SystemExit("bundle/manifest.json not found in payload")
     return found, payload_root
 
 
+def _private_key(path):
+    """Load an Ed25519 private key, refusing loose filesystem permissions."""
+    if path.is_symlink():
+        raise SystemExit(f"refused: {path} is a symlink")
+    info = path.stat()
+    if not stat.S_ISREG(info.st_mode):
+        raise SystemExit(f"refused: {path} is not a regular file")
+    if info.st_mode & 0o077:
+        raise SystemExit(f"refused: {path} is readable beyond its owner")
+    if hasattr(os, "getuid") and info.st_uid != os.getuid():
+        raise SystemExit(f"refused: {path} is not owned by the signing user")
+    key = serialization.load_pem_private_key(path.read_bytes(), password=None)
+    if not isinstance(key, Ed25519PrivateKey):
+        raise SystemExit("refused: not an Ed25519 private key")
+    return key
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description="Sign a built native package.")
     parser.add_argument("--package", type=Path, required=True)
     parser.add_argument("--key", type=Path, required=True)
     parser.add_argument("--key-id", required=True)
@@ -148,8 +181,6 @@ def main():
     package = args.package.resolve()
     if not 0 < package.stat().st_size <= MAX_PACKAGE:
         raise SystemExit("package exceeds size budget")
-    if args.output.exists():
-        raise SystemExit("refused: %s exists, choose a new path" % args.output)
 
     parts = _ar_members(package)
     control_name = next((n for n in parts if n.startswith("control.tar")), None)
@@ -164,8 +195,8 @@ def main():
     versions = {name: value["version"] for name, value in manifest["components"].items()}
     if versions.get("device") != args.source_version:
         raise SystemExit(
-            "refused: package ships device %s but --source-version is %s"
-            % (versions.get("device"), args.source_version)
+            f"refused: package ships device {versions.get('device')} "
+            f"but --source-version is {args.source_version}"
         )
 
     payload = {
@@ -174,7 +205,7 @@ def main():
         "key_id": args.key_id,
         "versions": versions,
         "bootstrap_min": args.bootstrap_min or args.source_version,
-        "target": "linux-amd64-deb",
+        "target": TARGET,
         "allowed_sources": args.allowed_source,
         "required_space": args.required_space,
         "compatibility": {"protocol": [1], "state": [1]},
@@ -192,19 +223,32 @@ def main():
         },
     }
 
-    private = serialization.load_pem_private_key(args.key.read_bytes(), password=None)
-    signature = base64.b64encode(private.sign(canonical(payload).encode())).decode()
+    signature = base64.b64encode(_private_key(args.key).sign(canonical(payload).encode())).decode()
     envelope = {"payload": payload, "key_id": args.key_id, "signature": signature}
 
+    # Exclusive creation: an existing envelope is never overwritten, and the
+    # check cannot be raced by another writer between test and open.
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(canonical(envelope), encoding="utf-8")
-    print(json.dumps({
-        "envelope": str(args.output),
-        "release_id": args.release_id,
-        "package_version": fields["Version"],
-        "versions": versions,
-        "sha256": payload["package"]["sha256"],
-    }, indent=1))
+    try:
+        with args.output.open("x", encoding="utf-8") as stream:
+            stream.write(canonical(envelope))
+            stream.flush()
+            os.fsync(stream.fileno())
+    except FileExistsError:
+        raise SystemExit(f"refused: {args.output} exists, choose a new path") from None
+
+    print(
+        json.dumps(
+            {
+                "envelope": str(args.output),
+                "release_id": args.release_id,
+                "package_version": fields["Version"],
+                "versions": versions,
+                "sha256": payload["package"]["sha256"],
+            },
+            indent=1,
+        )
+    )
     return 0
 
 
