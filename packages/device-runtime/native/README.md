@@ -11,6 +11,22 @@
 
 版本、大小及摘要在 2026-10-26 从上游 release API 获取；正式对外发布仍需由可信发布流程认证准确输入。模块不联网，不接受 latest 或不匹配的上游 release。
 
+## 依赖锁
+
+`dependency-lock.json` 固定 Linux client 的第三方 wheel 集合：13 个 wheel 的准确文件名、大小、SHA256、来源 URL 与许可证，以及对应 `pins`。其中 `cryptography`、`zstandard`、`cffi`、`pycparser` 属于 `native` extra，Linux client 在运行期验签与读写压缩载荷需要它们，因此随包交付；缺失时激活后的实例没有签名能力。
+
+全部 wheel 兼容 `dependencies.py` 的 cp313 / glibc 2.17 目标，下载时必须按锁内 URL 取，不能依赖解析器的默认平台标签（默认会得到 `manylinux_2_34` 变体并被拒绝）。
+
+锁是交付权威，产物由它重建，不从产物反推：
+
+```bash
+python3 packages/device-runtime/scripts/stage-native-dependencies.py \
+  --lock packages/device-runtime/native/dependency-lock.json \
+  --output <new-directory> --download --constraints <new-constraints.txt>
+```
+
+脚本拒绝已存在的输出与已存在的 constraints，逐字节校验大小与摘要，并生成 `build_bundle --dependency-dir` 所需的目录格式。`pins` 与 wheel 版本不一致会直接失败，避免锁与安装内容分离。
+
 ## 离线准备命令
 
 先由构建流程将锁中的准确 URL 下载到构建输入目录，完成后在匹配的目标系统执行（路径替换为实际绝对路径）：
