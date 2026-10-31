@@ -337,3 +337,60 @@ Rocky Linux 9.3 / amd64 实测：
 - 未验证签名与批准消费：本轮包未签名，走的是开发制品路径。
 - 未验证升级中断（`dpkg`/`rpm` 在 unpack 阶段被 kill）后的恢复。
 - 未验证跨大版本（`0.2.2` → `0.3.0`）升级。
+
+### 8.4 RPM 补验：systemd 下的服务生命周期（2026-10-31）
+
+8.3 列出的「未验证 systemd 下的 helper 单元切换」本轮补上。构建容器联网装
+`rpm-build`（Rocky 9 / RPM 4.16.1.3），**验收容器为
+`device-qual-systemd-rocky:probe`，PID1 是真实 systemd**（`systemctl
+is-system-running` 返回 `running`）。镜像定义见
+`scripts/containers/rpm-systemd-probe/Containerfile`。
+
+制品：同一份精简后 payload 构建两次，仅 tree 与版本不同。
+
+| 包 | tree | Version | 大小 | sha256 |
+| --- | --- | --- | ---: | --- |
+| `rpmv` | `0.2.3-rpmv` | `0.2.3-3` | 89,906,400 | `1db5a86b…` |
+| `rpmv2` | `0.2.3-rpmv2` | `0.2.3-4` | 89,897,009 | — |
+
+| 场景 | 结果 |
+| --- | --- |
+| `rpm -ivh` 安装 | 通过，`bootstrap/current=0.2.3-rpmv` |
+| 普通用户建实例 | 通过，release `0.2.2-afcdf292…` |
+| root `register` | 通过，marker 为 root 所有、unit 生成 |
+| `rpm -Uvh` 升级 | 通过，指针切到 rpmv2，旧树删除，**`remove failed` 计数 0** |
+| `rpm -V` | 无输出（归档归属生效；此前 9762 条 missing） |
+| systemd `start` | `active/running`，MainPID 162，User 12345 |
+| systemd `stop` | `inactive`，干净退出 |
+| `unregister` | 通过，`data_preserved=true`，记录与 unit 删除 |
+| `rpm -e` 卸载 | 通过，`/opt/ai-device` 与两个入口全部移除，用户实例数据保留 |
+| 有登记实例时卸载 | 拒绝（`registered device instance still uses this payload`），符合预期 |
+
+`bootstrap/current` 是唯一权威指针（`native_layout.py` 的 `classify()` 明确
+如此），`packages/current` 不存在是设计如此，不是漏写。
+
+两个验收环境注意事项，均非包缺陷：
+
+1. `unregister` 需要 `systemctl show`，纯 `sleep` 容器没有 systemd 会直接失败；
+   `--unit-dir` 又默认是非标准路径，systemd 看不到。验证时要先把 unit 放进
+   `/etc/systemd/system` 并 `daemon-reload`。验证完毕必须删掉这份副本，否则
+   `%preun` 的 unit 检查会正确地拒绝卸载。
+2. 换用户重建实例前要清掉旧 uid 的 `~/.cache/uv`，否则 uv 缓存目录属主不符会
+   让安装失败。
+
+### 8.5 RPM 侧的能力缺口（本轮确认，未修复）
+
+签名候选链**只支持 `linux-amd64-deb`**：
+
+- `native_candidate.py` 的 CLI 与 `prepare_candidate` 调用都把 `target` 写死为
+  `linux-amd64-deb`，并校验 `target != "linux-amd64-deb"` 即报
+  `unsupported native package target`。
+- 解包路径只认 Debian `ar` 归档（`data.tar` / control 三字段），没有 rpm
+  `cpio` payload 的对应实现。
+- `native_update.py` 的包事务全部走 `/usr/bin/dpkg-deb`、`dpkg-query`、
+  `dpkg --install`，没有 rpm 分支。
+
+因此「RPM 包可安装、可升级、可卸载、可由 systemd 托管」成立，但「RPM 走
+签名 prepare→activate 的受控升级」**不成立**。`0.2.3-3` 这类 RPM 目前只是
+开发制品，不能进入需要验签的交付路径。补齐需要产品决策：是给 candidate 与
+update 增加 rpm(target + cpio 提取) 分支，还是首期 Linux 只交付 DEB。
