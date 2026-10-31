@@ -1,7 +1,10 @@
 """New-instance native payload installation via the existing release core.
 
 The package-owned bootstrap invokes this module with its own CPython and uv.
-No service operations or implicit adoption of existing instances are permitted.
+Creating an instance is always done by its owner account; registering the unit
+and starting the service are administrator steps, and ``provision`` sequences
+the two without weakening either check. There is no implicit adoption of an
+existing instance.
 """
 
 import argparse
@@ -150,6 +153,46 @@ def _fork_as(uid, gid, work):
     return json.loads(raw)
 
 
+def _preflight_registration(
+    *, registry, unit_dir, instance_id, root, username, environment_file
+):
+    """Refuse a registration the following step would refuse, before anything is written.
+
+    ``install_payload`` creates an owner tree that the next step cannot simply
+    redo: the root already exists, so a rerun refuses. Checking the cheap,
+    purely observational registration prerequisites first keeps a mistyped
+    registry, environment file or unit directory from leaving a half-created
+    instance behind.
+    """
+    import pwd
+
+    from . import native_helper as helper
+
+    helper._identifier(instance_id)
+    # The account is the cheapest refusal and names who would own the tree, so
+    # it is resolved before any path is inspected or anything is written.
+    account = pwd.getpwnam(username)
+    if account.pw_uid == 0:
+        raise InstallationError("the instance account must be non-root")
+    registry = helper._path(registry)
+    unit_dir = helper._path(unit_dir)
+    root = helper._path(root)
+    environment = helper._path(environment_file)
+    helper._trusted(registry, directory=True)
+    helper._trusted(unit_dir, directory=True)
+    helper._trusted(environment)
+    if environment.stat().st_mode & 0o077:
+        raise InstallationError("credential environment file must have mode 0600")
+    # These are what registration would find already present afterwards.
+    if (registry / f"{instance_id}.json").exists() or (
+        unit_dir / f"ai-device-client-{instance_id}.service"
+    ).exists():
+        raise InstallationError("registration already exists; explicit reconciliation required")
+    if root.exists() or root.is_symlink():
+        raise InstallationError("native install refuses existing instances; adoption is explicit")
+    return registry, root, account
+
+
 def provision(
     *,
     payload,
@@ -168,18 +211,23 @@ def provision(
     have to sequence the two identities itself. Each underlying step keeps its
     own checks; nothing here weakens them.
     """
-    import pwd
-
     from . import native_helper as helper
 
     if sys.platform != "linux" or os.geteuid() != 0:
         raise InstallationError("provisioning requires administrator privileges")
 
-    entry = pwd.getpwnam(username)
-    if entry.pw_uid == 0:
-        raise InstallationError("the instance account must be non-root")
+    # ``_preflight_registration`` resolves and checks the account, and does so
+    # before a tree is created, so this path does not repeat that decision.
+    registry_dir = registry if registry else helper.REGISTRY
+    registry_dir, root, entry = _preflight_registration(
+        registry=registry_dir,
+        unit_dir=unit_dir,
+        instance_id=instance_id,
+        root=root,
+        username=username,
+        environment_file=environment_file,
+    )
 
-    root = Path(root).absolute()
     created = _fork_as(
         entry.pw_uid,
         entry.pw_gid,
@@ -189,7 +237,7 @@ def provision(
     )
 
     registered = helper.register(
-        helper._path(registry) if registry else helper.REGISTRY,
+        registry_dir,
         Path(unit_dir),
         instance_id=instance_id,
         root=root,
