@@ -941,3 +941,42 @@ def test_invalid_explicit_uv_refused_before_release(tmp_path, delivery, fake_uv,
             root, delivery, module.inspect_bundle(delivery), ["client"], uv_executable=tool
         )
     assert set((root / "releases").iterdir()) == before
+
+
+def test_linux_client_install_requests_native_extra(tmp_path, delivery, fake_uv, monkeypatch):
+    """A Linux bundle's declared extras -- not the module constant -- drive uv."""
+    linux = tmp_path / "linux-bundle"
+    (tmp_path / "w").mkdir()
+    wheels = {c: make_wheel(tmp_path / "w", c) for c in COMPONENTS}
+    # The client extra must declare both exact core dependencies; rebuild the
+    # device wheel with that metadata so the contract check is exercised.
+    with zipfile.ZipFile(wheels["device"]) as archive:
+        entries = {n: archive.read(n) for n in archive.namelist()}
+    metadata = next(n for n in entries if n.endswith("/METADATA"))
+    entries[metadata] += (
+        b"Provides-Extra: client\n"
+        b'Requires-Dist: ai-device-bash==0.2.0; extra == "client"\n'
+        b'Requires-Dist: ai-device-fs==0.2.0; extra == "client"\n'
+    )
+    with zipfile.ZipFile(wheels["device"], "w") as archive:
+        for name, content in entries.items():
+            archive.writestr(name, content)
+    constraints = tmp_path / "linux-pins.txt"
+    constraints.write_text("cryptography==50.0.2\n")
+    build_bundle(
+        linux,
+        release_version="0.2.0",
+        wheels=wheels,
+        constraints=constraints,
+        sources={c: "a" * 40 for c in COMPONENTS},
+        target_system="linux",
+    )
+    monkeypatch.setattr(module.sys, "platform", "linux")
+    create(tmp_path / "linux instance", linux)
+    installs = [args for args, _ in fake_uv if "install" in args]
+    assert len(installs) == 1
+    device = next(arg for arg in installs[0] if "ai-device[" in arg)
+    assert device.endswith("ai-device[client,native] @ " + next(
+        arg.split(" @ ")[1] for arg in installs[0] if "ai-device[" in arg
+    ))
+    assert "client" in device and "native" in device

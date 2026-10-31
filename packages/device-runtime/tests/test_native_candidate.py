@@ -438,3 +438,158 @@ def test_ar_member_truncation_refused(candidate):
     with pytest.raises(nc.CandidateError, match="truncated"):
         prepare(candidate)
     assert not candidate[2].exists()
+
+
+class ArchiveRelease:
+    """A packaged release: the DEB owns payloads/<tree>.tar, never the tree."""
+
+    def __init__(self, tmp_path, monkeypatch, entries):
+        self.private = Ed25519PrivateKey.generate()
+        self.keys = {
+            "test": base64.b64encode(self.private.public_key().public_bytes_raw()).decode()
+        }
+        self.tree = "2-native1"
+        self.payload_root = f"opt/ai-device/payloads/{self.tree}.tar"
+        inner = tar_bytes(entries)
+        # Uncompressed GNU tar, exactly as build-native-linux.sh writes it.
+        data = io.BytesIO()
+        with tarfile.open(fileobj=data, mode="w") as archive:
+            member = tarfile.TarInfo(f"./opt/ai-device/payloads/{self.tree}.tar")
+            member.size, member.mode = len(inner), 0o644
+            archive.addfile(member, io.BytesIO(inner))
+        data = data.getvalue()
+        self.package = tmp_path / "input.deb"
+        self.package.write_bytes(deb_bytes(data))
+        self.envelope = tmp_path / "release.json"
+        self.destination = tmp_path / "candidate"
+        self.payload = {
+            "schema": 1,
+            "release_id": "release-2",
+            "key_id": "test",
+            "versions": {"device": "2.0", "bash": "2.0", "fs": "2.0"},
+            "bootstrap_min": "1.0",
+            "target": "linux-amd64-deb",
+            "allowed_sources": ["1.0"],
+            "required_space": 1000000,
+            "compatibility": {"protocol": [1], "state": [1]},
+            "package": {
+                "name": "ai-device-native-client",
+                "version": "2-1",
+                "architecture": "amd64",
+                "size": self.package.stat().st_size,
+                "sha256": nc._digest(self.package),
+                "data_sha256": hashlib.sha256(data).hexdigest(),
+                "payload_root": self.payload_root,
+                "manifest_sha256": hashlib.sha256(b'{"format": 3}').hexdigest(),
+            },
+        }
+        monkeypatch.setattr(
+            nc,
+            "inspect_bundle",
+            lambda _: {
+                "format_version": 3,
+                "target": {"system": "linux"},
+                "components": {name: {"version": "2.0"} for name in ("device", "bash", "fs")},
+            },
+        )
+
+    def sign(self, payload=None):
+        payload = self.payload if payload is None else payload
+        self.envelope.write_text(
+            canonical(
+                {
+                    "payload": payload,
+                    "key_id": "test",
+                    "signature": base64.b64encode(
+                        self.private.sign(canonical(payload).encode())
+                    ).decode(),
+                }
+            )
+        )
+
+    def prepare(self):
+        return nc.prepare_candidate(
+            self.package,
+            self.envelope,
+            self.destination,
+            trusted_keys=self.keys,
+            release_id="release-2",
+            target="linux-amd64-deb",
+            source_version="1.0",
+            bootstrap_version="1.0",
+        )
+
+
+ENTRIES = [
+    ("./bundle", b"", "dir"),
+    ("./bundle/manifest.json", b'{"format": 3}', "file"),
+    ("./runtime/bin/python3.13", b"fixture only", "file"),
+]
+
+
+def test_archive_layout_prepares_like_expanded_tree(tmp_path, monkeypatch):
+    release = ArchiveRelease(tmp_path, monkeypatch, ENTRIES)
+    release.sign()
+    result = release.prepare()
+    assert result["state"] == "authenticated_extracted"
+    assert result["payload_root"] == "opt/ai-device/payloads/2-native1.tar"
+    # The extracted location is reported, so callers never guess the layout.
+    assert result["bundle_path"] == "payload/bundle"
+    assert (release.destination / "payload/bundle/manifest.json").is_file()
+    # The signed archive itself stays staged byte-for-byte.
+    assert (release.destination / "root" / release.payload_root).is_file()
+
+
+def test_archive_layout_refuses_manifest_digest_mismatch(tmp_path, monkeypatch):
+    release = ArchiveRelease(tmp_path, monkeypatch, ENTRIES)
+    payload = copy.deepcopy(release.payload)
+    payload["package"]["manifest_sha256"] = "0" * 64
+    release.sign(payload)
+    with pytest.raises(nc.CandidateError, match="signed payload manifest differs"):
+        release.prepare()
+    assert not release.destination.exists()
+
+
+@pytest.mark.parametrize(
+    "root",
+    [
+        "opt/ai-device/payloads/../etc.tar",
+        "opt/ai-device/payloads/a/b.tar",
+        "opt/ai-device/payloads/.tar",
+        "opt/ai-device/payloads/2-native1.tar/",
+    ],
+)
+def test_archive_layout_rejects_unsafe_payload_root(tmp_path, monkeypatch, root):
+    release = ArchiveRelease(tmp_path, monkeypatch, ENTRIES)
+    payload = copy.deepcopy(release.payload)
+    payload["package"]["payload_root"] = root
+    release.sign(payload)
+    with pytest.raises(nc.CandidateError, match="invalid versioned payload root"):
+        release.prepare()
+    assert not release.destination.exists()
+
+
+def test_archive_layout_refuses_symlinked_payload_archive(tmp_path, monkeypatch):
+    release = ArchiveRelease(tmp_path, monkeypatch, ENTRIES)
+    # Rebuild the DEB so the signed path is a symlink to a real archive. Reading
+    # it would expand whatever it points at, outside the staged bytes.
+    inner = tar_bytes(ENTRIES)
+    data = io.BytesIO()
+    with tarfile.open(fileobj=data, mode="w") as archive:
+        target = tarfile.TarInfo("./opt/ai-device/payloads/real.tar")
+        target.size, target.mode = len(inner), 0o644
+        archive.addfile(target, io.BytesIO(inner))
+        link = tarfile.TarInfo(f"./opt/ai-device/payloads/{release.tree}.tar")
+        link.type, link.linkname, link.mode = tarfile.SYMTYPE, "real.tar", 0o777
+        archive.addfile(link)
+    data = data.getvalue()
+    release.package.write_bytes(deb_bytes(data))
+    release.payload["package"].update(
+        size=release.package.stat().st_size,
+        sha256=nc._digest(release.package),
+        data_sha256=hashlib.sha256(data).hexdigest(),
+    )
+    release.sign()
+    with pytest.raises(nc.CandidateError, match="not a regular file"):
+        release.prepare()
+    assert not release.destination.exists()

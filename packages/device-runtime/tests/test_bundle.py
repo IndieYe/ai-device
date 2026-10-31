@@ -346,3 +346,28 @@ def test_format_one_is_not_silently_installed_with_new_roles(tmp_path, artifacts
     (output / "manifest.json").write_text(json.dumps(manifest))
     with pytest.raises(BundleError):
         inspect_bundle(output)
+
+
+def test_linux_client_ships_native_extra_and_darwin_does_not(tmp_path):
+    """Linux clients verify signed releases, so their contract carries native."""
+    from device_runtime.bundle import role_contract, target_contract
+
+    _, linux = target_contract("linux")
+    assert set(linux) == {"client"}
+    assert linux["client"]["device_extras"] == ["client", "native"]
+
+    _, darwin = target_contract("darwin")
+    assert darwin["client"]["device_extras"] == ["client"]
+    # Adding an extra for one system must not leak into the shared constants.
+    assert role_contract("client", "darwin")["device_extras"] == ["client"]
+    assert role_contract("client", "linux")["device_extras"] == ["client", "native"]
+    assert role_contract("center", "linux")["device_extras"] == ["server"]
+
+
+def test_linux_bundle_declares_native_extras_in_manifest(tmp_path, artifacts):
+    """The published manifest is what installation resolves extras from."""
+    output = tmp_path / "linux"
+    built = build_bundle(output, target_system="linux", **artifacts)
+    assert built["roles"] == {"client": {"components": ["device", "bash", "fs"],
+                                         "device_extras": ["client", "native"]}}
+    assert inspect_bundle(output)["roles"] == built["roles"]

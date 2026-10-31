@@ -35,6 +35,22 @@ ROLES = {
     "mcp": {"components": ["device"], "device_extras": ["mcp"]},
     "client": {"components": ["device", "bash", "fs"], "device_extras": ["client"]},
 }
+# Linux clients sign and verify native releases at run time, so they need the
+# native extra (cryptography, zstandard). The dependency wheel set is built for
+# Linux only, and a macOS bundle would then declare extras it cannot ship.
+LINUX_CLIENT_EXTRAS = ["client", "native"]
+
+
+def role_contract(role, system="darwin"):
+    """Return one role as delivered for a system; the single extras authority."""
+    if role not in ROLES:
+        raise BundleError("unsupported delivery role")
+    if system not in ("darwin", "linux"):
+        raise BundleError("unsupported bundle target system")
+    contract = copy.deepcopy(ROLES[role])
+    if system == "linux" and role == "client":
+        contract["device_extras"] = list(LINUX_CLIENT_EXTRAS)
+    return contract
 
 
 class BundleError(ValueError):
@@ -136,8 +152,9 @@ def target_contract(system):
     if system not in ("darwin", "linux"):
         raise BundleError("unsupported bundle target system")
     target = {**TARGET, "system": system}
-    roles = ROLES if system == "darwin" else {"client": ROLES["client"]}
-    return target, copy.deepcopy(roles)
+    names = ROLES if system == "darwin" else {"client": ROLES["client"]}
+    roles = {name: role_contract(name, system) for name in names}
+    return target, roles
 
 
 def inspect_bundle(directory):

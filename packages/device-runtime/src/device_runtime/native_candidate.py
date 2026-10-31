@@ -186,11 +186,17 @@ def verify_release(
     for name in ("sha256", "data_sha256", "manifest_sha256"):
         _sha(package[name])
     root = package["payload_root"]
-    if (
-        not isinstance(root, str)
-        or not re.fullmatch(r"opt/ai-device/packages/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", root)
-        or root.endswith(("/.", "/.."))
-    ):
+    # Two delivery layouts are signed. A package either expands the tree under
+    # opt/ai-device/packages/<tree> or ships it as the archive
+    # opt/ai-device/payloads/<tree>.tar that its maintainer scripts publish. The
+    # archive form exists because a package manager deletes the files it owns
+    # before unpacking a new version; owning a published tree would remove the
+    # interpreter a running caller is executing.
+    if not isinstance(root, str) or root.endswith(("/.", "/..")):
+        raise CandidateError("invalid versioned payload root")
+    expanded = re.fullmatch(r"opt/ai-device/packages/[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", root)
+    archived = re.fullmatch(r"opt/ai-device/payloads/([A-Za-z0-9][A-Za-z0-9_.-]{0,127})\.tar", root)
+    if not (expanded or archived):
         raise CandidateError("invalid versioned payload root")
     return payload
 
@@ -312,7 +318,10 @@ def _name(value):
     return value
 
 
-def _extract(archive, root):
+def _extract(archive, root, budget=None):
+    # Resolve the budget at call time so the module constant stays the single
+    # authority; a default argument would freeze it at import.
+    budget = MAX_EXPANDED if budget is None else budget
     names, links, total = set(), [], 0
     with tarfile.open(archive, "r|*") as source:
         for member in source:
@@ -323,7 +332,7 @@ def _extract(archive, root):
                 raise CandidateError("duplicate archive path")
             names.add(name)
             total += member.size
-            if len(names) > MAX_MEMBERS or total > MAX_EXPANDED or member.size < 0:
+            if len(names) > MAX_MEMBERS or total > budget or member.size < 0:
                 raise CandidateError("extraction budget exceeded")
             if ((member.isfile() or member.isdir()) and member.mode & 0o7022) or not (
                 member.isdir() or member.isfile() or member.issym() or member.islnk()
@@ -380,6 +389,30 @@ def _extract(archive, root):
     return {"members": len(names), "expanded_bytes": total}
 
 
+def _payload(root, payload_root, destination):
+    """Locate the bundle for either signed layout and return its path.
+
+    The expanded layout already carries opt/ai-device/packages/<tree>/bundle. The
+    archive layout carries opt/ai-device/payloads/<tree>.tar, which the package
+    maintainer scripts expand into exactly that tree; expanding it here uses the
+    same member, permission, link and budget rules as the outer data archive.
+    """
+    source = root / payload_root
+    # A link here would redirect every read below it outside the candidate.
+    if payload_root.endswith(".tar"):
+        if source.is_symlink() or not source.is_file():
+            raise CandidateError("signed payload archive is not a regular file")
+        if not source.resolve().is_relative_to(root.resolve()):
+            raise CandidateError("signed payload archive escapes candidate")
+        expanded = destination / "payload"
+        expanded.mkdir(mode=0o700)
+        _extract(source, expanded)
+        return expanded / "bundle"
+    if source.is_symlink() or not source.is_dir():
+        raise CandidateError("signed payload tree is not a directory")
+    return source / "bundle"
+
+
 def prepare_candidate(
     package,
     envelope_path,
@@ -430,7 +463,7 @@ def prepare_candidate(
         root = destination / "root"
         root.mkdir(mode=0o700)
         observation = _extract(data, root)
-        bundle = root / descriptor["payload_root"] / "bundle"
+        bundle = _payload(root, descriptor["payload_root"], destination)
         if _digest(bundle / "manifest.json") != descriptor["manifest_sha256"]:
             raise CandidateError("signed payload manifest differs")
         manifest = inspect_bundle(bundle)
@@ -447,6 +480,7 @@ def prepare_candidate(
             "release_sha256": hashlib.sha256(canonical(payload).encode()).hexdigest(),
             "package_sha256": descriptor["sha256"],
             "payload_root": descriptor["payload_root"],
+            "bundle_path": bundle.relative_to(destination).as_posix(),
             "observation": observation,
             "activated": False,
             "venv_prepared": False,

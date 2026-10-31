@@ -512,7 +512,11 @@ def prepare_runtime_candidate(
             )
             if authentication["release_sha256"] != request["release_sha256"]:
                 raise PreparationError("release changed during preparation")
-            bundle = extracted / "root" / authentication["payload_root"] / "bundle"
+            # Older receipts name only the signed payload root, which was always an
+            # expanded tree. The archive layout reports where it actually landed.
+            bundle = extracted / authentication.get(
+                "bundle_path", f"root/{authentication['payload_root']}/bundle"
+            )
             manifest = core.inspect_bundle(bundle)
             with (
                 PreparationSender(

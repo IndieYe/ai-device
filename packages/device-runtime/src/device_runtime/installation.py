@@ -238,7 +238,19 @@ def _required_output_map_format(root):
         raise InstallationError("restored task output map is missing or invalid") from exc
 
 
+def _role_extras(role, manifest):
+    """Extras the bundle ships for this role, falling back to the default contract."""
+    declared = manifest.get("roles") if isinstance(manifest, dict) else None
+    contract = declared.get(role) if isinstance(declared, dict) else None
+    if isinstance(contract, dict) and isinstance(contract.get("device_extras"), list):
+        return contract["device_extras"]
+    return ROLES[role]["device_extras"]
+
+
 def _verify_environment(python, role, manifest, *, cwd, log, required_output_map_format=None):
+    # The bundle declares what it ships; the module constant only describes the
+    # default contract and would disagree with a Linux bundle that adds native.
+    extras = _role_extras(role, manifest)
     expected = {
         manifest["components"][c]["distribution"]: manifest["components"][c]["version"]
         for c in ROLES[role]["components"]
@@ -299,8 +311,7 @@ else:
             json.dumps(expected),
             json.dumps(manifest["constraints"]["pins"]),
             role,
-            json.dumps(ROLES[role]["device_extras"]),
-            json.dumps(required_output_map_format),
+            json.dumps(extras),            json.dumps(required_output_map_format),
         ],
         cwd=cwd,
         log=log,
@@ -405,11 +416,12 @@ def _prepare(
         )
         python = venv / "bin" / "python"
         wheels = []
+        extras = _role_extras(role, manifest)
         for component in ROLES[role]["components"]:
             entry = manifest["components"][component]
             name = entry["distribution"]
             if component == "device":
-                name += "[" + ",".join(ROLES[role]["device_extras"]) + "]"
+                name += "[" + ",".join(extras) + "]"
             # A PEP 508 file URI preserves spaces and special characters in instance roots.
             wheels.append(f"{name} @ {(snapshot / entry['path']).as_uri()}")
         dependency_args = []
