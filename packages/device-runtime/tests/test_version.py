@@ -26,7 +26,7 @@ def test_identity_and_header_are_bounded_snapshots(monkeypatch):
     from device_runtime import version
 
     identity = runtime_version()
-    assert identity["version"] == __version__ == "0.2.2"
+    assert identity["version"] == __version__
     assert identity["build_id"].startswith("sha256:")
     assert len(identity["build_id"]) == 71
     assert parse_version_header(version_header()).model_dump() == identity
