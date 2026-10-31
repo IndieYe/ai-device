@@ -37,7 +37,7 @@ PERSISTENT = ("instance.json", "config", "state", "run", "run-runner")
 POINTER_FILES = ("current",)
 # Explicitly audited Device versions, NOT an inference from an installation format.
 # Widen this map only after validating a new version's persistent data contract.
-STATE_COMPATIBILITY = {"0.2.0": 1, "0.2.1": 1, "0.2.2": 1, "0.2.4": 1}
+STATE_COMPATIBILITY = {"0.2.0": 1, "0.2.1": 1, "0.2.2": 1, "0.2.4": 1, "0.2.5": 1}
 
 
 def _compatible(manifest):
