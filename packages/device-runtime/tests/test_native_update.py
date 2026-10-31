@@ -732,10 +732,16 @@ def signed_update(update, monkeypatch):
     (home / "bundle").mkdir(parents=True)
     manifest = {"components": "fixture"}
     (home / "bundle/manifest.json").write_text(canonical(manifest))
+    # A real venv's bin/python is a symlink into the release's own runtime; the
+    # evidence digests that target, not the link. A plain file here would hide
+    # the fact that no real installation can satisfy a regular-file check.
+    interpreter = home / "runtime/bin/python3.13"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.write_text("fixture interpreter")
+    interpreter.chmod(0o700)
     python = home / "client/venv/bin/python"
     python.parent.mkdir(parents=True)
-    python.write_text("fixture interpreter")
-    python.chmod(0o700)
+    python.symlink_to(interpreter)
     prepared = {"release": "new", "bundle_sha256": nu.core._fingerprint(manifest)}
     (home / "installation.json").write_text(canonical(prepared))
     payload = {
@@ -808,7 +814,7 @@ def test_signed_evidence_drift_blocks_approval(signed_update, file):
         "receipt": receipt,
         "installation": home / "installation.json",
         "manifest": home / "bundle/manifest.json",
-        "python": home / "client/venv/bin/python",
+        "python": home / "runtime/bin/python3.13",
         "active": home.parent.parent / "active.json",
         "marker": home.parent.parent / nh.MARKER,
     }
@@ -816,6 +822,26 @@ def test_signed_evidence_drift_blocks_approval(signed_update, file):
     with pytest.raises(nu.UpdateError, match="changed"):
         manager.approve("probe", "signed", prepared_sha256=nh._digest(path))
     assert not path.with_name("5-probe--signed.approved.json").exists()
+
+
+def test_interpreter_escaping_the_release_is_refused(signed_update):
+    """The venv link must not become a way to digest a file outside the release.
+
+    Evidence is re-digested at approve time, so a target outside the release
+    would let one release vouch for another's interpreter. This asserts the
+    containment rule itself; the surrounding receipt checks are covered by the
+    drift and wrong-source tests.
+    """
+    _, _, _, _, home = signed_update
+    python = home / "client/venv/bin/python"
+    outside = home.parent.parent / "elsewhere-python"
+    outside.write_text("outside")
+    outside.chmod(0o700)
+    python.unlink()
+    python.symlink_to(outside)
+    interpreter = python.resolve()
+    assert not interpreter.is_relative_to(home.resolve())
+    assert interpreter.is_file()
 
 
 def test_signed_approval_rechecks_actual_bundle(signed_update, monkeypatch):

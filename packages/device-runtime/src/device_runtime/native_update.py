@@ -366,6 +366,15 @@ class Updates:
         python = home / "client/venv/bin/python"
         if not python.is_file() or not os.access(python, os.X_OK):
             raise UpdateError("runtime interpreter unavailable")
+        # A venv's bin/python is a symlink to the release's own interpreter, so
+        # digesting the link target is the only evidence that exists. Record the
+        # resolved path: _check_candidate re-digests evidence paths later, and a
+        # symlink would fail that check for every real installation.
+        interpreter = python.resolve()
+        if not interpreter.is_relative_to(home.resolve()):
+            raise UpdateError("runtime interpreter escapes release")
+        if not interpreter.is_file():
+            raise UpdateError("runtime interpreter unavailable")
         # Read-only evidence, never execute the owner's environment as root.
         return {
             "receipt_path": str(receipt_path),
@@ -374,8 +383,8 @@ class Updates:
             "installation_sha256": nh._digest(home / "installation.json"),
             "manifest_path": str(home / "bundle/manifest.json"),
             "manifest_sha256": nh._digest(home / "bundle/manifest.json"),
-            "python_path": str(python),
-            "python_sha256": nh._digest(python),
+            "python_path": str(interpreter),
+            "python_sha256": nh._digest(interpreter),
             "release_sha256": signed_digest,
             "source_active_sha256": request["source_active_sha256"],
             "binding_sha256": request["binding_sha256"],
