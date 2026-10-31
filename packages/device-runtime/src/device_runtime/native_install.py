@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -100,21 +101,172 @@ def install_payload(payload, *, root, instance_id, server_url):
             os.environ["PATH"] = previous
 
 
+def _fork_as(uid, gid, work):
+    """Run ``work`` in a child dropped to ``uid``/``gid`` and return its result.
+
+    Instance creation must be done by the account that will own the tree, while
+    unit registration and service start must be done by root. Only the child
+    changes identity, so the parent keeps the privileges the later steps need.
+    """
+    read_fd, write_fd = os.pipe()
+    pid = os.fork()
+    if pid == 0:  # child
+        try:
+            os.close(read_fd)
+            os.setgroups([])
+            os.setgid(gid)
+            os.setuid(uid)
+            if os.geteuid() != uid or os.geteuid() == 0:
+                raise InstallationError("privilege drop failed")
+            payload = json.dumps(work(), sort_keys=True).encode()
+            with os.fdopen(write_fd, "wb") as stream:
+                stream.write(payload)
+            os._exit(0)
+        except BaseException as exc:  # noqa: BLE001 - report, never leak a traceback
+            try:
+                with os.fdopen(write_fd, "wb") as stream:
+                    stream.write(
+                        json.dumps({"error": f"{type(exc).__name__}: {exc}"}).encode()
+                    )
+            except BaseException:  # noqa: BLE001, S110 - already failing
+                pass
+            os._exit(1)
+
+    os.close(write_fd)
+    with os.fdopen(read_fd, "rb") as stream:
+        raw = stream.read()
+    _, status = os.waitpid(pid, 0)
+    code = os.waitstatus_to_exitcode(status)
+    if code != 0:
+        detail = ""
+        if raw:
+            try:
+                detail = json.loads(raw).get("error", "")
+            except ValueError:
+                detail = raw.decode("utf-8", "replace")
+        raise InstallationError(f"owner step failed: {detail or f'exit {code}'}")
+    if not raw:
+        raise InstallationError("owner step returned no result")
+    return json.loads(raw)
+
+
+def provision(
+    *,
+    payload,
+    root,
+    instance_id,
+    server_url,
+    username,
+    unit_dir,
+    environment_file,
+    registry=None,
+    start=False,
+):
+    """Create the instance as its owner, then register and optionally start it.
+
+    This is the single-command path: the caller runs it as root and does not
+    have to sequence the two identities itself. Each underlying step keeps its
+    own checks; nothing here weakens them.
+    """
+    import pwd
+
+    from . import native_helper as helper
+
+    if sys.platform != "linux" or os.geteuid() != 0:
+        raise InstallationError("provisioning requires administrator privileges")
+
+    entry = pwd.getpwnam(username)
+    if entry.pw_uid == 0:
+        raise InstallationError("the instance account must be non-root")
+
+    root = Path(root).absolute()
+    created = _fork_as(
+        entry.pw_uid,
+        entry.pw_gid,
+        lambda: install_payload(
+            payload, root=root, instance_id=instance_id, server_url=server_url
+        ),
+    )
+
+    registered = helper.register(
+        helper._path(registry) if registry else helper.REGISTRY,
+        Path(unit_dir),
+        instance_id=instance_id,
+        root=root,
+        username=username,
+        environment_file=Path(environment_file),
+    )
+
+    started = False
+    if start:
+        unit = f"ai-device-client-{instance_id}.service"
+        env = {"PATH": "/usr/bin:/bin", "LANG": "C"}
+        for command in (["daemon-reload"], ["enable", unit], ["start", unit]):
+            result = subprocess.run(
+                ["/usr/bin/systemctl", *command],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                env=env,
+            )
+            if result.returncode != 0:
+                raise InstallationError(
+                    f"systemctl {' '.join(command)} failed: {result.stderr.strip()}"
+                )
+        started = True
+
+    return {
+        **created,
+        "registered": registered,
+        "service_started": started,
+        "paired": False,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="Install a new offline native Device instance")
     parser.add_argument("--payload", type=Path, required=True)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--instance-id", required=True)
     parser.add_argument("--server-url", required=True)
+    # Single-command provisioning. Without --register this behaves exactly as
+    # before: create the instance as the invoking (non-root) user and stop.
+    parser.add_argument("--username", default=None, help="instance account; enables --register")
+    parser.add_argument("--unit-dir", type=Path, default=Path("/etc/systemd/system"))
+    parser.add_argument("--environment-file", type=Path, default=None)
+    parser.add_argument("--registry", type=Path, default=None)
+    parser.add_argument("--register", action="store_true")
+    parser.add_argument("--start", action="store_true")
     args = parser.parse_args()
+
     try:
-        result = install_payload(
-            args.payload,
-            root=args.root,
-            instance_id=args.instance_id,
-            server_url=args.server_url,
-        )
-    except (InstallationError, OSError, ValueError) as exc:
+        if args.register or args.start:
+            if not args.register:
+                raise InstallationError("--start requires --register")
+            if not args.username or not args.environment_file:
+                raise InstallationError(
+                    "--register requires --username and --environment-file"
+                )
+            result = provision(
+                payload=args.payload,
+                root=args.root,
+                instance_id=args.instance_id,
+                server_url=args.server_url,
+                username=args.username,
+                unit_dir=args.unit_dir,
+                environment_file=args.environment_file,
+                registry=args.registry,
+                start=args.start,
+            )
+        else:
+            result = install_payload(
+                args.payload,
+                root=args.root,
+                instance_id=args.instance_id,
+                server_url=args.server_url,
+            )
+    except (InstallationError, OSError, ValueError, KeyError) as exc:
         parser.exit(1, f"native installation refused: {exc}\n")
     print(json.dumps(result, sort_keys=True))
 

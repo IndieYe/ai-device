@@ -130,6 +130,22 @@ exec "$home/runtime/bin/python3.13" -I -m device_runtime.native_install --payloa
 EOF
 sed -i "s#__TREE__#$tree#g" "$root/usr/bin/ai-device-native-install"
 chmod 755 "$root/usr/bin/ai-device-native-install"
+# Upgrade entry. Unlike the helper wrapper this one resolves the payload tree,
+# not the bootstrap: the sequence imports the upgrade modules, which are not
+# part of the deliberately minimal bootstrap. The tree is pinned to the version
+# that ships this wrapper, so an upgrade never executes the code it replaces.
+cat > "$root/usr/bin/ai-device-native-update" <<'EOF'
+#!/bin/sh
+set -eu
+home=/opt/ai-device/packages/__TREE__
+if [ ! -x "$home/runtime/bin/python3.13" ]; then
+ echo 'native update: this package tree is not installed (payload being replaced); retry' >&2
+ exit 75
+fi
+exec "$home/runtime/bin/python3.13" -I -m device_runtime.native_orchestrate "$@"
+EOF
+sed -i "s#__TREE__#$tree#g" "$root/usr/bin/ai-device-native-update"
+chmod 755 "$root/usr/bin/ai-device-native-update"
 # Independent standard-library-only administrator bootstrap, never client imports.
 bootstrap=/opt/ai-device/bootstrap/$tree
 # Exclude upstream bytecode while creating this new bootstrap, not by altering
@@ -757,6 +773,7 @@ exit 0
 %dir /opt/ai-device/bootstrap
 %dir /opt/ai-device/payloads
 /usr/bin/ai-device-native-install
+/usr/bin/ai-device-native-update
 /usr/bin/ai-device-native-helper
 EOF
  sed -i "s#__TREE__#$tree#g" "$work/rpm/SPECS/native.spec"

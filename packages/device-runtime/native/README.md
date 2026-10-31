@@ -63,6 +63,12 @@ macOS 将 target 改为 `darwin-arm64`，使用对应归档。目的目录必须
 
 开发包当前安装入口 `ai-device-native-install --root <new-instance> --instance-id <id> --server-url <https-center>` 必须由普通用户运行，父目录须事先授予该用户。它不启动服务、不配对、不要求输入长期Token。`--server-url` 目前只写入连接配置；实际配对由P2实现。
 
+### 单命令安装与升级（2026-10-31）
+
+以 root 运行 `ai-device-native-install --root <new> --instance-id <id> --server-url <url> --username <account> --environment-file <env> [--register [--start]]` 时，会先在子进程降权到 `--username` 创建实例，再以 root 注册 unit，可选 `--start` 直接 daemon-reload/enable/start。不带 `--register` 时行为与之前完全一致。
+
+升级入口 `ai-device-native-update --registry <dir> --instance-id <id> --operation-id <op> --package <deb> --envelope <json> --release-id <id> --bootstrap-version <tree> --stopped` 以 root 运行，内部按 prepare(降权)/prepare-signed/approve/apply/switch-helper/activate(降权) 顺序推进。`--stopped` 是必填确认，该命令**不停不启**服务。任何一步失败即停，不重试、不回滚，各步证据文件保留；同 operation-id 重跑观察已有证据而非重放。
+
 新实例安装前检查目标已有祖先所在文件系统的可用空间，至少须容纳已验证 bundle 所列文件的一份复制；空间不足或无法检查时在创建实例前拒绝。这只是必要下界，不包括 venv 解压、文件系统开销或配额，不预留空间；并发占用或挂载变化仍可能导致安装失败并保留现场。
 
 包更新在实例或原payload已存在时拒绝，包卸载在实例存在时拒绝，避免helper未实现时破坏现有环境。此拒绝行为不能当作已经完成“更新和卸载”；后续必须用准确事务和显式数据保留语义替换。直接实例安装失败仍保留现场，不承诺删除目录重试可恢复。
