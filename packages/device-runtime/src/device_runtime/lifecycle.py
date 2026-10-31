@@ -37,12 +37,35 @@ PERSISTENT = ("instance.json", "config", "state", "run", "run-runner")
 POINTER_FILES = ("current",)
 # Explicitly audited Device versions, NOT an inference from an installation format.
 # Widen this map only after validating a new version's persistent data contract.
-STATE_COMPATIBILITY = {"0.2.0": 1, "0.2.1": 1, "0.2.2": 1, "0.2.4": 1, "0.2.5": 1, "0.2.6": 1}
+#
+# This list cannot be the gate for an upgrade: the code that validates a
+# candidate release is the code already installed, so it cannot know the version
+# number of a release published after it. Pinning the gate to this map made every
+# future upgrade fail with "no validated state-format-1 compatibility", which is
+# an upgrade refused by its predecessor rather than by any real incompatibility.
+# What a candidate must prove is the data format it writes, and that is declared
+# by the release manifest and checked below.
+STATE_COMPATIBILITY = {
+    "0.2.0": 1,
+    "0.2.1": 1,
+    "0.2.2": 1,
+    "0.2.4": 1,
+    "0.2.5": 1,
+    "0.2.6": 1,
+    "0.2.7": 1,
+}
+
+# The only state format this code can read and write. A release that declares a
+# different one is refused regardless of its version number.
+STATE_FORMAT = 1
 
 
 def _compatible(manifest):
-    if STATE_COMPATIBILITY.get(manifest["components"]["device"]["version"]) != 1:
-        raise InstallationError("Device version has no validated state-format-1 compatibility")
+    declared = manifest.get("state_format", STATE_FORMAT)
+    if declared != STATE_FORMAT:
+        raise InstallationError(
+            f"Device release declares unsupported state format {declared!r}"
+        )
 
 
 def _controlled(function):

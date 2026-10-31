@@ -268,6 +268,11 @@ def build_bundle(
             manifest = {
                 "format_version": 2,
                 "release_version": release_version,
+                # The persistent data format this release writes. An upgrade is
+                # validated against this value rather than the version number:
+                # the installed code judges the candidate, so it cannot already
+                # know which version numbers will exist later.
+                "state_format": 1,
                 "target": target,
                 "roles": roles,
                 "components": entries,

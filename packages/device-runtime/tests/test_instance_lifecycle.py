@@ -286,7 +286,10 @@ def test_invalid_release_cannot_publish(instance, upgraded, monkeypatch, damage,
             assert persistent(instance) == data
             return
     else:
-        monkeypatch.setattr(life, "STATE_COMPATIBILITY", {})
+        # An unsupported persistent data format is the property that makes a
+        # release unpublishable. It is declared by the release manifest, not
+        # inferred from a version number this code could not have known.
+        monkeypatch.setattr(life, "inspect_bundle", _manifest_with_state_format(2))
     pointer, data = (instance / "active.json").read_bytes(), persistent(instance)
     with pytest.raises(InstallationError):
         getattr(life, action + "_release")(instance, candidate, stopped=True)
@@ -758,20 +761,41 @@ def test_new_leaf_inside_another_instance_is_not_isolated(instance, tmp_path, ac
     assert list(other.iterdir()) == [other / "instance.json"]
 
 
-def test_preparation_does_not_infer_future_schema_compatibility(instance, upgraded, monkeypatch):
+def _manifest_with_state_format(value):
+    """Wrap ``inspect_bundle`` so the candidate declares ``value`` instead."""
     original = life.inspect_bundle
 
-    def future(path):
+    def patched(path):
         manifest = original(path)
-        if Path(path) == upgraded:
-            manifest["components"]["device"]["version"] = "0.3.0"
+        manifest["state_format"] = value
         return manifest
 
-    monkeypatch.setattr(life, "inspect_bundle", future)
-    before = all_bytes(instance)
-    with pytest.raises(InstallationError, match="no validated state-format"):
-        prepare(instance, upgraded)
-    assert all_bytes(instance) == before
+    return patched
+
+
+def test_preparation_does_not_infer_future_schema_compatibility(instance, upgraded, monkeypatch):
+    """A newer version number alone neither grants nor denies compatibility.
+
+    The installed code judges the candidate, so it cannot know which version
+    numbers will be published later. What it can decide is the persistent data
+    format the candidate declares: the same format is accepted regardless of how
+    much newer the version is, and a different format is refused regardless of
+    how similar the version looks.
+
+    This exercises the compatibility decision directly. Rewriting the bundle's
+    version would instead be caught as a changed bundle, which is a different
+    property and would make this test pass for the wrong reason.
+    """
+    manifest = life.inspect_bundle(upgraded)
+
+    # A same-format release from a much later version is a legitimate target.
+    future = {**manifest, "components": {**manifest["components"]}}
+    future["components"]["device"] = {**manifest["components"]["device"], "version": "0.3.0"}
+    assert life._compatible(future) is None
+
+    # A different declared format is refused, however plausible the version.
+    with pytest.raises(InstallationError, match="state format"):
+        life._compatible({**manifest, "state_format": 2})
 
 
 def test_backup_rejects_active_pointer_mutation_during_copy(instance, tmp_path, monkeypatch):
