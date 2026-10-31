@@ -14,8 +14,63 @@ def test_builder_uses_isolated_offline_uv_for_explicit_runtime():
     # it into place so a running caller never sees a half-written interpreter.
     assert '"$stage/tools/uv" pip install --offline --no-cache --no-config --system' in source
     assert '--python "$stage/runtime/bin/python3.13" --no-index --no-deps --link-mode copy' in source
-    assert '"$stage/bundle/wheels/"*.whl "$stage/bundle/dependencies/"*.whl' in source
+    # The bootstrap installs a chosen subset, not every shipped wheel: the rest
+    # is pre-installed into the instance venv from the same bundle.
+    assert " $required > \"$work/bootstrap.log\"" in source
     assert ' -m pip ' not in source
+
+
+def test_builder_bootstrap_set_covers_signed_release_path():
+    builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
+    source = builder.read_text()
+    # native_prepare verifies the Ed25519 envelope through cryptography; leaving
+    # it out builds a package whose signed-release path cannot run. Pillow and
+    # zstandard are not reachable from the installer or the prepare path.
+    for name in (
+        "packaging",
+        "pydantic",
+        "pydantic_core",
+        "annotated_types",
+        "typing_extensions",
+        "typing_inspection",
+        "websockets",
+        "psutil",
+        "cryptography",
+        "cffi",
+        "pycparser",
+    ):
+        assert f" {name}" in source
+    assert "for name in packaging pydantic" in source
+
+
+def test_builder_self_check_exercises_real_entry_points():
+    builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
+    source = builder.read_text()
+    # A missing import that only surfaces during install is shipped, not caught.
+    assert "import device_runtime.native_install" in source
+    assert "from device_runtime.client import device_url" in source
+    assert "from device_runtime import native_prepare, native_candidate" in source
+    assert "native package build refused: installer imports are incomplete" in source
+    assert (
+        "native package build refused: client URL validation or release authentication"
+        in source
+    )
+
+
+def test_builder_requires_exactly_one_wheel_per_bootstrap_name():
+    builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
+    source = builder.read_text()
+    # A total count alone lets one name ship nothing while another ships twice.
+    assert 'expected one wheel for $name, found $#' in source
+    assert '"$#" -eq 1' in source
+
+
+def test_builder_drops_unused_runtime_components():
+    builder = Path(__file__).parents[1] / "scripts/build-native-linux.sh"
+    source = builder.read_text()
+    for component in ("ensurepip", "idlelib", "pydoc_data", "tkinter", "test"):
+        assert f'lib/python3.13/{component}"' in source
+    assert 'lib/tcl9.0' in source and 'lib/tk9.0' in source
 
 
 def test_independent_bootstrap_includes_candidate_launcher():

@@ -43,10 +43,71 @@ mkdir -p "$stage" "$stage_boot" "$root$payload_dir" "$root/usr/bin"
 cp -R "$payload/." "$stage/"
 tar -xzf "$archive" -C "$stage"
 mv "$stage/python" "$stage/runtime"
+site=$stage/runtime/lib/python3.13/site-packages
+# The staged tree only runs the installer and the package-level native commands.
+# Everything else is installed into the instance venv from bundle/wheels and
+# bundle/dependencies, so pre-installing the full dependency set here ships the
+# same files twice.
+#
+# The set below is what installation.py and the signed-release path actually
+# reach, not the client's runtime set: install_instance calls client.device_url,
+# so client.py imports pydantic and websockets even for an offline install, and
+# native_prepare verifies the Ed25519 envelope through cryptography. Pillow and
+# zstandard stay out: neither is reachable from these entry points.
+rm -rf "$site"
+mkdir -p "$site"
+required=""
+for wheel in "$stage/bundle/wheels/"*.whl; do required="$required $wheel"; done
+for name in packaging pydantic pydantic_core annotated_types typing_extensions \
+            typing_inspection websockets psutil cryptography cffi pycparser; do
+ matches=""
+ for wheel in "$stage/bundle/dependencies/$name"-*.whl; do
+  [ -f "$wheel" ] && matches="$matches $wheel"
+ done
+ # Exactly one distribution per name: a name that ships nothing, or ships two
+ # builds, would otherwise pass a total-count assertion.
+ set -- $matches
+ [ "$#" -eq 1 ] || { echo "native package build refused: expected one wheel for $name, found $#" >&2; exit 1; }
+ required="$required $matches"
+done
 env -i PATH=/usr/bin:/bin HOME="$work" TMPDIR="$work" \
  "$stage/tools/uv" pip install --offline --no-cache --no-config --system \
  --python "$stage/runtime/bin/python3.13" --no-index --no-deps --link-mode copy \
- "$stage/bundle/wheels/"*.whl "$stage/bundle/dependencies/"*.whl > "$work/bootstrap.log" 2>&1
+ $required > "$work/bootstrap.log" 2>&1 || { cat "$work/bootstrap.log"; exit 1; }
+# Components the client never runs: Tcl/Tk, the browser IDE, the bundled pip
+# (uv is shipped) and the documentation data are dead weight in every install.
+for extra in "$stage/runtime/lib/python3.13/ensurepip" \
+             "$stage/runtime/lib/python3.13/idlelib" \
+             "$stage/runtime/lib/python3.13/pydoc_data" \
+             "$stage/runtime/lib/python3.13/tkinter" \
+             "$stage/runtime/lib/python3.13/test" \
+             "$stage/runtime/lib/tcl9.0" \
+             "$stage/runtime/lib/tk9.0"; do
+ rm -rf "$extra"
+done
+rm -f "$stage/runtime/lib/libtcl"*.so* "$stage/runtime/lib/libtk"*.so* \
+      "$stage/runtime/lib/itcl"*.so* "$stage/runtime/lib/thread"*tcl*.so* 2>/dev/null || true
+# A missing import only surfaces when the user installs, which is far too late.
+# Exercise the real entry point now, inside the staged tree being packaged.
+installed=$(du -sk "$site" | cut -f1)
+if ! env -i PATH=/usr/bin:/bin HOME="$work" TMPDIR="$work" \
+ "$stage/runtime/bin/python3.13" -I -c 'import device_runtime.native_install' \
+ > "$work/selfcheck.log" 2>&1; then
+ cat "$work/selfcheck.log"
+ echo "native package build refused: installer imports are incomplete" >&2
+ exit 1
+fi
+# The installer must also survive the URL validation path that pulls in client.py,
+# and native_prepare must be able to verify a signed release: both import paths
+# reach modules the bootstrap would otherwise not carry.
+if ! env -i PATH=/usr/bin:/bin HOME="$work" TMPDIR="$work" \
+ "$stage/runtime/bin/python3.13" -I -c 'from device_runtime.client import device_url; device_url("wss://127.0.0.1:9", "selfcheck"); from device_runtime import native_prepare, native_candidate; import cryptography' \
+ >> "$work/selfcheck.log" 2>&1; then
+ cat "$work/selfcheck.log"
+ echo "native package build refused: client URL validation or release authentication is unavailable" >&2
+ exit 1
+fi
+echo "native bootstrap self-check passed: site-packages ${installed}KB"
 cat > "$root/usr/bin/ai-device-native-install" <<'EOF'
 #!/bin/sh
 set -eu
