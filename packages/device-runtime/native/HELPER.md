@@ -149,7 +149,11 @@ v15 DEB真实隔离验收marker发布后注入中断、公开CLI幂等恢复和�
 
 helper新启动请求、管理员register/recover-registration与更新事务共用 registry 下 `package-manager.execution.lock`。启动/登记取共享锁，包应用/恢复取独占锁；启动的标准库guard继承共享锁，helper调用方关闭fd后发送者仍持锁。更新使用guard持有独占锁。更新意图写入前要求停止且无Job，并拒绝未确认的旧启动请求。当前共享包只允许单登记实例；多实例收口未实现，明确拒绝而非只停一个实例就替换共享程序。
 
-`updates/*.apply-intent.json` 是持久启动门禁：不依赖调用期间的实例锁；新启动和登记/登记恢复均拒绝，query/reconcile及旧start ID的只读结果仍可用。unknown、包已应用待激活、观察到源包的恢复记录都不解除门禁。尚无安全终态解除协议，不提供删除账本解锁的建议；管理员手工包修复不等于已验证激活。新建updates目录在意图发布前fsync registry目录。
+`updates/*.apply-intent.json` 是持久启动门禁：不依赖调用期间的实例锁；新启动和登记/登记恢复均拒绝，query/reconcile及旧start ID的只读结果仍可用。unknown、包已应用待激活、观察到源包的恢复记录都不解除门禁。新建updates目录在意图发布前fsync registry目录。
+
+**显式收口（`updates retire`）**：意图写入后无人删除，所以缺少终态协议时，一个死在 unknown、或已应用但从未切换的事务会把实例永久锁死——Debian 上 `recover` 被硬禁用，`reconcile` 只读，没有其他出口。`retire` 是唯一的例外路径：管理员显式接受已观察到的终态。它只记录收口时看到的事实（包版本是否等于目标、bootstrap 指针位置），不重放包、不删任何证据，`intent/sender/package.log/outcome` 全部保留，receipt 以 `intent_sha256` 绑定具体意图并写 `retry_allowed=false`。损坏、不可信或摘要不匹配的 receipt 一律按"仍未收口"处理，门禁继续拒绝。队列中的 job 有各自的关闭协议，存在未退休 job-intent 时 `retire` 拒绝。
+
+**进程树证据**：`retire` 在独占 `package-manager.execution.lock` 下运行。该 fd 被 sender 继承、dpkg 整个进程树持有，因此能取到锁本身就证明所有后代已退出——这正是 `recover` 缺少的证据，也是收口路径与恢复路径分开的原因。`_require_proven_package_tree_reaped` 的默认拒绝保持不变。
 
 `native_update.py` 目前仅开发用管理员DEB事务台账，非发布入口，不接helper IPC或构建器。现有包仍拒绝覆盖；缺签名候选、安全提取/普通用户准备、任务收口与准确停止、包钩子授权及稳定bootstrap、激活/健康/恢复终态、RPM等，禁止用于真实设备包事务。此前v15不含本轮代码。
 

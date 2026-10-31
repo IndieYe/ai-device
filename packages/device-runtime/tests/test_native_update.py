@@ -2335,6 +2335,55 @@ def test_switch_helper_is_idempotent(applied, monkeypatch):
     assert again["next_step"] == "activate"
 
 
+
+
+def test_switch_helper_records_pointer_moved_by_package(update, monkeypatch):
+    """Debian's post-install moves the pointer, so switch sees it already done.
+
+    Without a receipt the transaction sits at ``switch_helper`` for ever and
+    activation becomes unreachable -- which is exactly what happened on the
+    first real 0.2.6 upgrade. The observation receipt is what advances it.
+    """
+    manager, packages, _, _ = update
+    stem = manager.registry / "updates/5-probe--one"
+    manager.packages = _DebianPackages()
+
+    def succeed(path, *, lease_fd, receipt_path, intent):
+        packages.calls += 1
+        manager.packages.version = "2"
+        receipt_path.write_text(
+            json.dumps({"state": "sender_reaped", "intent": intent, "returncode": 0})
+        )
+        receipt_path.with_suffix("").with_suffix(".package.log").write_text("Setting up\n")
+        receipt_path.with_name(
+            receipt_path.name.replace(".sender", ".outcome")
+        ).write_text(
+            json.dumps(
+                {
+                    "state": "package_applied_pending_activation",
+                    "package_observation": packages.observation,
+                    "intent": intent,
+                }
+            )
+        )
+
+    monkeypatch.setattr(manager.packages, "apply", succeed)
+    monkeypatch.setattr(manager, "_bootstrap_name", lambda: "0.2.2-native2")
+    manager.apply("probe", "one")
+    assert not stem.with_suffix(".helper.json").exists()
+
+    # The package already moved the pointer: expected == previous.
+    monkeypatch.setattr(
+        nu.nb, "trusted_helper_bootstrap", lambda: stem.parent / "0.2.2-native2" / "x"
+    )
+    result = manager.switch_helper("probe", "one", expected_version="0.2.2-native2")
+    assert result["helper_switched"]["state"] == "helper_switched"
+    assert result["next_step"] == "activate"
+    assert stem.with_suffix(".helper.json").exists()
+
+    # A replay with the same pointer must reuse the receipt, not rewrite it.
+    again = manager.switch_helper("probe", "one", expected_version="0.2.2-native2")
+    assert again["helper_switched"] == result["helper_switched"]
 def test_switch_helper_restores_pointer_when_probe_fails(applied, monkeypatch):
     """A pointer to a tree that cannot start is worse than the old one."""
     manager, _packages, _root, pointer = applied

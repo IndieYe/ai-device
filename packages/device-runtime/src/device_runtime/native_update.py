@@ -765,12 +765,26 @@ class Updates:
                 current = nb.trusted_helper_bootstrap()
                 previous = current.parent.name
                 if expected_version == previous:
-                    # Idempotent observation: the switch already happened. Report
-                    # it without writing, so a caller that lost the result can
-                    # confirm rather than guess.
-                    return {**self._observation(stem, value), "helper_switched": record.get(
-                        "helper_switched"
-                    )}
+                    # The pointer already names the target. Either this call is a
+                    # replay of a switch that did happen (the receipt is on disk)
+                    # or the package post-install step moved the pointer itself,
+                    # so there was never a separate "before" here. Reusing the
+                    # existing receipt keeps a genuine switch as the record;
+                    # only the second case gets an observation receipt.
+                    path = stem.with_suffix(".helper.json")
+                    if os.path.lexists(path):
+                        nh._trusted(path)
+                        stored = json.loads(path.read_text())
+                        return {**self._observation(stem, value), "helper_switched": stored}
+                    receipt = {
+                        "state": "helper_switched",
+                        "previous": previous,
+                        "release": previous,
+                        "probe": "ok",
+                        "observed_not_moved": True,
+                    }
+                    _atomic(path, receipt)
+                    return {**self._observation(stem, value), "helper_switched": receipt}
                 published = nb.publish_pointer(expected_version)
                 # Prove the new entrypoint actually runs before recording success.
                 # A pointer that names an unrunnable tree is worse than the old
