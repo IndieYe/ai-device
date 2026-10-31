@@ -1,8 +1,20 @@
-# P1 Linux有限权限helper与systemd绑定（进行中）
+# P1 Linux 管理 helper（daemon 已退役）
 
-实现入口：`device_runtime.native_helper`。仅Linux系统helper daemon使用root；客户端unit明确使用登记的普通UID/GID。本文是开发契约，不是让用户在正式机器直接执行的部署步骤。
+> **2026-10-31：socket 守护进程已退役。** 本模块不再提供 `serve`/`call`/`recover-socket` 子命令，也不再有 peer 校验、凭据帧和请求派发。升级作业改由显式的一次性 root 命令驱动。以下保留的只是 `register`/`recover-registration`/`unregister` 与绑定校验、租约、systemd 观察能力。本文其余章节记录的是已退役方案的历史契约，仅供参考。
 
-## 已实现边界
+实现入口：`device_runtime.native_helper`。管理命令需 root；客户端 unit 明确使用登记的普通 UID/GID。本文是开发契约，不是让用户在正式机器直接执行的部署步骤。
+
+## 当前能力
+
+- `register` / `recover-registration` / `unregister`：写 unit、保存登记记录与管理标记，不 enable、不 start。
+- `Helper._binding`：校验登记记录与 unit、运行树、管理标记、环境文件的绑定。
+- `Helper._snapshot`：比对已加载 unit 与登记内容。
+- `Helper._lease` / `_execution_lease`：实例管理与执行锁。
+- `native_bootstrap`：事务运行时快照与 release 指针发布。
+
+## 历史章节（已退役）
+
+以下内容描述已删除的 socket 守护进程，仅作历史记录。
 
 - 管理员register明确接收实例路径、普通用户、root管理的0600环境文件、registry及unit目录。核验单client角色、身份、owner、绝对解释器稳定入口，拒绝已有升级记录和重复登记。
 - unit与登记记录采用no-replace发布，记录root、UID/GID、unit名/路径和内容摘要、runner/identity/roles摘要。失败可能留下孤立unit；不自动覆盖或接管，管理员应核实并按明确授权恢复。

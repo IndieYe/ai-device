@@ -1,38 +1,36 @@
-"""Linux native service helper: administrator registration and bounded local IPC.
+"""Linux native service helper: administrator provisioning and registry checks.
 
-Only query/start/reconcile/resolve-running are implemented. No stop, arbitrary argv, installation,
-package activation or automatic replay. Run the daemon via its dedicated root unit.
+This module no longer runs a daemon. It provides the root-only provisioning
+commands (``register``, ``recover-registration``, ``unregister``) plus the
+helpers that the upgrade path reuses for binding validation, leases and
+systemd observation. There is no socket, IPC or request dispatch: upgrade work
+is driven by explicit one-shot root commands instead.
+
+No stop, arbitrary argv, installation, package activation or automatic replay.
 """
 
 import argparse
-import array
-import errno
 import fcntl
 import hashlib
 import json
 import os
 import pwd
 import re
-import socket
 import stat
-import struct
 import subprocess
 import sys
 import tempfile
-import time
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from pathlib import Path
 
 from .entrypoint import LAUNCHER, POINTER, RUNNER_BODY
 from .management_lock import MARKER, management_lease
 
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
-MAX_REQUEST = 4096
-ACTIONS = {"query", "start", "reconcile", "resolve-running", "resolve-stopped"}
+# The runtime directory that used to host the helper socket. Kept as a named
+# constant because it is still the documented location for runtime state; the
+# daemon that consumed it is retired.
 RUNTIME_ROOT = Path("/run")
-# Stable entrypoint the package publishes; it resolves the release pointer, so
-# the unit survives the tree removal that every upgrade performs.
-HELPER_ENTRYPOINT = Path("/usr/bin/ai-device-native-helper")
 # Registry of registered instances and package-manager locks. It must not be
 # /var/lib/ai-device/manager: that path is the legacy marker the package
 # pre-install guards treat as "a controlled transaction is required", so a
@@ -395,153 +393,12 @@ def render_client_unit(*, instance_id, root, uid, gid, environment_file):
     )
 
 
-def render_helper_unit(*, bootstrap_python, registry, socket_path, group, candidate_version=None, candidate_sha256=None, entrypoint=None):
-    python, registry, socket_path = map(_path, (bootstrap_python, registry, socket_path))
-    if type(group) is not int or group < 0:
-        raise HelperError("explicit socket group required")
-    if candidate_version is None:
-        if candidate_sha256 is not None:
-            raise HelperError("candidate digest requires version")
-        # Launch through the packaged entrypoint, never the versioned interpreter.
-        # The package deletes its predecessor's tree on upgrade, so a unit naming
-        # one build's interpreter cannot restart afterwards: systemd reports
-        # 203/EXEC and the management plane stays down until someone edits it.
-        # The entrypoint resolves the same release pointer an instance uses.
-        launch = f"{_path(HELPER_ENTRYPOINT if entrypoint is None else entrypoint)} serve"
-    else:
-        _identifier(candidate_version)
-        if not isinstance(candidate_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", candidate_sha256):
-            raise HelperError("candidate snapshot digest required")
-        # Candidate launches keep the fenced snapshot contract: a pinned
-        # interpreter and digest, never the moving pointer.
-        launch = (
-            f"{python} -I -B -m device_runtime.native_bootstrap "
-            f"--version {candidate_version} --snapshot-sha256 {candidate_sha256}"
-        )
-    return (
-        "[Unit]\nDescription=Device bounded native management helper\n"
-        "After=local-fs.target\n\n[Service]\nType=simple\nUser=root\nGroup=root\n"
-        f"ExecStart={launch} "
-        f"--registry {registry} --socket {socket_path} --group {group}\n"
-        "# The start guard owns inherited leases until its sender is reaped.\n"
-        "KillMode=process\nUMask=0077\nNoNewPrivileges=yes\nRestart=no\n"
-        "# No ExecStartPre unlink: an orphan socket requires explicit reconciliation.\n"
-        "\n[Install]\nWantedBy=multi-user.target\n"
-    )
 
 
-def deploy_helper(*, bootstrap_python, registry, unit_dir, runtime_dir, group, candidate_version=None):
-    """Explicit administrator provisioning only; never reload, enable or start."""
-    if sys.platform != "linux" or os.geteuid() != 0:
-        raise HelperError("helper deployment requires Linux administrator identity")
-    if Path(registry) in PACKAGE_GUARD_PATHS:
-        # Check the literal path first: a guard path usually does not exist yet,
-        # so canonicalisation would fail with an unrelated message before this
-        # collision is ever reported.
-        raise HelperError(
-            f"registry must not be a package pre-install guard path: {registry}"
-        )
-    python, registry, unit_dir, runtime_dir = map(
-        _path, (bootstrap_python, registry, unit_dir, runtime_dir)
-    )
-    if candidate_version is not None:
-        _identifier(candidate_version)
-    _trusted(python)
-    if not python.is_file() or not os.access(python, os.X_OK):
-        raise HelperError("executable bootstrap required")
-    _trusted(unit_dir, directory=True)
-    if runtime_dir.parent != RUNTIME_ROOT:
-        raise HelperError("runtime directory must be directly beneath /run")
-    if type(group) is not int or group < 0:
-        raise HelperError("explicit socket group required")
-    unit = unit_dir / "ai-device-native-helper.service"
-    if unit.exists() or unit.is_symlink():
-        raise HelperError("helper unit already exists; explicit reconciliation required")
-    if candidate_version is not None:
-        from . import native_bootstrap
-
-        if python != native_bootstrap.trusted_helper_bootstrap() / "bin/python3.13":
-            raise HelperError("independent bootstrap required for candidate deployment")
-    else:
-        # The unit now launches the packaged entrypoint, so that file -- not only
-        # the interpreter -- is what root will execute. Require it to be a
-        # root-owned, non-writable regular file before publishing a unit onto it.
-        _require_helper_entrypoint()
-    if not registry.exists() and candidate_version is None:
-        # The default registry lives under /var/lib/<product>, which does not
-        # exist on a fresh host. Create the intermediate directory too, but only
-        # beneath an ancestor that is already administrator-owned and unwritable;
-        # trust is never extended by this package.
-        # Walk up to the deepest existing ancestor and create the rest. That
-        # ancestor must already be administrator-owned, so creation never
-        # widens trust; each new level is root-owned 0755 like its parent.
-        missing = []
-        ancestor = registry.parent
-        while not ancestor.exists():
-            missing.append(ancestor)
-            ancestor = ancestor.parent
-        _trusted(ancestor, directory=True)
-        for path in reversed(missing):
-            path.mkdir(mode=0o755)
-        _trusted(registry.parent, directory=True)
-        registry.mkdir(mode=0o755)
-    _trusted(registry, directory=True)
-    with package_lease(registry, exclusive=True, existing=candidate_version is not None):
-        _assert_no_query_supervisor_intent(registry)
-        candidate_sha256 = None
-        if candidate_version is not None:
-            native_bootstrap._require_proven_candidate_launch_fence()
-            evidence = native_bootstrap.read_helper_candidate(registry / "bootstrap-candidates", candidate_version)
-            candidate_sha256 = evidence["snapshot_sha256"]
-        return _deploy_helper_locked(python, registry, unit_dir, runtime_dir, group, candidate_version, candidate_sha256)
 
 
-def _require_helper_entrypoint(path=None):
-    """Refuse to publish a unit that would exec an untrusted entrypoint."""
-    path = Path(HELPER_ENTRYPOINT if path is None else path)
-    try:
-        info = path.lstat()
-    except OSError as error:
-        raise HelperError(f"stable helper entrypoint is missing: {error}") from error
-    if not stat.S_ISREG(info.st_mode):
-        raise HelperError("stable helper entrypoint must be a regular file")
-    if not os.access(path, os.X_OK):
-        raise HelperError("stable helper entrypoint must be executable")
-    _trusted(path)
-    return path
 
 
-def _deploy_helper_locked(python, registry, unit_dir, runtime_dir, group, candidate_version, candidate_sha256):
-    """Publish the unit while the caller holds the exclusive package lease."""
-    unit = unit_dir / "ai-device-native-helper.service"
-    content = render_helper_unit(
-        bootstrap_python=python, registry=registry, socket_path=runtime_dir / "helper.sock",
-        group=group, candidate_version=candidate_version, candidate_sha256=candidate_sha256,
-    )
-    if not runtime_dir.exists():
-        _trusted(runtime_dir.parent, directory=True)
-        runtime_dir.mkdir(mode=0o755)
-    _trusted(runtime_dir, directory=True)
-    # RuntimeDirectory is managed by systemd across host boots. Preserve sockets
-    # across daemon failures: never silently unlink an unknown existing endpoint.
-    content = content.replace(
-        "UMask=0077\n",
-        f"RuntimeDirectory={runtime_dir.name}\n"
-        "RuntimeDirectoryMode=0755\nRuntimeDirectoryPreserve=yes\nUMask=0077\n",
-    )
-    fd, temporary = tempfile.mkstemp(prefix=".helper-unit-", dir=unit_dir)
-    try:
-        with os.fdopen(fd, "w") as stream:
-            stream.write(content)
-            stream.flush()
-            os.fchmod(stream.fileno(), 0o644)
-            os.fsync(stream.fileno())
-        os.link(temporary, unit)
-        with _directory_fd(unit_dir) as directory_fd:
-            os.fsync(directory_fd)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
-    return {"unit": str(unit), "started": False, "enabled": False, "daemon_reload_required": True}
 
 
 @contextmanager
@@ -1001,767 +858,40 @@ class Helper:
                 raise HelperError("instance management busy") from exc
             yield
 
-    def handle(self, request, *, peer_uid):
-        if not isinstance(request, dict) or set(request) != {
-            "action",
-            "instance_id",
-            "operation_id",
-        }:
-            raise HelperError("request accepts only action, instance_id and operation_id")
-        action = request["action"]
-        if not isinstance(action, str) or action not in ACTIONS:
-            raise HelperError("unsupported helper action")
-        instance_id = _identifier(request["instance_id"])
-        operation_id = _identifier(request["operation_id"])
-        record = self._binding(instance_id)
-        if type(peer_uid) is not int or peer_uid not in (0, record["uid"]):
-            raise HelperError("peer is not the registered owner")
-        with self._lease(instance_id):
-            intent_path = self.registry / f"op-{instance_id}-{operation_id}.json"
-            if action == "start" and not intent_path.exists():
-                # Query can launch a subprocess. Refuse a known supervisor
-                # intent before it, and prevent publication during this query.
-                # This does not prove that query descendants have exited.
-                with package_lease(self.registry):
-                    _assert_no_query_supervisor_intent(self.registry)
-                    snapshot = self._snapshot(record)
-            else:
-                snapshot = self._snapshot(record)
-            result = {
-                "instance_id": instance_id,
-                "operation_id": operation_id,
-                "observation": snapshot,
-            }
-            recovery_path = self.registry / f"recovery-{instance_id}-{operation_id}.json"
-            if action in {"resolve-running", "resolve-stopped"}:
-                intent_path = self.registry / f"op-{instance_id}-{operation_id}.json"
-                result_path = self.registry / f"result-{instance_id}-{operation_id}.json"
-                expected = {
-                    "action": "start",
-                    "instance_id": instance_id,
-                    "operation_id": operation_id,
-                    "unit_sha256": record["unit_sha256"],
-                }
-                stored_intent = (
-                    json.loads(intent_path.read_text()) if intent_path.exists() else None
-                )
-                if stored_intent is not None:
-                    _validate_start_barrier(stored_intent)
-                if stored_intent and stored_intent.get("execution_barrier") in (1, 2):
-                    expected["execution_barrier"] = stored_intent["execution_barrier"]
-                if stored_intent != expected:
-                    raise HelperError("matching start intent required for recovery")
-                _require_current_start_barrier(stored_intent)
-                _require_proven_start_sender_tree()
-                if recovery_path.exists():
-                    return {**result, "recovery": _read_start_recovery(recovery_path, expected)}
-                if (
-                    result_path.exists()
-                    and json.loads(result_path.read_text()).get("state") != "unknown"
-                ):
-                    raise HelperError("only an unknown start requires recovery")
-                with (
-                    _instance_service_lease(Path(record["root"])),
-                    self._execution_lease(instance_id, existing=True)
-                    if expected.get("execution_barrier") in (1, 2)
-                    else nullcontext(),
-                ):
-                    if expected.get("execution_barrier") == 2:
-                        receipt_path = self.registry / f"sender-{instance_id}-{operation_id}.json"
-                        if not receipt_path.exists():
-                            raise HelperError("sender completion receipt missing; remains unknown")
-                        _trusted(receipt_path)
-                        receipt = json.loads(receipt_path.read_text())
-                        if not _valid_sender_completion(receipt, expected):
-                            raise HelperError("sender completion receipt mismatch; remains unknown")
-                    if action == "resolve-stopped":
-                        if expected.get("execution_barrier") != 2:
-                            raise HelperError(
-                                "legacy intent has no sender barrier; manual reconciliation required"
-                            )
-                        observation = self._snapshot(record)
-                        if (
-                            observation["ActiveState"] not in {"inactive", "failed"}
-                            or observation["MainPID"] != "0"
-                        ):
-                            raise HelperError(
-                                "nonrunning service required; no running client will be stopped"
-                            )
-                        job = observation["Job"]
-                        if job not in ("", "0"):
-                            if not isinstance(job, str) or not job.strip():
-                                raise HelperError("unknown systemd job; remains unknown")
-                            self.adapter.cancel_job(job.split()[0])
-                        observation = self._snapshot(record)
-                        if (
-                            observation["ActiveState"] not in {"inactive", "failed"}
-                            or observation["SubState"] not in {"dead", "failed"}
-                            or observation["MainPID"] != "0"
-                            or observation["Job"] not in ("", "0")
-                        ):
-                            raise HelperError("service or job not quiescent; remains unknown")
-                        recovery = {
-                            "state": "confirmed_stopped",
-                            "intent": expected,
-                            "observation": observation,
-                            "start_replayed": False,
-                        }
-                        _save_new(recovery_path, recovery)
-                        return {**result, "recovery": recovery}
-                    observation = self._snapshot(record)
-                    if (
-                        observation["ActiveState"] != "active"
-                        or observation["SubState"] != "running"
-                        or not str(observation["MainPID"]).isdigit()
-                        or int(observation["MainPID"]) <= 1
-                        or observation["Job"] not in ("", "0")
-                    ):
-                        raise HelperError(
-                            "stable running service without a pending job required; remains unknown"
-                        )
-                    recovery = {
-                        "state": "confirmed_running",
-                        "intent": expected,
-                        "observation": observation,
-                        "start_replayed": False,
-                    }
-                    _save_new(recovery_path, recovery)
-                return {**result, "recovery": recovery}
-            if action != "start":
-                path = self.registry / f"op-{instance_id}-{operation_id}.json"
-                result["intent"] = json.loads(path.read_text()) if path.exists() else None
-                stored_result = self.registry / f"result-{instance_id}-{operation_id}.json"
-                if result["intent"] is not None:
-                    intent = result["intent"]
-                    if (
-                        not isinstance(intent, dict)
-                        or intent.get("action") != "start"
-                        or intent.get("instance_id") != instance_id
-                        or intent.get("operation_id") != operation_id
-                    ):
-                        raise HelperError("operation journal identity differs")
-                elif stored_result.exists() or recovery_path.exists():
-                    raise HelperError("operation journal intent missing")
-                result["result"] = (
-                    json.loads(stored_result.read_text()) if stored_result.exists() else None
-                )
-                result["recovery"] = (
-                    _read_start_recovery(recovery_path, result["intent"])
-                    if recovery_path.exists()
-                    else None
-                )
-                return result
-            result_path = self.registry / f"result-{instance_id}-{operation_id}.json"
-            intent = {
-                "action": "start",
-                "instance_id": instance_id,
-                "operation_id": operation_id,
-                "unit_sha256": record["unit_sha256"],
-                "execution_barrier": 2,
-            }
-            if intent_path.exists():
-                existing_intent = json.loads(intent_path.read_text())
-                _validate_start_barrier(existing_intent)
-                if "execution_barrier" not in existing_intent:
-                    intent.pop("execution_barrier")
-                else:
-                    intent["execution_barrier"] = existing_intent["execution_barrier"]
-                if existing_intent != intent:
-                    raise HelperError("operation identity conflict")
-                return {
-                    **result,
-                    "result": json.loads(result_path.read_text())
-                    if result_path.exists()
-                    else {"state": "unknown"},
-                    "replayed": False,
-                    "recovery": _read_start_recovery(recovery_path, existing_intent)
-                    if recovery_path.exists()
-                    else None,
-                }
-            for pending in self.registry.glob(f"op-{instance_id}-*.json"):
-                pending_intent = json.loads(pending.read_text())
-                _validate_start_barrier(pending_intent)
-                result_file = pending.with_name(pending.name.replace("op-", "result-", 1))
-                state = None
-                if result_file.exists():
-                    stored = json.loads(result_file.read_text())
-                    if not isinstance(stored, dict) or stored.get("state") not in (
-                        "started", "already_active", "unknown"
-                    ):
-                        raise HelperError("invalid start result blocks a new start")
-                    state = stored["state"]
-                if state == "started":
-                    _require_proven_start_sender_tree()
-                if state in (None, "unknown"):
-                    recovered = pending.with_name(pending.name.replace("op-", "recovery-", 1))
-                    if not recovered.exists():
-                        raise HelperError(
-                            "unconfirmed operation blocks a new start; reconcile first"
-                        )
-                    _require_current_start_barrier(pending_intent)
-                    _require_proven_start_sender_tree()
-                    _read_start_recovery(recovered, pending_intent)
-            if snapshot["ActiveState"] not in {"inactive", "failed", "active"}:
-                raise HelperError("service transition requires read-only reconciliation")
-            with (
-                self._execution_lease(instance_id) as execution_fd,
-                package_lease(self.registry) as package_fd,
-            ):
-                _assert_no_query_supervisor_intent(self.registry)
-                _assert_no_package_intent(self.registry)
-                _save_new(intent_path, intent)
-                outcome = {"state": "already_active"}
-                if snapshot["ActiveState"] != "active":
-                    try:
-                        with _instance_service_lease(Path(record["root"])):
-                            self.adapter.start(
-                                record["unit"],
-                                lease_fd=execution_fd,
-                                package_fd=package_fd,
-                                receipt_path=self.registry
-                                / f"sender-{instance_id}-{operation_id}.json",
-                                intent=intent,
-                            )
-                            observation = self._snapshot(record)
-                        outcome = {
-                            "state": "started"
-                            if observation["ActiveState"] == "active"
-                            else "unknown",
-                            "observation": observation,
-                        }
-                    except (OSError, subprocess.SubprocessError, HelperError):
-                        outcome = {"state": "unknown"}
-                _save_new(result_path, outcome)
-                return {**result, "result": outcome, "replayed": False}
 
 
-@contextmanager
-def _daemon_anchor(registry):
-    """Serialize daemon and socket recovery on the stable registry directory.
-
-    The administrator must keep the registry, its ancestors and mount stable
-    while a daemon or unresolved transaction exists. This cooperative lock
-    cannot enforce that operational precondition or identify old helpers.
-    """
-    registry = _path(registry)
-    _trusted(registry, directory=True)
-    fd = os.open(registry, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise HelperError("helper daemon or recovery is already active") from exc
-        try:
-            locked = os.fstat(fd)
-            current = registry.lstat()
-            _trusted(registry, directory=True)
-        except OSError as exc:
-            raise HelperError("daemon anchor changed during acquisition") from exc
-        if (
-            not stat.S_ISDIR(locked.st_mode)
-            or not stat.S_ISDIR(current.st_mode)
-            or (locked.st_dev, locked.st_ino) != (current.st_dev, current.st_ino)
-        ):
-            raise HelperError("daemon anchor changed during acquisition")
-        yield fd
-    finally:
-        os.close(fd)
 
 
-@contextmanager
-def _daemon_lease(registry):
-    with _daemon_lease_pair(registry) as (_, fd):
-        yield fd
 
 
-@contextmanager
-def _daemon_lease_pair(registry):
-    """Own both daemon lock descriptions for the lifetime of this context.
-
-    This internal interface does not prove locks remain held, authorize a
-    child or operation, or provide supervision. Callers must not unlock or
-    close the descriptors and must control every fork inheritance.
-    """
-    registry = _path(registry)
-    with _daemon_anchor(registry) as anchor, _daemon_file_lease(registry) as fd:
-        yield anchor, fd
 
 
-@contextmanager
-def _daemon_file_lease(registry):
-    path = registry / "helper-daemon.lock"
-    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    try:
-        _trusted(path)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise HelperError("helper daemon or recovery is already active") from exc
-        # Verify the locked description is still the trusted path after locking.
-        # This detects acquisition-time drift, not later replacement or unlock.
-        try:
-            locked = os.fstat(fd)
-            current = path.lstat()
-            _trusted(path)
-        except OSError as exc:
-            raise HelperError("daemon lease path changed during acquisition") from exc
-        if (
-            not stat.S_ISREG(locked.st_mode)
-            or not stat.S_ISREG(current.st_mode)
-            or locked.st_mode & 0o022
-            or (locked.st_dev, locked.st_ino) != (current.st_dev, current.st_ino)
-        ):
-            raise HelperError("daemon lease path changed during acquisition")
-        # The caller may retain this exact open-file description across fork.
-        # An fd alone does not prove a live lock or authorize an operation.
-        yield fd
-    finally:
-        os.close(fd)
 
 
-def recover_socket(registry, socket_path):
-    """Administrator-only explicit stale endpoint cleanup, never operation replay."""
-    if sys.platform != "linux" or os.geteuid() != 0:
-        raise HelperError("socket recovery requires Linux administrator identity")
-    socket_path = _path(socket_path)
-    _trusted(socket_path.parent, directory=True)
-    with _daemon_lease(registry), package_lease(registry):
-        _assert_no_query_supervisor_intent(registry)
-        try:
-            before = socket_path.lstat()
-        except FileNotFoundError:
-            return {"removed": False, "reason": "absent"}
-        if not stat.S_ISSOCK(before.st_mode) or before.st_uid != 0:
-            raise HelperError("only a root-owned Unix socket may be recovered")
-        with socket.socket(socket.AF_UNIX) as probe:
-            probe.settimeout(1)
-            try:
-                probe.connect(str(socket_path))
-            except OSError as exc:
-                if exc.errno != errno.ECONNREFUSED:
-                    raise HelperError("endpoint status uncertain; recovery refused") from exc
-            else:
-                raise HelperError("endpoint is listening; recovery refused")
-        after = socket_path.lstat()
-        if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
-            raise HelperError("endpoint changed; recovery refused")
-        socket_path.unlink()
-        with _directory_fd(socket_path.parent) as directory_fd:
-            os.fsync(directory_fd)
-        return {"removed": True, "operations_changed": False}
 
 
-def _retired_reason():
-    """Why this process should stop serving, or None if it is still current.
-
-    The running interpreter is the honest signal: it names the tree that was
-    published when this process started. If the pointer has moved to another
-    tree, the code here is stale and the payload it lives in is about to be
-    deleted. Returning None on any uncertainty (unreadable pointer, fallback
-    layout) keeps a working helper serving rather than stopping it on a guess.
-    """
-    from . import native_bootstrap
-
-    # The interpreter lives in <runtime>/bin, and trusted_helper_bootstrap()
-    # returns <runtime>.
-    running = Path(sys.executable).resolve().parent.parent
-    try:
-        expected = native_bootstrap.trusted_helper_bootstrap().resolve()
-    except (OSError, native_bootstrap.BootstrapError):
-        return None
-    if running != expected:
-        return f"running {running} but the release pointer names {expected}"
-    if not running.exists():
-        return f"running code {running} is no longer installed"
-    return None
 
 
-def serve(registry, socket_path, *, group):
-    if sys.platform != "linux" or os.geteuid() != 0:
-        raise HelperError("helper daemon requires Linux administrator identity")
-    with _daemon_lease(registry):
-        # A participating query supervisor also takes the daemon lease first.
-        # Once checked under the package lease, retaining the daemon lease
-        # prevents publication for the entire lifetime of this server.
-        with package_lease(registry):
-            _assert_no_query_supervisor_intent(registry)
-        _serve(registry, socket_path, group=group)
 
 
-def _serve(registry, socket_path, *, group, retired_reason=None):
-    # Resolved at call time so callers (and tests) can substitute the check.
-    if retired_reason is None:
-        retired_reason = _retired_reason
-    if sys.platform != "linux" or os.geteuid() != 0:
-        raise HelperError("helper daemon requires Linux administrator identity")
-    helper = Helper(registry)
-    socket_path = _path(socket_path)
-    _trusted(socket_path.parent, directory=True)
-    # Existing socket may be in use or orphaned; never unlink it automatically.
-    with socket.socket(socket.AF_UNIX) as server:
-        server.bind(str(socket_path))
-        os.chown(socket_path, 0, group)
-        os.chmod(socket_path, 0o660)
-        server.listen(8)
-        while True:
-            # A package upgrade replaces the bootstrap tree this process was
-            # started from. Nothing here can load the new code in place, and
-            # continuing to answer would mean serving from a directory that no
-            # longer exists. Check between requests -- the loop handles one
-            # connection at a time, so no request is ever in flight here -- and
-            # leave restarting to systemd or the administrator.
-            reason = retired_reason()
-            if reason is not None:
-                # Remove the endpoint on the way out. This process created it
-                # and holds no request, so it is our own resource -- unlike the
-                # orphan case recover-socket handles, where the owner is gone
-                # and we must not guess. Leaving it behind would make the next
-                # start fail with EADDRINUSE and turn a clean drain into an
-                # outage that needs manual recovery.
-                try:
-                    os.unlink(socket_path)
-                except OSError:
-                    pass
-                print(f"helper exiting: {reason}", file=sys.stderr)
-                return
-            connection, _ = server.accept()
-            with connection:
-                deadline = time.monotonic() + 5
-                connection.settimeout(5)
-                try:
-                    uid = struct.unpack(
-                        "3i",
-                        connection.getsockopt(
-                            socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")
-                        ),
-                    )[1]
-                    data = bytearray()
-                    while not data.endswith(b"\n"):
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0:
-                            raise HelperError("request deadline exceeded")
-                        connection.settimeout(remaining)
-                        chunk = connection.recv(min(1024, MAX_REQUEST + 1 - len(data)))
-                        if not chunk:
-                            raise HelperError("incomplete request")
-                        data.extend(chunk)
-                        if len(data) > MAX_REQUEST:
-                            raise HelperError("request too large")
-                    if time.monotonic() >= deadline:
-                        raise HelperError("request deadline exceeded")
-                    connection.settimeout(5)
-                    result = helper.handle(json.loads(data), peer_uid=uid)
-                    response = {"ok": True, "result": result}
-                except (HelperError, ValueError, KeyError, OSError, subprocess.SubprocessError):
-                    # Never return command stderr or environment/credential content.
-                    response = {"ok": False, "error": "helper_request_refused"}
-                try:
-                    connection.settimeout(5)
-                    connection.sendall(json.dumps(response).encode() + b"\n")
-                except OSError:
-                    pass  # A lost response must not cause the action to replay.
 
 
-def _receive_root_credential_frame(connection, *, deadline):
-    """Observe one root-sent frame; not a handler, code, or invocation proof.
-
-    The listener must enable SO_PASSCRED before any data can be queued. This
-    function cannot verify that historical precondition. The caller owns the
-    connection and must close it after this single frame, including on failure.
-    No business action or authorization is performed here.
-    """
-    if sys.platform != "linux" or not all(
-        hasattr(socket, name) for name in ("SO_PASSCRED", "SCM_CREDENTIALS", "SCM_RIGHTS", "MSG_CMSG_CLOEXEC")
-    ):
-        raise HelperError("per-message credentials unavailable")
-    try:
-        if connection.getsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED) != 1:
-            raise HelperError("per-message credentials not enabled")
-        data = bytearray()
-        sender = None
-        credential_size = struct.calcsize("3i")
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise HelperError("request deadline exceeded")
-            connection.settimeout(remaining)
-            chunk, controls, flags, _ = connection.recvmsg(
-                min(1024, MAX_REQUEST + 1 - len(data)),
-                socket.CMSG_SPACE(credential_size) + socket.CMSG_SPACE(256),
-                socket.MSG_CMSG_CLOEXEC,
-            )
-            # The kernel installs delivered SCM_RIGHTS even on rejected records.
-            close_failed = False
-            for level, kind, payload in controls:
-                if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
-                    descriptors = array.array("i")
-                    descriptors.frombytes(payload[:len(payload) - len(payload) % descriptors.itemsize])
-                    for fd in descriptors:
-                        try:
-                            os.close(fd)
-                        except OSError:
-                            close_failed = True
-            if close_failed:
-                raise HelperError("cannot close unexpected descriptors")
-            if flags & (socket.MSG_CTRUNC | socket.MSG_TRUNC) or not chunk:
-                raise HelperError("truncated or incomplete request")
-            if len(controls) != 1:
-                raise HelperError("one sender credential required")
-            level, kind, payload = controls[0]
-            if level != socket.SOL_SOCKET or kind != socket.SCM_CREDENTIALS or len(payload) != credential_size:
-                raise HelperError("invalid sender credential")
-            identity = struct.unpack("3i", payload)
-            if identity[0] <= 0 or identity[1] != 0 or (sender is not None and sender != identity):
-                raise HelperError("sender changed or is not root")
-            sender = identity
-            data.extend(chunk)
-            if len(data) > MAX_REQUEST:
-                raise HelperError("request too large")
-            if b"\n" in data:
-                if not data.endswith(b"\n") or data.count(b"\n") != 1:
-                    raise HelperError("trailing or multiple request frames")
-                if time.monotonic() >= deadline:
-                    raise HelperError("request deadline exceeded")
-                return bytes(data), sender
-    except OSError as exc:
-        raise HelperError("credential frame receive failed") from exc
 
 
-def _serve_credential_query_once(service, connection, *, deadline):
-    """Unwired one-frame root query fixture; not supervisor or dispatch authorization.
-
-    Caller must enable SO_PASSCRED on the listener before any bytes are queued.
-    This owns and closes the accepted connection after exactly one response.
-    Only query is permitted; an observed sender is not a trusted handler identity.
-    """
-    def pairs_no_duplicates(pairs):
-        result = {}
-        for key, value in pairs:
-            if key in result:
-                raise HelperError("duplicate request field")
-            result[key] = value
-        return result
-
-    with connection:
-        try:
-            frame, sender = _receive_root_credential_frame(connection, deadline=deadline)
-            if sender[1] != 0:
-                raise HelperError("root sender required")
-            request = json.loads(frame, object_pairs_hook=pairs_no_duplicates)
-            if not isinstance(request, dict) or set(request) != {
-                "action", "instance_id", "operation_id"
-            } or request["action"] != "query":
-                raise HelperError("only query is permitted")
-            _identifier(request["instance_id"])
-            _identifier(request["operation_id"])
-            response = {"ok": True, "result": service.handle(request, peer_uid=sender[1])}
-        except (HelperError, ValueError, KeyError, OSError, subprocess.SubprocessError):
-            response = {"ok": False, "error": "helper_request_refused"}
-        try:
-            connection.settimeout(5)
-            connection.sendall(json.dumps(response).encode() + b"\n")
-        except OSError:
-            pass  # A lost response must not cause a second handler call.
 
 
-def _serve_credential_queries(registry, socket_path, *, group):
-    """Internal root-only query listener; not wired into the daemon or supervisor.
-
-    It does not authenticate the executing handler or authorize mutations.
-    The caller must ensure the stable-registry administrative precondition.
-    """
-    if sys.platform != "linux" or os.geteuid() != 0:
-        raise HelperError("query listener requires Linux administrator identity")
-    if not all(hasattr(socket, name) for name in (
-        "SO_PASSCRED", "SCM_CREDENTIALS", "SCM_RIGHTS", "MSG_CMSG_CLOEXEC"
-    )):
-        raise HelperError("per-message credentials unavailable")
-    with _daemon_lease(registry):
-        _serve_credential_queries_locked(registry, socket_path, group=group)
 
 
-def _serve_credential_queries_locked(registry, socket_path, *, group, retired_reason=None):
-    if retired_reason is None:
-        retired_reason = _retired_reason
-    """Internal query loop; caller owns both daemon locks for its entire lifetime.
-
-    This function cannot verify that precondition or authenticate a supervisor;
-    it must not be treated as an authorization or public service entry point.
-    """
-    if sys.platform != "linux" or os.geteuid() != 0:
-        raise HelperError("query listener requires Linux administrator identity")
-    if not all(hasattr(socket, name) for name in (
-        "SO_PASSCRED", "SCM_CREDENTIALS", "SCM_RIGHTS", "MSG_CMSG_CLOEXEC"
-    )):
-        raise HelperError("per-message credentials unavailable")
-    service = Helper(registry)
-    socket_path = _path(socket_path)
-    _trusted(socket_path.parent, directory=True)
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
-        server.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
-        server.bind(str(socket_path))
-        os.chown(socket_path, 0, group)
-        os.chmod(socket_path, 0o600)
-        server.listen(8)
-        while True:
-            # A package upgrade replaces the bootstrap tree this process was
-            # started from. Nothing here can load the new code in place, and
-            # continuing to answer would mean serving from a directory that no
-            # longer exists. Check between requests -- the loop handles one
-            # connection at a time, so no request is ever in flight here -- and
-            # leave restarting to systemd or the administrator.
-            reason = retired_reason()
-            if reason is not None:
-                # Remove the endpoint on the way out. This process created it
-                # and holds no request, so it is our own resource -- unlike the
-                # orphan case recover-socket handles, where the owner is gone
-                # and we must not guess. Leaving it behind would make the next
-                # start fail with EADDRINUSE and turn a clean drain into an
-                # outage that needs manual recovery.
-                try:
-                    os.unlink(socket_path)
-                except OSError:
-                    pass
-                print(f"helper exiting: {reason}", file=sys.stderr)
-                return
-            connection, _ = server.accept()
-            _serve_credential_query_once(service, connection, deadline=time.monotonic() + 5)
 
 
-@contextmanager
-def _socket_peer_process(connection):
-    """Pin a Linux Unix-socket peer for observation, never authorize dispatch.
-
-    SO_PEERPIDFD (Linux 6.5+) pins the kernel-reported socket peer without
-    the PID reuse race in pidfd_open(peer_pid). The peer can be a socket
-    creator rather than the process handling a particular message. Unsupported
-    kernels and peers that exit during observation fail closed. This does not
-    prove the handler, loaded code, or prevent a new daemon from starting.
-    """
-    import select
-
-    if sys.platform != "linux":
-        raise HelperError("Linux peer process identity required")
-    fd = None
-    try:
-        try:
-            raw = connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
-            pid, uid, gid = struct.unpack("3i", raw)
-            if pid <= 1 or uid != 0:
-                raise HelperError("unexpected helper peer credentials")
-            # Python may not expose SO_PEERPIDFD even when the kernel supports it.
-            raw_fd = connection.getsockopt(socket.SOL_SOCKET, getattr(socket, "SO_PEERPIDFD", 77), 4)
-            fd = struct.unpack("i", raw_fd)[0]
-            if fd < 0:
-                raise HelperError("invalid helper peer pidfd")
-            os.set_inheritable(fd, False)
-            with open(f"/proc/self/fdinfo/{fd}", encoding="ascii") as info:
-                fields = dict(line.rstrip().split(":", 1) for line in info if ":" in line)
-            if fields.get("Pid", "").strip() != str(pid):
-                raise HelperError("helper peer pidfd does not match credentials")
-            poller = select.poll()
-            poller.register(fd, select.POLLIN)
-            if poller.poll(0):
-                raise HelperError("helper peer exited during observation")
-        except (OSError, ValueError, struct.error) as exc:
-            if isinstance(exc, HelperError):
-                raise
-            raise HelperError("cannot establish helper peer process identity") from exc
-        yield {"pid": pid, "uid": uid, "gid": gid, "pidfd": fd}
-        if poller.poll(0):
-            raise HelperError("helper peer exited during observation")
-    finally:
-        if fd is not None and fd >= 0:
-            os.close(fd)
 
 
-def _helper_unit_observation(*, runner=subprocess.run):
-    """Read the fixed helper unit; duplicate, missing or uncertain fields fail closed."""
-    try:
-        result = runner(
-            [
-                "/usr/bin/systemctl", "show", "ai-device-native-helper.service", "--no-pager",
-                "--property=LoadState,ActiveState,SubState,MainPID,InvocationID,FragmentPath",
-            ],
-            check=True, text=True, capture_output=True, timeout=10,
-            env={"PATH": "/usr/bin:/bin", "LANG": "C"},
-        )
-        if len(result.stdout) > 16384:
-            raise HelperError("helper unit observation too large")
-        fields = {}
-        for line in result.stdout.splitlines():
-            key, separator, value = line.partition("=")
-            if not separator or key in fields:
-                raise HelperError("invalid helper unit observation")
-            fields[key] = value
-        expected = {"LoadState", "ActiveState", "SubState", "MainPID", "InvocationID", "FragmentPath"}
-        if set(fields) != expected:
-            raise HelperError("incomplete helper unit observation")
-        if (
-            fields["LoadState"] != "loaded"
-            or fields["ActiveState"] != "active"
-            or fields["SubState"] != "running"
-            or not fields["MainPID"].isdigit()
-            or int(fields["MainPID"]) <= 1
-            or not re.fullmatch(r"[0-9a-f]{32}", fields["InvocationID"])
-            or not fields["FragmentPath"].startswith("/")
-        ):
-            raise HelperError("helper unit is not stably running")
-        return fields
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise HelperError("cannot observe helper unit") from exc
 
 
-@contextmanager
-def scoped_helper_unit_peer(connection, *, runner=subprocess.run):
-    """Pin a socket peer across a read-only observation scope, not authorization.
-
-    A successful exit requires the same systemd invocation and a live pidfd.
-    The caller must not commit an irreversible action within this scope: a
-    changed invocation may only be detected when the scope exits.
-    """
-    if sys.platform != "linux" or os.geteuid() != 0:
-        raise HelperError("Linux administrator required")
-    with _socket_peer_process(connection) as peer:
-        before = _helper_unit_observation(runner=runner)
-        if int(before["MainPID"]) != peer["pid"]:
-            raise HelperError("helper unit and socket peer differ or changed")
-        yield {
-            "state": "helper_unit_peer_observed_not_authorized",
-            "pid": peer["pid"],
-            "invocation_id": before["InvocationID"],
-            "fragment_path": before["FragmentPath"],
-            "loaded_code_verified": False,
-            "dispatch_allowed": False,
-        }
-        if before != _helper_unit_observation(runner=runner):
-            raise HelperError("helper unit and socket peer differ or changed")
 
 
-def observe_helper_unit_peer(connection, *, runner=subprocess.run):
-    """Take an instantaneous read-only observation, not loaded-code proof."""
-    with scoped_helper_unit_peer(connection, runner=runner) as result:
-        return result
 
 
-def call_helper(socket_path, request):
-    """No automatic retries: a lost start response must be queried by the same ID."""
-    data = json.dumps(request).encode() + b"\n"
-    if len(data) > MAX_REQUEST:
-        raise HelperError("request too large")
-    with socket.socket(socket.AF_UNIX) as connection:
-        connection.settimeout(150)
-        connection.connect(str(socket_path))
-        connection.sendall(data)
-        response = bytearray()
-        while not response.endswith(b"\n"):
-            chunk = connection.recv(4096)
-            if not chunk:
-                raise HelperError("response lost; query the same operation ID")
-            response.extend(chunk)
-            if len(response) > 16384:
-                raise HelperError("response too large")
-    return json.loads(response)
 
 
 def main():
@@ -1778,24 +908,6 @@ def main():
     removal.add_argument("--registry", type=Path, default=REGISTRY)
     removal.add_argument("--unit-dir", type=Path, required=True)
     removal.add_argument("--instance-id", required=True)
-    deploy = modes.add_parser("deploy")
-    for name in ("bootstrap-python", "unit-dir", "runtime-dir"):
-        deploy.add_argument("--" + name, type=Path, required=True)
-    deploy.add_argument("--registry", type=Path, default=REGISTRY)
-    deploy.add_argument("--group", type=int, required=True)
-    deploy.add_argument("--candidate-version")
-    recovery = modes.add_parser("recover-socket")
-    recovery.add_argument("--registry", type=Path, default=REGISTRY)
-    recovery.add_argument("--socket", type=Path, required=True)
-    daemon = modes.add_parser("serve")
-    daemon.add_argument("--registry", type=Path, default=REGISTRY)
-    daemon.add_argument("--socket", type=Path, required=True)
-    daemon.add_argument("--group", type=int, required=True)
-    call = modes.add_parser("call")
-    call.add_argument("--socket", type=Path, required=True)
-    call.add_argument("--action", choices=sorted(ACTIONS), required=True)
-    call.add_argument("--instance-id", required=True)
-    call.add_argument("--operation-id", required=True)
     args = vars(parser.parse_args())
     mode = args.pop("mode")
     try:
@@ -1803,20 +915,8 @@ def main():
             print(
                 json.dumps(register(**args, recover=mode == "recover-registration"), sort_keys=True)
             )
-        elif mode == "unregister":
-            print(json.dumps(unregister(**args), sort_keys=True))
-        elif mode == "deploy":
-            print(json.dumps(deploy_helper(**args), sort_keys=True))
-        elif mode == "recover-socket":
-            print(json.dumps(recover_socket(args["registry"], args["socket"]), sort_keys=True))
-        elif mode == "serve":
-            serve(args["registry"], args["socket"], group=args["group"])
         else:
-            request = {key: args[key] for key in ("action", "instance_id", "operation_id")}
-            response = call_helper(args["socket"], request)
-            print(json.dumps(response, sort_keys=True))
-            if response.get("ok") is not True:
-                parser.exit(1)
+            print(json.dumps(unregister(**args), sort_keys=True))
     except (HelperError, OSError, ValueError, KeyError) as exc:
         parser.exit(1, f"helper refused: {exc}\n")
 

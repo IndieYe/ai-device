@@ -1,5 +1,7 @@
 # Helper 受控启动与 peer 身份：评审和隔离证据
 
+> **历史记录（2026-10-31 标注）**：本文描述的是已退役的 helper socket 守护进程方案。该方案及其验收脚本已删除，当前升级链改由一次性 root 命令驱动。本文仅作为历史设计与取证记录保留，其中提到的脚本路径已不存在。
+
 状态：P1 设计验证，非生产协议；job 派发继续 default-deny，原生包覆盖保护不变。原方案及进度见 `native-lifecycle-p0-design.md`、`native-lifecycle-implementation.md` 和 `packages/device-runtime/native/HELPER.md`。不以本实验代替正式信任根、完整事务验证或用户授权。
 
 ## 信任范围与待证明链路
