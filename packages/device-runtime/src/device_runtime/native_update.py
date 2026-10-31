@@ -568,6 +568,12 @@ class Updates:
                 if job_intent_sha256 is not None and not job_path.exists():
                     raise UpdateError("package job intent missing")
                 for path in stem.parent.glob("*.apply-intent.json"):
+                    # A transaction the administrator explicitly retired is
+                    # closed, not pending: it must not fence the instance for
+                    # ever. Every other intent still blocks, including unknown
+                    # and applied-pending-activation.
+                    if _retired_file(path):
+                        continue
                     raise UpdateError(
                         "existing package transaction requires recovery or activation"
                     )
@@ -657,19 +663,24 @@ class Updates:
                 if isinstance(self.packages, Debian):
                     # The independent guard owns the outcome. Its absence is
                     # unknown, never authority for the parent to guess success.
+                    guard_state = None
                     if outcome.exists():
                         nh._trusted(outcome)
-                        if json.loads(outcome.read_bytes()).get("intent") != apply_intent:
+                        published = json.loads(outcome.read_bytes())
+                        if published.get("intent") != apply_intent:
                             raise UpdateError("package guard outcome intent differs")
+                        guard_state = published.get("state")
                 else:
                     _atomic(outcome, {"state": state, "package_observation": observed})
-                # Record the applied state even when the outcome is unknown: the
-                # package really was touched, and reconcile has to be able to say
-                # so. A known failure publishes applied_package only when the
-                # database shows the target, which is exactly what makes the
-                # helper switch meaningful.
+                    guard_state = state
+                # ``applied_package`` is a claim that the package manager finished
+                # replacing the tree. The database alone cannot support it: a
+                # refused install of an already-current version leaves the same
+                # version installed, so ``installed == target`` holds before,
+                # during and after a failed dpkg run. Requiring the guard's own
+                # success verdict is what separates "applied" from "already was".
                 installed = self.packages.installed(value["metadata"]["Package"])
-                if self._target(value, installed):
+                if self._applied(value, installed, guard_state):
                     applied = {
                         "state": "applied_package",
                         "package_observation": installed,
@@ -705,6 +716,19 @@ class Updates:
             and observation.get("version") == value["metadata"]["Version"]
             and observation.get("architecture") == value["metadata"]["Architecture"]
         )
+
+    def _applied(self, value, observation, guard_state):
+        """Applied means the package manager reported success for this intent.
+
+        On Debian the independent guard publishes both ``sender_reaped`` (the
+        process exited) and ``package_applied_pending_activation`` (exit status
+        zero *and* the database shows the exact target). Only the latter is
+        evidence that a replacement happened; a zero exit alone would accept a
+        no-op, and a matching version alone would accept a refusal.
+        """
+        if guard_state != "package_applied_pending_activation":
+            return False
+        return self._target(value, observation)
 
     def switch_helper(self, instance_id, operation_id, *, expected_version):
         """Move ``bootstrap/current`` to the installed version and record it.
@@ -785,6 +809,59 @@ class Updates:
                     _atomic(path, receipt)
             return {**self._observation(stem, value), "helper_switched": receipt}
 
+    def retire(self, instance_id, operation_id):
+        """Administrator closure for an apply transaction that will never finish.
+
+        ``apply-intent`` is a durable start gate: it blocks new starts, new
+        registrations and every later package transaction, and nothing removes it.
+        Without an explicit closure a transaction that ended ``unknown`` (or was
+        applied but never switched) fences the instance forever.
+
+        This records that the administrator accepted the observed end state. It
+        never replays the package, never clears any evidence, and never claims
+        success: the intent, sender, package log and outcome all stay in place,
+        and the receipt only names what was observed when the closure happened.
+
+        Holding the exclusive package lease is the proof that no sender survives:
+        the guard inherits that fd and dpkg's whole process tree keeps it, so the
+        lease can only be taken after every descendant has exited. That is the
+        evidence ``recover`` lacks and the reason this path is separate from it.
+        """
+        with self._transaction(instance_id, operation_id) as (binding, stem):
+            value = self._prepared(binding, stem)
+            intent_path = stem.with_suffix(".apply-intent.json")
+            retired = stem.with_suffix(".retired.json")
+            with self._apply_lease(self.registry / "package-manager", existing=True):
+                if not os.path.lexists(intent_path):
+                    raise UpdateError("no apply intent to retire")
+                nh._trusted(intent_path)
+                intent = json.loads(intent_path.read_text())
+                if not isinstance(intent, dict):
+                    raise UpdateError("apply intent must be an object")
+                # A queued job owns its own closure protocol; retiring underneath
+                # it would clear a fence the job worker still depends on.
+                if nh._pending_package_jobs(stem.parent):
+                    raise UpdateError("queued package job requires its own closure")
+                installed = self.packages.installed(value["metadata"]["Package"])
+                receipt = {
+                    "state": "retired_without_replay",
+                    "intent_sha256": nh._digest(intent_path),
+                    "package_observation": installed,
+                    "package_matches_target": self._target(value, installed),
+                    "bootstrap_now": self._bootstrap_name(),
+                    "target_bootstrap": value.get("bootstrap_version"),
+                    "retry_allowed": False,
+                    "fence_retained": True,
+                    "replay": "none",
+                }
+                if os.path.lexists(retired):
+                    nh._trusted(retired)
+                    if not nh._same_json(json.loads(retired.read_text()), receipt):
+                        raise UpdateError("retirement evidence changed; explicit review required")
+                    return self._observation(stem, value)
+                _atomic(retired, receipt)
+            return self._observation(stem, value)
+
     def _observation(self, stem, value):
         def read(suffix):
             path = stem.with_suffix(suffix)
@@ -800,15 +877,17 @@ class Updates:
 
         applied = read(".applied.json")
         switched = read(".helper.json")
+        retired = read(".retired.json")
         return {
             "prepared": value,
             "apply_intent": read(".apply-intent.json"),
             "outcome": read(".outcome.json"),
             "recovery": read(".recovery.json"),
+            "retired": retired,
             "applied": applied,
             "helper_switched": switched,
             "bootstrap_now": self._bootstrap_name(),
-            "next_step": _next_step(applied, switched),
+            "next_step": _next_step(applied, switched, retired),
             "installed_package": self.packages.installed(value["metadata"]["Package"]),
             "active_sha256": nh._digest(
                 Path(self.helper._binding(value["instance_id"])["root"]) / "active.json"
@@ -912,13 +991,46 @@ class Updates:
             return self._observation(stem, value)
 
 
-def _next_step(applied, switched):
+def _retired_file(intent_path):
+    """Report whether this exact intent carries an administrator retirement.
+
+    The receipt binds the intent digest, so a retirement cannot be shifted onto
+    a different transaction by renaming or rewriting the intent. Corrupt,
+    untrusted or mismatched evidence reports False: the safe answer here is
+    "still fenced", never "closed".
+    """
+    name = intent_path.name
+    suffix = ".apply-intent.json"
+    if not name.endswith(suffix):
+        return False
+    receipt = intent_path.with_name(name[: -len(suffix)] + ".retired.json")
+    if not os.path.lexists(receipt):
+        return False
+    try:
+        nh._trusted(receipt)
+        stored = json.loads(receipt.read_text())
+        if not isinstance(stored, dict):
+            return False
+        if stored.get("state") != "retired_without_replay":
+            return False
+        if stored.get("retry_allowed") is not False:
+            return False
+        return stored.get("intent_sha256") == nh._digest(intent_path)
+    except (OSError, ValueError, nh.HelperError):
+        return False
+
+
+def _next_step(applied, switched, retired=None):
     """Name what the transaction still needs, without performing it.
 
     Reconcile is read-only on purpose: the next move -- switching the helper,
     activating a release, or accepting a partial state -- changes what runs on
     the host, so it stays an explicit call.
     """
+    if retired is not None and retired.get("state") == "retired_without_replay":
+        # An accepted dead end: nothing remains for this transaction, so the
+        # instance is free for a new one. The evidence stays on disk.
+        return "retired"
     if applied is None:
         return "apply"
     if applied.get("state") != "applied_package":
@@ -957,6 +1069,9 @@ def main():
     switch.add_argument("--expected-version", required=True)
     modes.add_parser("reconcile")
     modes.add_parser("recover")
+    # Explicit administrator closure. Takes no input beyond the transaction
+    # coordinates: it accepts what is on disk and refuses to replay anything.
+    modes.add_parser("retire")
     args = vars(parser.parse_args())
     action = args.pop("action").replace("-", "_")
     if action == "prepare_signed":

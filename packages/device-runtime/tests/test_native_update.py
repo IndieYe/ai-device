@@ -47,6 +47,30 @@ class Packages:
             raise subprocess.CalledProcessError(1, "fixture")
 
 
+class _DebianPackages(Packages, nu.Debian):
+    """Exercise the Debian branch, where an independent guard owns the outcome.
+
+    Inheriting ``nu.Debian`` is what selects that branch: the production code
+    dispatches on the type, and a look-alike would test the wrong path. The real
+    ``apply`` spawns a detached guard, so these tests replace ``apply`` itself
+    and choose the verdict explicitly.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.package = None
+        # ``prepare`` records the source observation, and ``apply`` re-checks it
+        # before writing the intent. Starting at the fixture's version 1 keeps
+        # that gate intact, so only the post-apply observation is the trap.
+        self.version = "1"
+
+    def prepare_execution(self, stem):
+        return {"runtime_snapshot_sha256": "0" * 64}
+
+    def installed(self, name):
+        return {**self.observation, "version": self.version}
+
+
 class Helper:
     def __init__(self, root):
         self.root = root
@@ -1754,6 +1778,181 @@ def test_retired_job_allows_new_id_but_never_replays_old(update, monkeypatch):
     assert path.exists() and stem.with_suffix(".job-closed.json").exists()
 
 
+
+
+def test_apply_does_not_claim_applied_when_guard_reports_unknown(update, monkeypatch):
+    """A refused install of an already-current version must not look applied.
+
+    The database still shows the target version in that case, so the version
+    comparison alone cannot tell "dpkg replaced the tree" from "dpkg refused and
+    nothing happened". Only the guard's own verdict can, and it said unknown.
+    """
+    manager, packages, _, _ = update
+    stem = manager.registry / "updates/5-probe--one"
+    debian = _DebianPackages()
+    manager.packages = debian
+
+    def refuse(path, *, lease_fd, receipt_path, intent):
+        packages.calls += 1
+        # The refused install leaves whatever was already there; set the trap by
+        # reporting the target version, which is what a same-version refusal does.
+        debian.version = "2"
+        receipt_path.write_text(
+            json.dumps({"state": "sender_reaped", "intent": intent, "returncode": 1})
+        )
+        receipt_path.with_suffix("").with_suffix(".package.log").write_text(
+            "pre-install refused: 2-native1 is already installed\n"
+        )
+        receipt_path.with_name(
+            receipt_path.name.replace(".sender", ".outcome")
+        ).write_text(
+            json.dumps(
+                {"state": "unknown", "package_observation": packages.observation, "intent": intent}
+            )
+        )
+        raise subprocess.CalledProcessError(1, "dpkg")
+
+    monkeypatch.setattr(debian, "apply", refuse)
+    result = manager.apply("probe", "one")
+    assert result["applied"] is None
+    assert result["outcome"]["state"] == "unknown"
+    assert not stem.with_suffix(".applied.json").exists()
+    # The unapplied transaction must not advertise a switchable package.
+    assert result["next_step"] == "apply"
+
+
+def test_apply_claims_applied_only_on_guard_success(update, monkeypatch):
+    manager, packages, _, _ = update
+    stem = manager.registry / "updates/5-probe--one"
+    debian = _DebianPackages()
+    manager.packages = debian
+
+    def succeed(path, *, lease_fd, receipt_path, intent):
+        packages.calls += 1
+        debian.version = "2"
+        receipt_path.write_text(
+            json.dumps({"state": "sender_reaped", "intent": intent, "returncode": 0})
+        )
+        receipt_path.with_suffix("").with_suffix(".package.log").write_text("Setting up\n")
+        receipt_path.with_name(
+            receipt_path.name.replace(".sender", ".outcome")
+        ).write_text(
+            json.dumps(
+                {
+                    "state": "package_applied_pending_activation",
+                    "package_observation": packages.observation,
+                    "intent": intent,
+                }
+            )
+        )
+
+    monkeypatch.setattr(debian, "apply", succeed)
+    result = manager.apply("probe", "one")
+    assert result["applied"]["state"] == "applied_package"
+    assert result["next_step"] == "switch_helper"
+    assert stem.with_suffix(".applied.json").exists()
+
+
+def test_retire_closes_dead_end_without_replay(update):
+    """An accepted dead end stops fencing the instance; evidence is retained."""
+    manager, packages, _, package = update
+    stem = manager.registry / "updates/5-probe--one"
+    debian = _DebianPackages()
+    manager.packages = debian
+    intent_path = stem.with_suffix(".apply-intent.json")
+    intent_path.write_text(json.dumps({"prepared_sha256": "fixture"}))
+
+    manager.prepare(
+        "probe", "two", package, sha256=nh._digest(package), version="2"
+    )
+    manager.approve(
+        "probe", "two", prepared_sha256=nh._digest(stem.parent / "5-probe--two.prepared.json")
+    )
+    # The live intent fences a new transaction before it may run.
+    with pytest.raises(nu.UpdateError, match="existing package transaction"):
+        manager.apply("probe", "two")
+    assert packages.calls == 0
+
+    retired = manager.retire("probe", "one")
+    assert retired["retired"]["state"] == "retired_without_replay"
+    assert retired["next_step"] == "retired"
+    assert packages.calls == 0, "retirement must never execute the package manager"
+    # Every artifact survives, so the dead end stays auditable.
+    assert intent_path.exists()
+
+    # Retirement is what allows the next transaction to start at all; the
+    # package path itself is exercised by the guard tests above.
+    manager.apply("probe", "two")
+    assert debian.calls == 1
+
+
+def test_retire_requires_a_real_intent(update):
+    manager, _, _, _ = update
+    with pytest.raises(nu.UpdateError, match="no apply intent to retire"):
+        manager.retire("probe", "one")
+
+
+def test_retirement_only_unlocks_its_own_intent(update):
+    """A retirement must not be shiftable onto another transaction's intent."""
+    manager, _, _, _ = update
+    stem = manager.registry / "updates/5-probe--one"
+    intent_path = stem.with_suffix(".apply-intent.json")
+    intent_path.write_text(json.dumps({"prepared_sha256": "fixture"}))
+    manager.packages = _DebianPackages()
+    manager.retire("probe", "one")
+
+    other = stem.parent / "5-probe--other.apply-intent.json"
+    other.write_text(json.dumps({"prepared_sha256": "fixture"}))
+    # The receipt binds the first intent's digest, so the second stays fenced.
+    assert not nu._retired_file(other)
+    with pytest.raises(nh.HelperError, match="blocks start"):
+        nh._assert_no_package_intent(manager.registry)
+    other.unlink()
+    nh._assert_no_package_intent(manager.registry)
+
+
+def test_retirement_evidence_fails_closed(update, tmp_path):
+    manager, _, _, _ = update
+    stem = manager.registry / "updates/5-probe--one"
+    intent_path = stem.with_suffix(".apply-intent.json")
+    intent_path.write_text(json.dumps({"prepared_sha256": "fixture"}))
+    manager.packages = _DebianPackages()
+    manager.retire("probe", "one")
+    receipt = stem.with_suffix(".retired.json")
+    original = receipt.read_bytes()
+
+    assert nu._retired_file(intent_path)
+
+    for corrupt in (
+        "{not json",
+        "[]",
+        json.dumps({"state": "retired_without_replay", "retry_allowed": True,
+                    "intent_sha256": nh._digest(intent_path)}),
+        json.dumps({"state": "retired_without_replay", "retry_allowed": False,
+                    "intent_sha256": "0" * 64}),
+        json.dumps({"state": "closed", "retry_allowed": False,
+                    "intent_sha256": nh._digest(intent_path)}),
+    ):
+        receipt.write_text(corrupt)
+        assert not nu._retired_file(intent_path)
+        with pytest.raises(nh.HelperError, match="blocks start"):
+            nh._assert_no_package_intent(manager.registry)
+
+    receipt.write_bytes(original)
+    assert nu._retired_file(intent_path)
+    nh._assert_no_package_intent(manager.registry)
+
+
+def test_retire_refuses_while_a_queued_job_owns_the_closure(update):
+    manager, _, _, _ = update
+    stem = manager.registry / "updates/5-probe--one"
+    stem.with_suffix(".apply-intent.json").write_text(json.dumps({"prepared_sha256": "fixture"}))
+    queued = stem.parent / "5-probe--job.job-intent.json"
+    queued.write_text("{}")
+    manager.packages = _DebianPackages()
+    with pytest.raises(nu.UpdateError, match="queued package job requires its own closure"):
+        manager.retire("probe", "one")
+    assert not stem.with_suffix(".retired.json").exists()
 def test_retirement_evidence_fail_closed(update, monkeypatch):
     manager, _, _, _ = update
     directory = manager.registry / "updates"
