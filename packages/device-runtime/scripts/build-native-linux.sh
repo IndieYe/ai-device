@@ -65,15 +65,17 @@ site=$stage/runtime/lib/python3.13/site-packages
 #
 # The set below is what installation.py and the signed-release path actually
 # reach, not the client's runtime set: install_instance calls client.device_url,
-# so client.py imports pydantic and websockets even for an offline install, and
-# native_prepare verifies the Ed25519 envelope through cryptography. Pillow and
-# zstandard stay out: neither is reachable from these entry points.
+# so client.py imports pydantic and websockets even for an offline install,
+# native_prepare verifies the Ed25519 envelope through cryptography, and
+# native_candidate extracts the signed data archive through zstandard whenever
+# dpkg emitted a .zst member. Pillow stays out: nothing on these paths reaches
+# it.
 rm -rf "$site"
 mkdir -p "$site"
 required=""
 for wheel in "$stage/bundle/wheels/"*.whl; do required="$required $wheel"; done
 for name in packaging pydantic pydantic_core annotated_types typing_extensions \
-            typing_inspection websockets psutil cryptography cffi pycparser; do
+            typing_inspection websockets psutil cryptography cffi pycparser zstandard; do
  matches=""
  for wheel in "$stage/bundle/dependencies/$name"-*.whl; do
   [ -f "$wheel" ] && matches="$matches $wheel"
@@ -115,7 +117,7 @@ fi
 # and native_prepare must be able to verify a signed release: both import paths
 # reach modules the bootstrap would otherwise not carry.
 if ! env -i PATH=/usr/bin:/bin HOME="$work" TMPDIR="$work" \
- "$stage/runtime/bin/python3.13" -I -c 'from device_runtime.client import device_url; device_url("wss://127.0.0.1:9", "selfcheck"); from device_runtime import native_prepare, native_candidate; import cryptography' \
+ "$stage/runtime/bin/python3.13" -I -c 'from device_runtime.client import device_url; device_url("wss://127.0.0.1:9", "selfcheck"); from device_runtime import native_prepare, native_candidate; import cryptography; import zstandard' \
  >> "$work/selfcheck.log" 2>&1; then
  cat "$work/selfcheck.log"
  echo "native package build refused: client URL validation or release authentication is unavailable" >&2
