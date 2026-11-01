@@ -98,6 +98,41 @@ def _json(path, value):
         temporary.unlink(missing_ok=True)
 
 
+def _prepare_runtime_for(archive, root, lock_path):
+    """Turn a locked runtime archive into a private runtime directory.
+
+    The directory is staged outside the instance root so a failure never leaves
+    a half-copied interpreter inside a release. The archive is verified against
+    the lock before it is unpacked or executed, and the result is probed twice
+    across a rename, so relocatability is proven rather than assumed.
+    """
+    from .native_runtime import RuntimePreparationError, prepare_runtime
+
+    archive, lock_path = Path(archive), Path(lock_path)
+    if archive.is_symlink() or not archive.is_file():
+        raise InstallationError("runtime archive must be a plain file")
+    if lock_path.is_symlink() or not lock_path.is_file():
+        raise InstallationError("runtime lock must be a plain file")
+    from .native_runtime import _host_target
+
+    target = _host_target()
+    staging = root.parent / f".{root.name}.runtime-{uuid.uuid4().hex}"
+    try:
+        prepare_runtime(
+            archive,
+            staging,
+            lock_path=lock_path,
+            target=target,
+        )
+        return staging
+    except RuntimePreparationError as exc:
+        raise InstallationError(f"private runtime preparation failed: {exc}") from exc
+    except OSError as exc:
+        raise InstallationError(
+            f"private runtime preparation failed (errno {exc.errno})"
+        ) from exc
+
+
 @contextmanager
 def _lock(root):
     with management_lease(root), (root / ".installation.lock").open("a+b") as stream:
@@ -497,9 +532,60 @@ def install_instance(
     port=8765,
     runner_python=None,
     runtime_source=None,
+    runtime_archive=None,
+    runtime_lock=None,
 ):
     _supported_host()
     runner_content = RUNNER
+    instance_id = _identity(instance_id)
+    root = (
+        Path(root).expanduser().absolute()
+        if root
+        else (Path.home() / ".device-runtime" / "instances" / instance_id)
+    )
+    # An archive is unpacked into a private runtime; a directory is used as-is.
+    # Both paths end at the same runtime_source handoff, so the release layout,
+    # launcher and pointer behaviour cannot diverge between them. Staging lives
+    # beside the instance root, never inside it, and is always removed.
+    staged_runtime = None
+    if runtime_archive is not None:
+        if runtime_source is not None:
+            raise InstallationError("pass either a runtime archive or a runtime source")
+        if runtime_lock is None:
+            raise InstallationError("a runtime archive requires its lock file")
+        staged_runtime = _prepare_runtime_for(runtime_archive, root, runtime_lock)
+        runtime_source = staged_runtime
+    elif runtime_lock is not None:
+        raise InstallationError("a runtime lock is only meaningful with an archive")
+    try:
+        return _install_into(
+            bundle,
+            instance_id=instance_id,
+            roles=roles,
+            root=root,
+            server_url=server_url,
+            port=port,
+            runner_python=runner_python,
+            runtime_source=runtime_source,
+            runner_content=runner_content,
+        )
+    finally:
+        if staged_runtime is not None:
+            shutil.rmtree(staged_runtime, ignore_errors=True)
+
+
+def _install_into(
+    bundle,
+    *,
+    instance_id,
+    roles,
+    root,
+    server_url,
+    port,
+    runner_python,
+    runtime_source,
+    runner_content,
+):
     if runtime_source is not None:
         # The instance gets its own copy of the interpreter runtime so a package
         # upgrade or removal cannot pull the interpreter out from under a live
@@ -525,7 +611,6 @@ def install_instance(
                 "runner Python must be an executable absolute shebang path"
             )
         runner_content = f"#!{runner_python}\n" + RUNNER.split("\n", 1)[1]
-    instance_id = _identity(instance_id)
     roles = sorted(set(roles))
     if not roles or any(r not in ROLES for r in roles):
         raise InstallationError("select one or more center/mcp/client roles")
@@ -544,11 +629,6 @@ def install_instance(
     manifest = inspect_bundle(bundle)
     _check_target(manifest, roles)
     _client_contract(bundle, manifest)
-    root = (
-        Path(root).expanduser().absolute()
-        if root
-        else (Path.home() / ".device-runtime" / "instances" / instance_id)
-    )
     try:
         root.mkdir(parents=True, exist_ok=False)
     except FileExistsError as exc:
@@ -615,9 +695,29 @@ def install_instance(
 
 
 @with_dependencies
-def rebuild_instance(root, *, bundle=None):
+def rebuild_instance(root, *, bundle=None, runtime_archive=None, runtime_lock=None):
     _supported_host()
     root = Path(root).expanduser().resolve()
+    # A legacy instance has no pointer, so it also has no private runtime to
+    # reuse. Supplying an archive is the only way to migrate it: the rebuild
+    # then publishes a launcher and a pointer it did not have before.
+    staged_runtime = None
+    if runtime_archive is not None:
+        if runtime_lock is None:
+            raise InstallationError("a runtime archive requires its lock file")
+        staged_runtime = _prepare_runtime_for(runtime_archive, root, runtime_lock)
+    elif runtime_lock is not None:
+        raise InstallationError("a runtime lock is only meaningful with an archive")
+    try:
+        return _rebuild_into(
+            root, bundle=bundle, staged_runtime=staged_runtime
+        )
+    finally:
+        if staged_runtime is not None:
+            shutil.rmtree(staged_runtime, ignore_errors=True)
+
+
+def _rebuild_into(root, *, bundle, staged_runtime):
     try:
         # Do not create files in an unrelated directory.
         identity = json.loads((root / "instance.json").read_text())
@@ -648,10 +748,13 @@ def rebuild_instance(root, *, bundle=None):
             if _fingerprint(manifest) != active["bundle_sha256"]:
                 raise InstallationError("rebuild requires the identical bundle, not an upgrade")
             # A rebuild must not hand the instance a release it cannot start.
-            # Reuse the live release's private runtime so the new environment is
-            # self-contained; legacy pointer-less instances keep their entry.
+            # Prefer a freshly staged archive, then the live release's own
+            # runtime. A legacy instance with neither stays legacy, unless the
+            # caller supplies an archive to migrate it.
             runtime_source = None
-            if _has_pointer(root):
+            if staged_runtime is not None:
+                runtime_source = staged_runtime
+            elif _has_pointer(root):
                 current_runtime = root / "releases" / active["release"] / "runtime"
                 if current_runtime.is_dir() and not current_runtime.is_symlink():
                     runtime_source = current_runtime
@@ -659,7 +762,19 @@ def rebuild_instance(root, *, bundle=None):
                     raise InstallationError(
                         "active release has no private runtime; rebuild would break the entrypoint"
                     )
+            migration = staged_runtime is not None and not _has_pointer(root)
             candidate = _prepare(root, source, manifest, roles, runtime_source=runtime_source)
+            if migration:
+                # The instance had no launcher; write one now that a private
+                # runtime backs it, so the migrated entry cannot name a package
+                # interpreter. The old single-file runner is left in place as
+                # evidence of the previous form and is replaced below.
+                runner_body = root / "run-runner"
+                runner_body.write_text(RUNNER_BODY, encoding="utf-8")
+                runner_body.chmod(0o755)
+                runner = root / "run"
+                runner.write_text(LAUNCHER, encoding="utf-8")
+                runner.chmod(0o755)
             if "task_output_map_sha256" in active:
                 candidate = {
                     **candidate,
@@ -691,12 +806,36 @@ def add_instance_parser(modes):
     install.add_argument("--role", choices=tuple(ROLES), action="append", required=True)
     install.add_argument("--server-url")
     install.add_argument("--port", type=int, default=8765)
+    install.add_argument(
+        "--runtime-archive",
+        type=Path,
+        default=None,
+        help="locked CPython archive; installs a private runtime and a shell launcher",
+    )
+    install.add_argument(
+        "--runtime-lock",
+        type=Path,
+        default=None,
+        help="runtime lock that pins the archive target, SHA256 and size",
+    )
     rebuild = actions.add_parser(
         "rebuild", help="Prepare same-bundle environments; instance must be stopped"
     )
     rebuild.add_argument("--root", type=Path, required=True)
     rebuild.add_argument("--bundle", type=Path)
     rebuild.add_argument("--dependency-dir", type=Path)
+    rebuild.add_argument(
+        "--runtime-archive",
+        type=Path,
+        default=None,
+        help="locked CPython archive; migrates a legacy instance to a private runtime",
+    )
+    rebuild.add_argument(
+        "--runtime-lock",
+        type=Path,
+        default=None,
+        help="runtime lock that pins the archive target, SHA256 and size",
+    )
     from .lifecycle import add_lifecycle_parsers
 
     add_lifecycle_parsers(actions)
@@ -741,10 +880,16 @@ def run_instance(args):
             server_url=args.server_url,
             port=args.port,
             dependency_dir=getattr(args, "dependency_dir", None),
+            runtime_archive=getattr(args, "runtime_archive", None),
+            runtime_lock=getattr(args, "runtime_lock", None),
         )
     elif args.instance_action == "rebuild":
         result = rebuild_instance(
-            args.root, bundle=args.bundle, dependency_dir=getattr(args, "dependency_dir", None)
+            args.root,
+            bundle=args.bundle,
+            dependency_dir=getattr(args, "dependency_dir", None),
+            runtime_archive=getattr(args, "runtime_archive", None),
+            runtime_lock=getattr(args, "runtime_lock", None),
         )
     elif args.instance_action == "launchd":
         from . import launchd_deploy
