@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "target": {
+    "system": "darwin",
+    "machine": "arm64",
+    "python": "cp313",
+    "min_macos": "11.0"
+  },
+  "note": "Locked client+native wheel set for macOS arm64; filenames and digests are the delivery authority.",
+  "pins": {
+    "annotated-types": "0.8.0",
+    "cffi": "2.1.1",
+    "cryptography": "50.0.2",
+    "packaging": "26.3",
+    "pillow": "12.2.0",
+    "psutil": "7.2.2",
+    "pycparser": "3.11",
+    "pydantic": "2.14.1",
+    "pydantic-core": "2.50.1",
+    "typing-extensions": "4.16.0",
+    "typing-inspection": "0.4.4",
+    "websockets": "17.3",
+    "zstandard": "0.25.0"
+  },
+  "wheels": [
+    {
+      "path": "annotated_types-0.8.0-py3-none-any.whl",
+      "distribution": "annotated-types",
+      "version": "0.8.0",
+      "url": "https://files.pythonhosted.org/packages/99/91/8acff4f5e50511b911bbccb72b8628a49c68ce14148cd9f6431094859a90/annotated_types-0.8.0-py3-none-any.whl",
+      "sha256": "f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0",
+      "size": 13427,
+      "source": "https://pypi.org/project/annotated-types/0.8.0/",
+      "license": "MIT"
+    },
+    {
+      "path": "cffi-2.1.1-cp313-cp313-macosx_11_0_arm64.whl",
+      "distribution": "cffi",
+      "version": "2.1.1",
+      "url": "https://files.pythonhosted.org/packages/55/41/4c7042f317b9217502988f0873af87e16ad606dc20f84e546e3e6ce9764c/cffi-2.1.1-cp313-cp313-macosx_11_0_arm64.whl",
+      "sha256": "19ee6127ee34de7d83ce3d371ebc5ed91addbdcc39f9ab15ce4eb35a4e534971",
+      "size": 184764,
+      "source": "https://pypi.org/project/cffi/2.1.1/",
+      "license": "MIT-0"
+    },
+    {
+      "path": "cryptography-50.0.2-cp311-abi3-macosx_11_0_arm64.whl",
+      "distribution": "cryptography",
+      "version": "50.0.2",
+      "url": "https://files.pythonhosted.org/packages/e5/56/d194340cc4a57535e82e1bee9e89667ac4b7c13b5d3f59686deae3094dd5/cryptography-50.0.2-cp311-abi3-macosx_11_0_arm64.whl",
+      "sha256": "fa8f5efb344d6908a1ce62f4a24e2e5780f825d6f53f5f50ec5ffacac72936cb",
+      "size": 3914904,
+      "source": "https://pypi.org/project/cryptography/50.0.2/",
+      "license": "Apache-2.0 OR BSD-3-Clause"
+    },
+    {
+      "path": "packaging-26.3-py3-none-any.whl",
+      "distribution": "packaging",
+      "version": "26.3",
+      "url": "https://files.pythonhosted.org/packages/63/34/ba1c580383c9eada3711951fef0795c80b829a078d72188184bcab9dd527/packaging-26.3-py3-none-any.whl",
+      "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c",
+      "size": 129956,
+      "source": "https://pypi.org/project/packaging/26.3/",
+      "license": "Apache-2.0 OR BSD-2-Clause"
+    },
+    {
+      "path": "pillow-12.2.0-cp313-cp313-macosx_11_0_arm64.whl",
+      "distribution": "pillow",
+      "version": "12.2.0",
+      "url": "https://files.pythonhosted.org/packages/71/43/905a14a8b17fdb1ccb58d282454490662d2cb89a6bfec26af6d3520da5ec/pillow-12.2.0-cp313-cp313-macosx_11_0_arm64.whl",
+      "sha256": "56b25336f502b6ed02e889f4ece894a72612fe885889a6e8c4c80239ff6e5f5f",
+      "size": 4695402,
+      "source": "https://pypi.org/project/pillow/12.2.0/",
+      "license": "MIT-CMU"
+    },
+    {
+      "path": "psutil-7.2.2-cp36-abi3-macosx_11_0_arm64.whl",
+      "distribution": "psutil",
+      "version": "7.2.2",
+      "url": "https://files.pythonhosted.org/packages/80/c4/f5af4c1ca8c1eeb2e92ccca14ce8effdeec651d5ab6053c589b074eda6e1/psutil-7.2.2-cp36-abi3-macosx_11_0_arm64.whl",
+      "sha256": "1a7b04c10f32cc88ab39cbf606e117fd74721c831c98a27dc04578deb0c16979",
+      "size": 129859,
+      "source": "https://pypi.org/project/psutil/7.2.2/",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "path": "pycparser-3.11-py3-none-any.whl",
+      "distribution": "pycparser",
+      "version": "3.11",
+      "url": "https://files.pythonhosted.org/packages/90/11/0e6f11117525ff0eec40ebac3d313376f102df93ca44ad9e893ee85e4f89/pycparser-3.11-py3-none-any.whl",
+      "sha256": "51d5a8ba2be0bbe440b99d2112604c95bbbc3c2748a64260186c541e1729cd80",
+      "size": 51178,
+      "source": "https://pypi.org/project/pycparser/3.11/",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "path": "pydantic-2.14.1-py3-none-any.whl",
+      "distribution": "pydantic",
+      "version": "2.14.1",
+      "url": "https://files.pythonhosted.org/packages/35/ea/a56b9fe5066f3537b7882f77e9c5dfb26d8c2eefdaed9b5fc73d57b4dc22/pydantic-2.14.1-py3-none-any.whl",
+      "sha256": "9195d967ec791692a04438115466764fb8b9a27b31f14a760437694f40d6b454",
+      "size": 488106,
+      "source": "https://pypi.org/project/pydantic/2.14.1/",
+      "license": "MIT"
+    },
+    {
+      "path": "pydantic_core-2.50.1-cp313-cp313-macosx_11_0_arm64.whl",
+      "distribution": "pydantic-core",
+      "version": "2.50.1",
+      "url": "https://files.pythonhosted.org/packages/f7/b9/c720e56858d4e1539503297ed37063e0c08e0f3541c41b777f6a800f75fa/pydantic_core-2.50.1-cp313-cp313-macosx_11_0_arm64.whl",
+      "sha256": "0c003c3b7f49debb893d2d85ae099ac5959c9839e2f330fadb1fcdf7a6594482",
+      "size": 2024738,
+      "source": "https://pypi.org/project/pydantic-core/2.50.1/",
+      "license": "MIT"
+    },
+    {
+      "path": "typing_extensions-4.16.0-py3-none-any.whl",
+      "distribution": "typing-extensions",
+      "version": "4.16.0",
+      "url": "https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl",
+      "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+      "size": 45571,
+      "source": "https://pypi.org/project/typing-extensions/4.16.0/",
+      "license": "PSF-2.0"
+    },
+    {
+      "path": "typing_inspection-0.4.4-py3-none-any.whl",
+      "distribution": "typing-inspection",
+      "version": "0.4.4",
+      "url": "https://files.pythonhosted.org/packages/67/81/4add07e5172b7ac40d8ed5ff580409a7801a4fe26d529bdd915401dabfbe/typing_inspection-0.4.4-py3-none-any.whl",
+      "sha256": "65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147",
+      "size": 14750,
+      "source": "https://pypi.org/project/typing-inspection/0.4.4/",
+      "license": "MIT"
+    },
+    {
+      "path": "websockets-17.3-cp313-cp313-macosx_11_0_arm64.whl",
+      "distribution": "websockets",
+      "version": "17.3",
+      "url": "https://files.pythonhosted.org/packages/16/df/ab0ed0445d8d81a133c8fed760f3b4f743a2f563804fdbecb2c32fe05d94/websockets-17.3-cp313-cp313-macosx_11_0_arm64.whl",
+      "sha256": "fe7a168d805c8a7bf1c2de55b7ab2bc958586bfd88d0e87235a92cac66b590a7",
+      "size": 216185,
+      "source": "https://pypi.org/project/websockets/17.3/",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "path": "zstandard-0.25.0-cp313-cp313-macosx_11_0_arm64.whl",
+      "distribution": "zstandard",
+      "version": "0.25.0",
+      "url": "https://files.pythonhosted.org/packages/3f/06/9ae96a3e5dcfd119377ba33d4c42a7d89da1efabd5cb3e366b156c45ff4d/zstandard-0.25.0-cp313-cp313-macosx_11_0_arm64.whl",
+      "sha256": "a1a4ae2dec3993a32247995bdfe367fc3266da832d82f8438c8570f989753de1",
+      "size": 640440,
+      "source": "https://pypi.org/project/zstandard/0.25.0/",
+      "license": "BSD-3-Clause"
+    }
+  ]
+}

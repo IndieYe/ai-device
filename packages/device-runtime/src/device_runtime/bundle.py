@@ -198,12 +198,14 @@ def inspect_bundle(directory):
         if _constraints(path) != constraints["pins"]:
             raise BundleError("constraints pins do not match manifest")
         if manifest["format_version"] == 3:
-            if target["system"] != "linux" or manifest["dependencies"]["path"] != "dependencies":
-                raise BundleError("local dependency bundles require the Linux client target")
+            if manifest["dependencies"]["path"] != "dependencies":
+                raise BundleError("local dependency bundles must use the dependencies directory")
             try:
                 dependencies = inspect_dependencies(directory / "dependencies", constraints["pins"])
             except ValueError as exc:
                 raise BundleError(str(exc)) from exc
+            if dependencies["target"]["system"] != target["system"]:
+                raise BundleError("local dependencies must match the bundle target system")
             if dependencies != manifest["dependencies"]["manifest"]:
                 raise BundleError("dependency manifest mismatch")
             expected_files.add("dependencies/manifest.json")
@@ -283,14 +285,18 @@ def build_bundle(
                 },
             }
             if dependency_dir is not None:
-                if target_system != "linux":
-                    raise BundleError("local dependency bundles require Linux")
                 try:
                     dependencies = inspect_dependencies(
                         dependency_dir, manifest["constraints"]["pins"]
                     )
                 except ValueError as exc:
                     raise BundleError(str(exc)) from exc
+                # The staged wheel set is architecture-specific, so it must match
+                # the bundle it is being attached to. Attaching a Linux set to a
+                # macOS bundle would produce a bundle whose install step cannot
+                # resolve any wheel.
+                if dependencies["target"]["system"] != target_system:
+                    raise BundleError("local dependencies must match the bundle target system")
                 shutil.copytree(dependency_dir, stage / "dependencies")
                 manifest["format_version"] = 3
                 manifest["dependencies"] = {"path": "dependencies", "manifest": dependencies}

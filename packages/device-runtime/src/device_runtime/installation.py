@@ -334,15 +334,32 @@ def _check_target(manifest, roles):
             minimum = dependency_target(manifest["dependencies"]["manifest"]["target"])
         except (KeyError, ValueError, TypeError) as exc:
             raise InstallationError("invalid local dependency target") from exc
-        libc, version = platform.libc_ver()
-        try:
-            glibc = tuple(int(part) for part in version.split(".")[:2])
-        except ValueError:
-            glibc = ()
-        if platform.machine() != "x86_64" or libc != "glibc" or glibc < minimum:
-            raise InstallationError(
-                f"local dependencies require x86_64 Linux glibc >= {minimum[0]}.{minimum[1]}"
-            )
+        # The wheel set is built for one architecture. Linux additionally has a
+        # libc floor; macOS wheels embed their own deployment target, so the
+        # version a given wheel supports is already encoded in its platform tag
+        # and re-derived on the installed interpreter below.
+        if manifest["target"]["system"] == "darwin":
+            if platform.machine() != "arm64":
+                raise InstallationError("local dependencies require arm64 macOS")
+            version = platform.mac_ver()[0]
+            try:
+                macos = tuple(int(part) for part in version.split(".")[:2])
+            except ValueError:
+                macos = ()
+            if not macos or macos < minimum:
+                raise InstallationError(
+                    f"local dependencies require macOS >= {minimum[0]}.{minimum[1]}"
+                )
+        else:
+            libc, version = platform.libc_ver()
+            try:
+                glibc = tuple(int(part) for part in version.split(".")[:2])
+            except ValueError:
+                glibc = ()
+            if platform.machine() != "x86_64" or libc != "glibc" or glibc < minimum:
+                raise InstallationError(
+                    f"local dependencies require x86_64 Linux glibc >= {minimum[0]}.{minimum[1]}"
+                )
     if not roles or any(role not in manifest["roles"] for role in roles):
         raise InstallationError("installed roles are not supported by this bundle target")
 

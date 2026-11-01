@@ -8,7 +8,12 @@ import pytest
 from test_bundle import artifacts as artifacts  # noqa: PLC0414
 
 from device_runtime.bundle import BundleError, build_bundle, inspect_bundle
-from device_runtime.dependencies import TARGET, inspect_dependencies
+from device_runtime.dependencies import (
+    DARWIN_TARGET,
+    TARGET,
+    dependency_target,
+    inspect_dependencies,
+)
 
 
 def dependency_set(directory, pins):
@@ -168,3 +173,134 @@ def test_tags_follow_declared_target(tmp_path, baseline, tag, accepted):
     else:
         with pytest.raises(ValueError, match="incompatible"):
             inspect_dependencies(directory, pins)
+
+
+def test_darwin_target_returns_macos_floor():
+    assert dependency_target(DARWIN_TARGET) == (11, 0)
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        {"system": "darwin", "machine": "x86_64", "python": "cp313", "min_macos": "11.0"},
+        {"system": "darwin", "machine": "arm64", "python": "cp313", "min_macos": "10.9"},
+        {"system": "darwin", "machine": "arm64", "python": "cp312", "min_macos": "11.0"},
+        {"system": "windows", "machine": "amd64", "python": "cp313"},
+    ],
+)
+def test_darwin_target_rejects_widened_or_foreign_contract(target):
+    with pytest.raises(ValueError, match="unsupported"):
+        dependency_target(target)
+
+
+def test_darwin_dependency_set_accepts_arm64_cp313_wheel(tmp_path):
+    pins = {"pydantic": "2.13.5"}
+    directory = tmp_path / "dependencies"
+    manifest = dependency_set(directory, pins)
+    manifest["target"] = DARWIN_TARGET
+    entry = manifest["wheels"][0]
+    old = directory / entry["path"]
+    entry["path"] = "pydantic-2.13.5-cp313-cp313-macosx_11_0_arm64.whl"
+    old.rename(directory / entry["path"])
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+    assert inspect_dependencies(directory, pins) == manifest
+
+
+@pytest.mark.parametrize(
+    "tag,accepted",
+    [
+        # A wheel built for an older macOS runs on a newer host, so the lock's
+        # floor is a minimum and every higher tag must be accepted.
+        ("macosx_11_0_arm64", True),
+        ("macosx_12_0_arm64", True),
+        ("macosx_14_0_arm64", True),
+        # x86_64 cannot run on an arm64 target, and a floor above the lock's
+        # declared minimum would understate what the set requires.
+        ("macosx_11_0_x86_64", False),
+        ("macosx_10_9_arm64", False),
+    ],
+)
+def test_darwin_tags_follow_declared_floor(tmp_path, tag, accepted):
+    pins = {"pydantic": "2.13.5"}
+    directory = tmp_path / "deps"
+    manifest = dependency_set(directory, pins)
+    manifest["target"] = DARWIN_TARGET
+    entry = manifest["wheels"][0]
+    old = directory / entry["path"]
+    entry["path"] = f"pydantic-2.13.5-cp313-cp313-{tag}.whl"
+    old.rename(directory / entry["path"])
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+    if accepted:
+        assert inspect_dependencies(directory, pins) == manifest
+    else:
+        with pytest.raises(ValueError, match="incompatible"):
+            inspect_dependencies(directory, pins)
+
+
+@pytest.mark.parametrize(
+    "tag",
+    [
+        # A cp310/cp311 exact-ABI wheel is not installable on cp313 even though
+        # the platform tag matches; only cp313 or an abi3 build may pass.
+        "cp310-cp310-macosx_11_0_arm64",
+        "cp311-cp311-macosx_11_0_arm64",
+    ],
+)
+def test_darwin_rejects_wrong_cpython_abi(tmp_path, tag):
+    pins = {"pydantic": "2.13.5"}
+    directory = tmp_path / "deps"
+    manifest = dependency_set(directory, pins)
+    manifest["target"] = DARWIN_TARGET
+    entry = manifest["wheels"][0]
+    old = directory / entry["path"]
+    entry["path"] = f"pydantic-2.13.5-{tag}.whl"
+    old.rename(directory / entry["path"])
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="incompatible"):
+        inspect_dependencies(directory, pins)
+
+
+def test_darwin_accepts_abi3_wheel(tmp_path):
+    pins = {"cryptography": "50.0.2"}
+    directory = tmp_path / "deps"
+    manifest = dependency_set(directory, pins)
+    manifest["target"] = DARWIN_TARGET
+    entry = manifest["wheels"][0]
+    old = directory / entry["path"]
+    entry["path"] = "cryptography-50.0.2-cp311-abi3-macosx_11_0_arm64.whl"
+    old.rename(directory / entry["path"])
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+    assert inspect_dependencies(directory, pins) == manifest
+
+
+def test_darwin_bundle_accepts_local_dependency_set(tmp_path, artifacts):
+    dependencies = tmp_path / "dependencies"
+    manifest = dependency_set(dependencies, {"pydantic": "2.13.5", "websockets": "17.2"})
+    manifest["target"] = DARWIN_TARGET
+    (dependencies / "manifest.json").write_text(json.dumps(manifest))
+    library = build_bundle(
+        tmp_path / "darwin-v3", **artifacts, target_system="darwin", dependency_dir=dependencies
+    )
+    assert library["format_version"] == 3
+    assert library["target"]["system"] == "darwin"
+    assert inspect_bundle(tmp_path / "darwin-v3") == library
+
+
+def test_darwin_bundle_rejects_linux_dependency_set(tmp_path, artifacts):
+    dependencies = tmp_path / "dependencies"
+    dependency_set(dependencies, {"pydantic": "2.13.5", "websockets": "17.2"})
+    with pytest.raises(BundleError, match="must match the bundle target system"):
+        build_bundle(
+            tmp_path / "mixed", **artifacts, target_system="darwin", dependency_dir=dependencies
+        )
+
+
+def test_linux_bundle_rejects_darwin_dependency_set(tmp_path, artifacts):
+    dependencies = tmp_path / "dependencies"
+    manifest = dependency_set(dependencies, {"pydantic": "2.13.5", "websockets": "17.2"})
+    manifest["target"] = DARWIN_TARGET
+    (dependencies / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(BundleError, match="must match the bundle target system"):
+        build_bundle(
+            tmp_path / "mixed", **artifacts, target_system="linux", dependency_dir=dependencies
+        )

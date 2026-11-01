@@ -126,3 +126,48 @@ def test_staged_manifest_carries_provenance_and_matches_bytes(tmp_path, monkeypa
             "license": "Apache-2.0 OR BSD-3-Clause",
         }
     ]
+
+
+DARWIN_TARGET = {"system": "darwin", "machine": "arm64", "python": "cp313", "min_macos": "11.0"}
+
+
+def test_repository_darwin_lock_is_a_valid_delivery_authority():
+    """The macOS lock must be as self-consistent as the Linux one."""
+    lock = load_lock(Path(__file__).parents[1] / "native/dependency-lock-darwin-arm64.json")
+    assert len(lock["wheels"]) == 13
+    assert lock["target"] == DARWIN_TARGET
+    assert set(lock["pins"]) == {w["distribution"] for w in lock["wheels"]}
+    assert {"cryptography", "zstandard", "cffi", "pycparser"} <= set(lock["pins"])
+    # The two locks must pin the same versions, or the macOS bundle would ship
+    # a different dependency closure than the Linux bundle at the same release.
+    linux = load_lock(Path(__file__).parents[1] / "native/dependency-lock.json")
+    assert lock["pins"] == linux["pins"]
+    # Every binary wheel must be arm64; a stray x86_64 entry would stage a set
+    # that cannot be installed on the target.
+    for entry in lock["wheels"]:
+        if entry["path"].endswith("-py3-none-any.whl"):
+            continue
+        assert "arm64" in entry["path"], entry["path"]
+        assert "macosx" in entry["path"], entry["path"]
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"target": {**DARWIN_TARGET, "machine": "x86_64"}},
+        {"target": {**DARWIN_TARGET, "min_macos": "10.9"}},
+        {"target": {**DARWIN_TARGET, "python": "cp312"}},
+    ],
+)
+def test_darwin_lock_rejects_widened_contract(tmp_path, overrides):
+    lock = make_lock(target=overrides["target"])
+    lock["wheels"][0]["path"] = "cryptography-50.0.2-cp311-abi3-macosx_11_0_arm64.whl"
+    with pytest.raises(ValueError, match="unsupported dependency lock target"):
+        load_lock(write(tmp_path, lock))
+
+
+def test_stage_accepts_darwin_lock(tmp_path):
+    lock = make_lock(target=dict(DARWIN_TARGET))
+    lock["wheels"][0]["path"] = "cryptography-50.0.2-cp311-abi3-macosx_11_0_arm64.whl"
+    with pytest.raises(ValueError, match="explicit --download required"):
+        stage(lock, tmp_path / "deps")

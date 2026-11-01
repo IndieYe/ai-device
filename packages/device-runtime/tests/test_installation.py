@@ -980,3 +980,52 @@ def test_linux_client_install_requests_native_extra(tmp_path, delivery, fake_uv,
         arg.split(" @ ")[1] for arg in installs[0] if "ai-device[" in arg
     ))
     assert "client" in device and "native" in device
+
+
+def _darwin_manifest(monkeypatch, macos="13.6", machine="arm64"):
+    from device_runtime.dependencies import DARWIN_TARGET
+
+    monkeypatch.setattr(module.sys, "platform", "darwin")
+    monkeypatch.setattr(module.platform, "machine", lambda: machine)
+    monkeypatch.setattr(module.platform, "mac_ver", lambda: (macos, ("", "", ""), ""))
+    return {
+        "target": {"system": "darwin", "requires_python": ">=3.13", "offline": False},
+        "format_version": 3,
+        "roles": {"client": {}},
+        "dependencies": {"manifest": {"target": DARWIN_TARGET}},
+    }
+
+
+def test_darwin_format3_accepts_arm64_macos_above_floor(monkeypatch):
+    manifest = _darwin_manifest(monkeypatch)
+    module._check_target(manifest, ["client"])
+
+
+def test_darwin_format3_rejects_x86_64_host(monkeypatch):
+    manifest = _darwin_manifest(monkeypatch, machine="x86_64")
+    with pytest.raises(InstallationError, match="arm64 macOS"):
+        module._check_target(manifest, ["client"])
+
+
+def test_darwin_format3_rejects_macos_below_floor(monkeypatch):
+    manifest = _darwin_manifest(monkeypatch, macos="10.15")
+    with pytest.raises(InstallationError, match="macOS >= 11.0"):
+        module._check_target(manifest, ["client"])
+
+
+def test_darwin_format3_rejects_unreadable_macos_version(monkeypatch):
+    manifest = _darwin_manifest(monkeypatch, macos="")
+    with pytest.raises(InstallationError, match="macOS >= 11.0"):
+        module._check_target(manifest, ["client"])
+
+
+def test_darwin_format3_rejects_invalid_dependency_target(monkeypatch):
+    manifest = _darwin_manifest(monkeypatch)
+    manifest["dependencies"]["manifest"]["target"] = {
+        "system": "darwin",
+        "machine": "arm64",
+        "python": "cp313",
+        "min_macos": "10.9",
+    }
+    with pytest.raises(InstallationError, match="invalid local dependency target"):
+        module._check_target(manifest, ["client"])

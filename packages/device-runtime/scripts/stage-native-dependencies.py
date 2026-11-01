@@ -20,7 +20,16 @@ def load_lock(path):
     if lock.get("schema_version") != 1:
         raise ValueError("unsupported dependency lock schema")
     target = lock.get("target")
-    if target != {"system": "linux", "machine": "x86_64", "python": "cp313", "glibc": "2.17"}:
+    if not isinstance(target, dict):
+        raise TypeError("dependency lock target must be an object")
+    system = target.get("system")
+    if system == "linux":
+        if target != {"system": "linux", "machine": "x86_64", "python": "cp313", "glibc": "2.17"}:
+            raise ValueError("unsupported dependency lock target")
+    elif system == "darwin":
+        if target != {"system": "darwin", "machine": "arm64", "python": "cp313", "min_macos": "11.0"}:
+            raise ValueError("unsupported dependency lock target")
+    else:
         raise ValueError("unsupported dependency lock target")
     wheels = lock.get("wheels")
     if not isinstance(wheels, list) or not wheels:
