@@ -390,13 +390,15 @@ class Updates:
             "binding_sha256": request["binding_sha256"],
         }
 
-    def _check_candidate(self, binding, value):
+    def _check_candidate(self, binding, value, *, live=True):
         evidence = value.get("authenticated_candidate")
         if evidence is None:
             return  # Legacy developer journal; not a signed candidate claim.
-        if evidence["source_active_sha256"] != nh._digest(
+        if evidence["binding_sha256"] != nh._digest(Path(binding["root"]) / nh.MARKER):
+            raise UpdateError("authenticated candidate source changed")
+        if live and evidence["source_active_sha256"] != nh._digest(
             Path(binding["root"]) / "active.json"
-        ) or evidence["binding_sha256"] != nh._digest(Path(binding["root"]) / nh.MARKER):
+        ):
             raise UpdateError("authenticated candidate source changed")
         core.inspect_bundle(Path(evidence["manifest_path"]).parent)
         for key in ("receipt", "installation", "manifest", "python"):
@@ -486,6 +488,25 @@ class Updates:
             return receipt
 
     def _prepared(self, binding, stem):
+        return self._prepared_record(binding, stem, live=True)
+
+    def _prepared_record(self, binding, stem, *, live):
+        """Validate a transaction's prepared/approval evidence.
+
+        ``live=True`` is the precondition for an operation that changes the
+        host: the source active release must still be the one this transaction
+        was prepared against, otherwise the approval no longer describes what
+        would be replaced.
+
+        ``live=False`` is for recording what a transaction already ended as.
+        A successful upgrade moves ``active.json`` by design, so requiring the
+        pre-change digest there would make a completed transaction the one thing
+        that cannot be closed -- which is exactly the dead end that left
+        apply-intent fences behind on every green run. Closure still proves the
+        record is the one the administrator approved for this instance and that
+        the package bytes are unchanged; it only stops asserting that nothing
+        has happened since.
+        """
         path = stem.with_suffix(".prepared.json")
         approved = stem.with_suffix(".approved.json")
         nh._trusted(path)
@@ -504,9 +525,11 @@ class Updates:
             or self.packages.metadata(package) != value["metadata"]
         ):
             raise UpdateError("approved package changed")
-        if nh._digest(Path(binding["root"]) / "active.json") != value["source_active_sha256"]:
+        if live and (
+            nh._digest(Path(binding["root"]) / "active.json") != value["source_active_sha256"]
+        ):
             raise UpdateError("source active changed")
-        self._check_candidate(binding, value)
+        self._check_candidate(binding, value, live=live)
         return value
 
     @contextmanager
@@ -842,7 +865,11 @@ class Updates:
         evidence ``recover`` lacks and the reason this path is separate from it.
         """
         with self._transaction(instance_id, operation_id) as (binding, stem):
-            value = self._prepared(binding, stem)
+            # Closing is not a change: the whole point is that the transaction
+            # already ended, possibly by moving active.json. Verifying the
+            # pre-change source digest here would refuse to close exactly the
+            # transactions that succeeded.
+            value = self._prepared_record(binding, stem, live=False)
             intent_path = stem.with_suffix(".apply-intent.json")
             retired = stem.with_suffix(".retired.json")
             with self._apply_lease(self.registry / "package-manager", existing=True):

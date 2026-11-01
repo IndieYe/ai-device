@@ -1886,6 +1886,64 @@ def test_retire_closes_dead_end_without_replay(update):
     assert debian.calls == 1
 
 
+
+
+def test_retire_closes_a_transaction_that_already_moved_active(update):
+    """A successful upgrade changes active.json; that must not make it uncloseable.
+
+    Retiring is a record of how a transaction ended, so it must not assert that
+    nothing happened since preparation. Requiring the pre-change source digest
+    turned every green upgrade into a permanent apply-intent fence: the only
+    closure path refused the only transactions that actually needed closing.
+    """
+    manager, packages, _, package = update
+    stem = manager.registry / "updates/5-probe--one"
+    stem.with_suffix(".apply-intent.json").write_text(
+        json.dumps({"prepared_sha256": "fixture"})
+    )
+    # The upgrade advanced the instance; active.json no longer matches the
+    # digest the transaction was prepared against.
+    (manager.helper.root / "active.json").write_text('{"release":"new"}')
+
+    retired = manager.retire("probe", "one")
+    assert retired["retired"]["state"] == "retired_without_replay"
+    assert retired["retired"]["replay"] == "none"
+    assert retired["retired"]["retry_allowed"] is False
+    assert packages.calls == 0, "retirement must never execute the package manager"
+    # The fence is released, so the next transaction can start.
+    manager.prepare("probe", "three", package, sha256=nh._digest(package), version="2")
+
+
+def test_retire_still_refuses_a_changed_package(update):
+    """Dropping the source-active assertion must not drop package identity."""
+    manager, _, _, package = update
+    stem = manager.registry / "updates/5-probe--one"
+    stem.with_suffix(".apply-intent.json").write_text(
+        json.dumps({"prepared_sha256": "fixture"})
+    )
+    (manager.helper.root / "active.json").write_text('{"release":"new"}')
+    package.write_bytes(b"repacked")
+
+    with pytest.raises(nu.UpdateError, match="approved package changed"):
+        manager.retire("probe", "one")
+    assert not stem.with_suffix(".retired.json").exists()
+
+
+def test_a_completed_upgrade_leaves_no_permanent_fence(update):
+    """The happy path must end with no apply-intent left fencing the instance."""
+    manager, packages, _, _package = update
+    stem = manager.registry / "updates/5-probe--one"
+    manager.apply("probe", "one")
+    assert packages.calls == 1
+    # Apply opened a durable start gate; closure is what releases it.
+    assert stem.with_suffix(".apply-intent.json").exists()
+    (manager.helper.root / "active.json").write_text('{"release":"new"}')
+    manager.retire("probe", "one")
+    assert not [
+        path
+        for path in stem.parent.glob("*.apply-intent.json")
+        if not nu._retired_file(path)
+    ], "no live apply-intent may survive a closed transaction"
 def test_retire_requires_a_real_intent(update):
     manager, _, _, _ = update
     with pytest.raises(nu.UpdateError, match="no apply intent to retire"):
