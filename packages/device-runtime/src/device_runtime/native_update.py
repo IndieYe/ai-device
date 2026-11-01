@@ -288,6 +288,7 @@ class Updates:
         version,
         authenticated_candidate=None,
         bootstrap_version=None,
+        bootstrap_tree=None,
     ):
         """Register one exact administrator-owned package, without executing it."""
         if not re.fullmatch(r"[a-f0-9]{64}", sha256):
@@ -319,12 +320,13 @@ class Updates:
             if authenticated_candidate is not None:
                 intent["authenticated_candidate"] = authenticated_candidate
                 self._check_candidate(binding, intent)
-            if bootstrap_version is not None:
-                # The pointer this upgrade will publish names a specific tree, and
-                # the activation receipt has to prove that tree is the one in use.
-                # Recording it here is what lets the receipt be verified later
-                # instead of trusting the caller's report at closure time.
-                intent["bootstrap_version"] = bootstrap_version
+            if bootstrap_tree is not None:
+                # The pointer this upgrade publishes names a specific tree, and the
+                # activation receipt has to prove that tree is the one in use.
+                # This is the pointer name, which is not the version compared
+                # against ``bootstrap_min``: recording that version here would
+                # make the receipt unverifiable on every real upgrade.
+                intent["bootstrap_tree"] = bootstrap_tree
             path = stem.with_suffix(".prepared.json")
             if path.exists():
                 if not nh._same_json(json.loads(path.read_text()), intent):
@@ -429,6 +431,7 @@ class Updates:
         release_id,
         runtime_receipt,
         bootstrap_version,
+        bootstrap_tree=None,
     ):
         package_path = nh._path(package_path)
         envelope_path = nh._path(envelope_path)
@@ -475,6 +478,7 @@ class Updates:
             version=payload["package"]["version"],
             authenticated_candidate=evidence,
             bootstrap_version=bootstrap_version,
+            bootstrap_tree=bootstrap_tree,
         )
         return result
 
@@ -900,7 +904,7 @@ class Updates:
             activation_id = observed.get("activation_id")
             if not isinstance(activation_id, str) or not activation_id:
                 raise UpdateError("active release carries no activation id")
-            if self._bootstrap_name() != target["bootstrap_version"]:
+            if self._bootstrap_name() != target["bootstrap_tree"]:
                 raise UpdateError("bootstrap tree does not match the activated package")
             receipt = {
                 "state": "activated",
@@ -942,13 +946,16 @@ class Updates:
         release_version = candidate.get("release_version")
         if not isinstance(release_version, str) or not release_version:
             raise UpdateError("runtime receipt names no release version")
-        bootstrap_version = value.get("bootstrap_version")
-        if not isinstance(bootstrap_version, str) or not bootstrap_version:
+        # The pointer names a versioned *tree*, which is not the version the
+        # envelope's bootstrap_min was compared against. Recording and comparing
+        # the wrong one made every activation receipt unverifiable.
+        bootstrap_tree = value.get("bootstrap_tree")
+        if not isinstance(bootstrap_tree, str) or not bootstrap_tree:
             raise UpdateError("transaction records no target bootstrap tree")
         return {
             "release": release,
             "release_version": release_version,
-            "bootstrap_version": bootstrap_version,
+            "bootstrap_tree": bootstrap_tree,
         }
 
     @staticmethod

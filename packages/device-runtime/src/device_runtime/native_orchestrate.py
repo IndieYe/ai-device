@@ -259,6 +259,7 @@ def upgrade(
         release_id=release_id,
         runtime_receipt=_runtime_receipt(root, operation_id),
         bootstrap_version=bootstrap_version,
+        bootstrap_tree=tree,
     )
     # ``prepare_signed`` does not return a digest of the file it wrote, so the
     # approval names the digest of that exact file. ``approve`` recomputes it

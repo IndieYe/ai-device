@@ -2024,7 +2024,8 @@ def _activated_fixture(signed_update, monkeypatch, *, active):
         trusted_keys={},
         release_id="new",
         runtime_receipt=receipt,
-        bootstrap_version="2.7-native1",
+        bootstrap_version="2.7",
+        bootstrap_tree="2.7-native1",
     )
     assert prepared["authenticated_candidate"]["release_sha256"]
     stem = manager.registry / "updates/5-probe--signed"
@@ -2077,6 +2078,26 @@ def test_activation_refuses_when_active_names_another_release(signed_update, mon
     assert not stem.with_suffix(".activated.json").exists()
     with pytest.raises(nh.HelperError, match="blocks start"):
         nh._assert_no_package_intent(manager.registry)
+
+
+def test_activation_compares_the_tree_not_the_version(signed_update, monkeypatch):
+    """The pointer names a tree; ``bootstrap_min`` is compared to a version.
+
+    Recording the version made every real receipt unverifiable: a 0.3.0 upgrade
+    from bootstrap 0.2.9 recorded ``0.2.9`` while the pointer legitimately became
+    ``0.3.0-native1``, so activation succeeded and still could not be closed.
+    """
+    manager, stem = _activated_fixture(
+        signed_update,
+        monkeypatch,
+        active=json.dumps({"release": "new", "release_version": "2", "activation_id": "f" * 32}),
+    )
+    prepared = json.loads(stem.with_suffix(".prepared.json").read_text())
+    assert prepared["bootstrap_tree"] == "2.7-native1"
+    assert "bootstrap_version" not in prepared
+    result = manager.record_activation("probe", "signed")
+    assert result["activation"]["bootstrap_now"] == "2.7-native1"
+    assert result["next_step"] == "activated"
 
 
 def test_activation_refuses_a_mismatched_bootstrap_tree(signed_update, monkeypatch):
