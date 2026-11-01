@@ -390,6 +390,10 @@ def test_upgrade_switches_the_tree_not_the_version(monkeypatch, as_root, tmp_pat
             seen["expected_version"] = kwargs["expected_version"]
             return {"helper_switched": {"state": "helper_switched"}}
 
+        def record_activation(self, *args, **kwargs):
+            seen["record_activation"] = True
+            return {"activated": True, "activation": {"state": "activated"}}
+
     monkeypatch.setattr(orchestrate, "prepare", FakePrepare)
     monkeypatch.setattr(orchestrate, "update", type("M", (), {"Updates": FakeUpdates}))
     monkeypatch.setattr(
@@ -413,7 +417,76 @@ def test_upgrade_switches_the_tree_not_the_version(monkeypatch, as_root, tmp_pat
 
     assert seen["bootstrap_version"] == "0.2.7"
     assert seen["expected_version"] == "0.2.7-native1"
+    assert seen["record_activation"] is True
     assert result["bootstrap_tree"] == "0.2.7-native1"
+    assert result["activation_record"]["state"] == "activated"
+
+
+def test_upgrade_reports_an_unrecorded_activation(monkeypatch, as_root, tmp_path):
+    """Activation without its receipt must not look like a finished upgrade.
+
+    The owner's success claim is not the fence: later starts read the receipt.
+    Reporting success while the receipt is missing is exactly what left every
+    completed upgrade still fencing the instance.
+    """
+    prepared_file = tmp_path / "updates" / "5-probe--op1.prepared.json"
+    prepared_file.parent.mkdir(parents=True)
+    prepared_file.write_text("{}\n")
+
+    class FakePrepare:
+        @staticmethod
+        def prepare_runtime_candidate(root, package, envelope, **kwargs):
+            return {"state": "runtime_prepared", "candidate": {"release": "rel-abc"}}
+
+        @staticmethod
+        def activate_candidate(root, release, **kwargs):
+            return {"state": "activated"}
+
+        @staticmethod
+        def _load_trusted_keys(path):
+            return {"keys": []}
+
+    class FakeUpdates:
+        def __init__(self, registry):
+            pass
+
+        def prepare_signed(self, *args, **kwargs):
+            return {"authenticated_candidate": {}}
+
+        def approve(self, *args, **kwargs):
+            return {"approved_by_uid": 0}
+
+        def apply(self, *args, **kwargs):
+            return {"applied": {"state": "applied_package"}}
+
+        def switch_helper(self, *args, **kwargs):
+            return {"helper_switched": {"state": "helper_switched"}}
+
+        def record_activation(self, *args, **kwargs):
+            # The write was refused: active.json did not name the candidate.
+            return {"activated": False, "activation": None}
+
+    monkeypatch.setattr(orchestrate, "prepare", FakePrepare)
+    monkeypatch.setattr(orchestrate, "update", type("M", (), {"Updates": FakeUpdates}))
+    monkeypatch.setattr(
+        orchestrate, "_instance_owner", lambda registry, instance_id: (12345, 12345, tmp_path)
+    )
+    monkeypatch.setattr(orchestrate, "_fork_as", lambda uid, gid, work: work())
+    monkeypatch.setattr(orchestrate.helper, "_path", lambda value: tmp_path)
+
+    with pytest.raises(orchestrate.OrchestrationError, match="not recorded"):
+        orchestrate.upgrade(
+            registry=str(tmp_path),
+            instance_id="probe",
+            operation_id="op1",
+            package=str(tmp_path / "p.deb"),
+            envelope=str(tmp_path / "e.json"),
+            release_id="rel-1",
+            bootstrap_version="0.2.7",
+            bootstrap_tree="0.2.7-native1",
+            uv_executable=str(tmp_path / "uv"),
+            stopped=True,
+        )
 
 
 def test_upgrade_refuses_a_tree_name_that_is_not_a_directory(monkeypatch, as_root, tmp_path):

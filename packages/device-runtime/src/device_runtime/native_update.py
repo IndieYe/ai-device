@@ -287,6 +287,7 @@ class Updates:
         sha256,
         version,
         authenticated_candidate=None,
+        bootstrap_version=None,
     ):
         """Register one exact administrator-owned package, without executing it."""
         if not re.fullmatch(r"[a-f0-9]{64}", sha256):
@@ -318,6 +319,12 @@ class Updates:
             if authenticated_candidate is not None:
                 intent["authenticated_candidate"] = authenticated_candidate
                 self._check_candidate(binding, intent)
+            if bootstrap_version is not None:
+                # The pointer this upgrade will publish names a specific tree, and
+                # the activation receipt has to prove that tree is the one in use.
+                # Recording it here is what lets the receipt be verified later
+                # instead of trusting the caller's report at closure time.
+                intent["bootstrap_version"] = bootstrap_version
             path = stem.with_suffix(".prepared.json")
             if path.exists():
                 if not nh._same_json(json.loads(path.read_text()), intent):
@@ -467,6 +474,7 @@ class Updates:
             sha256=payload["package"]["sha256"],
             version=payload["package"]["version"],
             authenticated_candidate=evidence,
+            bootstrap_version=bootstrap_version,
         )
         return result
 
@@ -846,6 +854,114 @@ class Updates:
                     _atomic(path, receipt)
             return {**self._observation(stem, value), "helper_switched": receipt}
 
+    def record_activation(self, instance_id, operation_id):
+        """Record that this transaction's release is the active one.
+
+        A successful activate is a terminal state, but nothing wrote it down:
+        ``_next_step`` only recognised ``.retired.json``, so every completed
+        upgrade kept reporting ``activate`` and its ``apply-intent`` kept fencing
+        the instance. The operator had to retire a transaction that had actually
+        succeeded, which records the wrong fact.
+
+        This receipt is written only from observation. The owner reports success
+        from its own process; this reads ``active.json`` under the runtime root
+        and refuses unless that file really names the release this transaction
+        prepared, with a matching activation id and the expected bootstrap tree.
+        A crash between activation and this write therefore leaves an intent that
+        still fences, and re-running this call only observes the same state again.
+
+        Nothing is deleted: the intent, sender, package log and outcome stay as
+        audit evidence. The fence is released by the receipt, not by absence.
+        """
+        with self._transaction(instance_id, operation_id) as (binding, stem):
+            value = self._prepared_record(binding, stem, live=False)
+            intent_path = stem.with_suffix(".apply-intent.json")
+            activated = stem.with_suffix(".activated.json")
+            if not os.path.lexists(intent_path):
+                raise UpdateError("no apply intent to close by activation")
+            nh._trusted(intent_path)
+            if os.path.lexists(activated):
+                nh._trusted(activated)
+                stored = json.loads(activated.read_text())
+                if not isinstance(stored, dict):
+                    raise UpdateError("activation evidence must be an object")
+                # Re-recording is an observation, not a new transaction. Refuse a
+                # receipt that names a different intent rather than overwriting
+                # evidence another closure depends on.
+                if stored.get("intent_sha256") != nh._digest(intent_path):
+                    raise UpdateError("activation evidence belongs to another intent")
+                return {**self._observation(stem, value), "activation": stored}
+            target = self._activation_target(value, binding)
+            observed = self._active_record(binding)
+            if observed.get("release") != target["release"]:
+                raise UpdateError("active release does not match the activated candidate")
+            if observed.get("release_version") != target["release_version"]:
+                raise UpdateError("active release version does not match the candidate")
+            activation_id = observed.get("activation_id")
+            if not isinstance(activation_id, str) or not activation_id:
+                raise UpdateError("active release carries no activation id")
+            if self._bootstrap_name() != target["bootstrap_version"]:
+                raise UpdateError("bootstrap tree does not match the activated package")
+            receipt = {
+                "state": "activated",
+                "intent_sha256": nh._digest(intent_path),
+                "prepared_sha256": nh._digest(stem.with_suffix(".prepared.json")),
+                "release": observed["release"],
+                "release_version": observed["release_version"],
+                "activation_id": activation_id,
+                "bootstrap_now": self._bootstrap_name(),
+                "replay": "none",
+            }
+            _atomic(activated, receipt)
+            return {**self._observation(stem, value), "activation": receipt}
+
+    @staticmethod
+    def _activation_target(value, binding):
+        """Resolve the release this transaction must have activated.
+
+        The candidate evidence points at the owner's runtime receipt, which names
+        the release directory that was prepared. That receipt is re-read here
+        through ``_read_runtime_receipt`` so the digest and ownership checks are
+        repeated, and the release name must still be a plain directory entry.
+
+        A transaction without signed candidate evidence predates signed
+        installation and cannot prove what it activated, so it stays fenced.
+        """
+        evidence = value.get("authenticated_candidate")
+        if not isinstance(evidence, dict):
+            raise UpdateError("transaction has no authenticated candidate evidence")
+        receipt = json.loads(
+            _read_runtime_receipt(Path(evidence["receipt_path"]), binding["uid"])
+        )
+        candidate = receipt.get("candidate")
+        if not isinstance(candidate, dict):
+            raise UpdateError("runtime receipt names no candidate")
+        release = candidate.get("release")
+        if not isinstance(release, str) or Path(release).name != release or release in {".", ".."}:
+            raise UpdateError("runtime receipt names an invalid release")
+        release_version = candidate.get("release_version")
+        if not isinstance(release_version, str) or not release_version:
+            raise UpdateError("runtime receipt names no release version")
+        bootstrap_version = value.get("bootstrap_version")
+        if not isinstance(bootstrap_version, str) or not bootstrap_version:
+            raise UpdateError("transaction records no target bootstrap tree")
+        return {
+            "release": release,
+            "release_version": release_version,
+            "bootstrap_version": bootstrap_version,
+        }
+
+    @staticmethod
+    def _active_record(binding):
+        """Read the instance's active pointer as a regular owner-owned file."""
+        root = Path(binding["root"])
+        return json.loads(
+            _read_regular(
+                root / "active.json",
+                "instance active pointer must be a regular file",
+            )
+        )
+
     def retire(self, instance_id, operation_id):
         """Administrator closure for an apply transaction that will never finish.
 
@@ -919,21 +1035,23 @@ class Updates:
         applied = read(".applied.json")
         switched = read(".helper.json")
         retired = read(".retired.json")
+        activated = read(".activated.json")
         return {
             "prepared": value,
             "apply_intent": read(".apply-intent.json"),
             "outcome": read(".outcome.json"),
             "recovery": read(".recovery.json"),
             "retired": retired,
+            "activation": activated,
             "applied": applied,
             "helper_switched": switched,
             "bootstrap_now": self._bootstrap_name(),
-            "next_step": _next_step(applied, switched, retired),
+            "next_step": _next_step(applied, switched, retired, activated),
             "installed_package": self.packages.installed(value["metadata"]["Package"]),
             "active_sha256": nh._digest(
                 Path(self.helper._binding(value["instance_id"])["root"]) / "active.json"
             ),
-            "activated": False,
+            "activated": activated is not None,
         }
 
     def reconcile(self, instance_id, operation_id):
@@ -1033,18 +1151,33 @@ class Updates:
 
 
 def _retired_file(intent_path):
-    """Report whether this exact intent carries an administrator retirement.
+    """Report whether this exact intent carries a terminal closure.
 
-    The receipt binds the intent digest, so a retirement cannot be shifted onto
-    a different transaction by renaming or rewriting the intent. Corrupt,
-    untrusted or mismatched evidence reports False: the safe answer here is
-    "still fenced", never "closed".
+    Two receipts close a transaction, and they are not interchangeable:
+    ``.retired.json`` records an administrator accepting a dead end without a
+    replay, while ``.activated.json`` records that the prepared release actually
+    became the active one. Both bind this intent's digest, so neither can be
+    shifted onto a different transaction by renaming or rewriting the intent.
+
+    Corrupt, untrusted or mismatched evidence reports False: the safe answer here
+    is "still fenced", never "closed".
     """
     name = intent_path.name
     suffix = ".apply-intent.json"
     if not name.endswith(suffix):
         return False
-    receipt = intent_path.with_name(name[: -len(suffix)] + ".retired.json")
+    digest = nh._digest(intent_path)
+    for receipt in (
+        intent_path.with_name(name[: -len(suffix)] + ".retired.json"),
+        intent_path.with_name(name[: -len(suffix)] + ".activated.json"),
+    ):
+        if _terminal_receipt(receipt, digest):
+            return True
+    return False
+
+
+def _terminal_receipt(receipt, intent_sha256):
+    """Check one closure receipt against the intent it claims to close."""
     if not os.path.lexists(receipt):
         return False
     try:
@@ -1052,22 +1185,28 @@ def _retired_file(intent_path):
         stored = json.loads(receipt.read_text())
         if not isinstance(stored, dict):
             return False
-        if stored.get("state") != "retired_without_replay":
+        state = stored.get("state")
+        if state == "retired_without_replay":
+            if stored.get("retry_allowed") is not False:
+                return False
+        elif state != "activated":
             return False
-        if stored.get("retry_allowed") is not False:
-            return False
-        return stored.get("intent_sha256") == nh._digest(intent_path)
+        return stored.get("intent_sha256") == intent_sha256
     except (OSError, ValueError, nh.HelperError):
         return False
 
 
-def _next_step(applied, switched, retired=None):
+def _next_step(applied, switched, retired=None, activated=None):
     """Name what the transaction still needs, without performing it.
 
     Reconcile is read-only on purpose: the next move -- switching the helper,
     activating a release, or accepting a partial state -- changes what runs on
     the host, so it stays an explicit call.
     """
+    if activated is not None and activated.get("state") == "activated":
+        # A completed transaction: the prepared release is the active one, so
+        # nothing remains and the instance is free for a new one.
+        return "activated"
     if retired is not None and retired.get("state") == "retired_without_replay":
         # An accepted dead end: nothing remains for this transaction, so the
         # instance is free for a new one. The evidence stays on disk.

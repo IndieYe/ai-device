@@ -310,6 +310,18 @@ def upgrade(
     if not isinstance(activated, dict) or activated.get("state") != "activated":
         raise OrchestrationError("candidate activation returned no activated state")
 
+    # Step 7 (root): close the transaction by observing the result.
+    # Activation happened in the owner's process and returns its own claim; the
+    # receipt is what later starts and further upgrades read, so it is written
+    # here from active.json rather than from that claim. It never replays the
+    # package or the activation: re-running it only observes the same state.
+    closed = updates.record_activation(instance_id, operation_id)
+    closed_record = (closed or {}).get("activation") or {}
+    if not isinstance(closed_record, dict) or closed_record.get("state") != "activated":
+        raise OrchestrationError(
+            "activation was not recorded; transaction still fences the instance"
+        )
+
     return {
         "instance_id": instance_id,
         "operation_id": operation_id,
@@ -319,6 +331,7 @@ def upgrade(
         "applied": applied,
         "switched": switched,
         "activated": activated,
+        "activation_record": closed_record,
         "service_started": False,
     }
 

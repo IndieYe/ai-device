@@ -309,12 +309,11 @@ def _assert_no_package_intent(registry):
     if not os.path.lexists(directory):
         return
     _trusted(directory, directory=True)
-    # Until activation/repair has a verified terminal protocol, no intent is
-    # automatically cleared, including failed or recovered package executions.
-    # The single exception is an explicit administrator retirement: it records
-    # that the observed end state was accepted, keeps every artifact, and never
-    # replays the package. Without it a dead-end transaction fences the instance
-    # for ever, because nothing else removes an intent.
+    # An intent is cleared only by a verified terminal receipt: either an
+    # explicit administrator retirement of a dead end, or the activation that
+    # completed the transaction. Both keep every artifact and bind this exact
+    # intent. Without one a dead-end transaction fences the instance for ever,
+    # because nothing else removes an intent.
     if any(
         not _retired_transaction(intent)
         for intent in directory.glob("*.apply-intent.json")
@@ -323,16 +322,29 @@ def _assert_no_package_intent(registry):
 
 
 def _retired_transaction(intent_path):
-    """Trust a retirement only when it binds this exact intent.
+    """Trust a terminal closure only when it binds this exact intent.
 
-    Corrupt, untrusted or mismatched evidence reports False, so an unpoven
-    receipt keeps the fence closed.
+    ``retired_without_replay`` and ``activated`` both end a transaction but record
+    different facts, so each keeps its own required fields. Corrupt, untrusted or
+    mismatched evidence reports False, so an unpoven receipt keeps the fence
+    closed.
     """
     name = intent_path.name
     suffix = ".apply-intent.json"
     if not name.endswith(suffix):
         return False
-    receipt = intent_path.with_name(name[: -len(suffix)] + ".retired.json")
+    digest = _digest(intent_path)
+    for receipt in (
+        intent_path.with_name(name[: -len(suffix)] + ".retired.json"),
+        intent_path.with_name(name[: -len(suffix)] + ".activated.json"),
+    ):
+        if _terminal_receipt(receipt, digest):
+            return True
+    return False
+
+
+def _terminal_receipt(receipt, intent_sha256):
+    """Check one closure receipt against the intent it claims to close."""
     if not os.path.lexists(receipt):
         return False
     try:
@@ -340,11 +352,13 @@ def _retired_transaction(intent_path):
         stored = json.loads(receipt.read_text())
         if not isinstance(stored, dict):
             return False
-        if stored.get("state") != "retired_without_replay":
+        state = stored.get("state")
+        if state == "retired_without_replay":
+            if stored.get("retry_allowed") is not False:
+                return False
+        elif state != "activated":
             return False
-        if stored.get("retry_allowed") is not False:
-            return False
-        return stored.get("intent_sha256") == _digest(intent_path)
+        return stored.get("intent_sha256") == intent_sha256
     except (OSError, ValueError, HelperError):
         return False
 

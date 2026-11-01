@@ -766,7 +766,11 @@ def signed_update(update, monkeypatch):
     python = home / "client/venv/bin/python"
     python.parent.mkdir(parents=True)
     python.symlink_to(interpreter)
-    prepared = {"release": "new", "bundle_sha256": nu.core._fingerprint(manifest)}
+    prepared = {
+        "release": "new",
+        "release_version": "2",
+        "bundle_sha256": nu.core._fingerprint(manifest),
+    }
     (home / "installation.json").write_text(canonical(prepared))
     payload = {
         "package": {
@@ -1997,6 +2001,162 @@ def test_retirement_evidence_fails_closed(update, tmp_path):
             nh._assert_no_package_intent(manager.registry)
 
     receipt.write_bytes(original)
+    assert nu._retired_file(intent_path)
+    nh._assert_no_package_intent(manager.registry)
+
+
+def _activated_fixture(signed_update, monkeypatch, *, active):
+    """Prepare a signed transaction whose activation can be observed.
+
+    The release version and bootstrap tree are pinned so ``record_activation``
+    must compare against what the runtime receipt prepared, not against whatever
+    active.json happens to say.
+    """
+    manager, package, envelope, receipt, _ = signed_update
+    runtime = json.loads(receipt.read_text())
+    runtime["candidate"]["release_version"] = "2"
+    receipt.write_text(nu.nc.canonical(runtime))
+    prepared = manager.prepare_signed(
+        "probe",
+        "signed",
+        package,
+        envelope_path=envelope,
+        trusted_keys={},
+        release_id="new",
+        runtime_receipt=receipt,
+        bootstrap_version="2.7-native1",
+    )
+    assert prepared["authenticated_candidate"]["release_sha256"]
+    stem = manager.registry / "updates/5-probe--signed"
+    manager.approve("probe", "signed", prepared_sha256=nh._digest(stem.with_suffix(".prepared.json")))
+    stem.with_suffix(".apply-intent.json").write_text(
+        json.dumps({"prepared_sha256": nh._digest(stem.with_suffix(".prepared.json"))})
+    )
+    stem.with_suffix(".applied.json").write_text(json.dumps({"state": "applied_package"}))
+    stem.with_suffix(".helper.json").write_text(json.dumps({"state": "helper_switched"}))
+    (manager.helper.root / "active.json").write_text(active)
+    monkeypatch.setattr(nu.Updates, "_bootstrap_name", staticmethod(lambda: "2.7-native1"))
+    monkeypatch.setattr(nu.nh, "_trusted", lambda *a, **kw: None)
+    return manager, stem
+
+
+def test_activation_records_terminal_receipt(signed_update, monkeypatch):
+    """A finished upgrade closes itself; nobody has to retire success.
+
+    Before this receipt existed every green upgrade kept ``next_step=activate``
+    and its apply-intent fenced the instance, so the only closure path recorded
+    a dead end for a transaction that had actually worked.
+    """
+    manager, stem = _activated_fixture(
+        signed_update,
+        monkeypatch,
+        active=json.dumps({"release": "new", "release_version": "2", "activation_id": "a" * 32}),
+    )
+    result = manager.record_activation("probe", "signed")
+    receipt = result["activation"]
+    assert receipt["state"] == "activated"
+    assert receipt["release"] == "new"
+    assert receipt["activation_id"] == "a" * 32
+    assert receipt["replay"] == "none"
+    assert result["next_step"] == "activated"
+    # The fence is released by the receipt, and the evidence that proves what
+    # happened is still there to audit.
+    assert stem.with_suffix(".apply-intent.json").exists()
+    nh._assert_no_package_intent(manager.registry)
+
+
+def test_activation_refuses_when_active_names_another_release(signed_update, monkeypatch):
+    """Observation, not the owner's claim, decides that activation happened."""
+    manager, stem = _activated_fixture(
+        signed_update,
+        monkeypatch,
+        active=json.dumps({"release": "other", "release_version": "2", "activation_id": "b" * 32}),
+    )
+    with pytest.raises(nu.UpdateError, match="active release does not match"):
+        manager.record_activation("probe", "signed")
+    assert not stem.with_suffix(".activated.json").exists()
+    with pytest.raises(nh.HelperError, match="blocks start"):
+        nh._assert_no_package_intent(manager.registry)
+
+
+def test_activation_refuses_a_mismatched_bootstrap_tree(signed_update, monkeypatch):
+    """The receipt also proves the entrypoint the package installed is in use."""
+    manager, stem = _activated_fixture(
+        signed_update,
+        monkeypatch,
+        active=json.dumps({"release": "new", "release_version": "2", "activation_id": "c" * 32}),
+    )
+    monkeypatch.setattr(nu.Updates, "_bootstrap_name", staticmethod(lambda: "2.6-native3"))
+    with pytest.raises(nu.UpdateError, match="bootstrap tree does not match"):
+        manager.record_activation("probe", "signed")
+    assert not stem.with_suffix(".activated.json").exists()
+
+
+def test_activation_requires_an_activation_id(signed_update, monkeypatch):
+    """active.json without an activation id does not prove a promotion happened."""
+    manager, _ = _activated_fixture(
+        signed_update,
+        monkeypatch,
+        active=json.dumps({"release": "new", "release_version": "2"}),
+    )
+    with pytest.raises(nu.UpdateError, match="no activation id"):
+        manager.record_activation("probe", "signed")
+
+
+def test_activation_replay_is_an_observation(signed_update, monkeypatch):
+    """Re-running after a crash between activation and the write is safe."""
+    manager, stem = _activated_fixture(
+        signed_update,
+        monkeypatch,
+        active=json.dumps({"release": "new", "release_version": "2", "activation_id": "d" * 32}),
+    )
+    first = manager.record_activation("probe", "signed")["activation"]
+    # The evidence must not be rewritten: a second call observes the same one.
+    before = stem.with_suffix(".activated.json").read_bytes()
+    second = manager.record_activation("probe", "signed")["activation"]
+    assert second == first
+    assert stem.with_suffix(".activated.json").read_bytes() == before
+
+
+def test_activation_receipt_cannot_close_another_intent(signed_update, monkeypatch):
+    """An activation receipt binds one intent, exactly like a retirement."""
+    manager, stem = _activated_fixture(
+        signed_update,
+        monkeypatch,
+        active=json.dumps({"release": "new", "release_version": "2", "activation_id": "e" * 32}),
+    )
+    manager.record_activation("probe", "signed")
+    other = stem.parent / "5-probe--other.apply-intent.json"
+    other.write_text(json.dumps({"prepared_sha256": "fixture"}))
+    assert not nu._retired_file(other)
+    with pytest.raises(nh.HelperError, match="blocks start"):
+        nh._assert_no_package_intent(manager.registry)
+
+
+def test_activation_evidence_fails_closed(update):
+    """Corrupt or mismatched activation receipts keep the fence shut."""
+    manager, _, _, _ = update
+    stem = manager.registry / "updates/5-probe--one"
+    intent_path = stem.with_suffix(".apply-intent.json")
+    intent_path.write_text(json.dumps({"prepared_sha256": "fixture"}))
+    receipt = stem.with_suffix(".activated.json")
+
+    for corrupt in (
+        "{not json",
+        "[]",
+        json.dumps({"state": "activated", "intent_sha256": "0" * 64}),
+        json.dumps({"state": "retired_without_replay", "retry_allowed": True,
+                    "intent_sha256": nh._digest(intent_path)}),
+        json.dumps({"state": "activated"}),
+    ):
+        receipt.write_text(corrupt)
+        assert not nu._retired_file(intent_path)
+        with pytest.raises(nh.HelperError, match="blocks start"):
+            nh._assert_no_package_intent(manager.registry)
+
+    receipt.write_text(
+        json.dumps({"state": "activated", "intent_sha256": nh._digest(intent_path)})
+    )
     assert nu._retired_file(intent_path)
     nh._assert_no_package_intent(manager.registry)
 
