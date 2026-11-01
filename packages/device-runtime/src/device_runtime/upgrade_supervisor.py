@@ -1,10 +1,13 @@
-"""One-shot Linux/systemd client supervisor, independent of the managed process.
+"""One-shot service supervisor for Linux/systemd and macOS/launchd, independent
+of the managed process.
 
 Profile provisioning is an explicit administrator operation, never auto-adoption.
 """
 
 import hashlib
 import json
+import os
+import plistlib
 import re
 import subprocess
 import sys
@@ -61,6 +64,101 @@ class Systemd:
         )
 
 
+class Launchd:
+    """launchd adapter with a forced-restart stop.
+
+    launchd has no drain signal: ``stop`` is SIGTERM through launchctl, and a
+    client that ignores it is killed after the ThrottleInterval. That is the
+    agreed trade-off for this path -- in-flight work is abandoned rather than
+    drained, so a caller must accept the interruption before using it.
+
+    The adapter reports the same fields the systemd one does so supervisor
+    logic stays shared. ``ControlGroup`` and ``ExecStart`` are synthesized from
+    launchd's own properties instead of systemctl's structured output.
+    """
+
+    # Tells supervise() that stop is a kill, so draining cannot help.
+    forced_restart = True
+
+    def __init__(self, label, domain=None):
+        self.label = label
+        self.domain = domain or f"gui/{os.getuid()}"
+
+    def _print(self, key):
+        result = subprocess.run(
+            ["launchctl", "print", f"{self.domain}/{self.label}"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode:
+            return None
+        match = re.search(rf"\b{key} = (.+)", result.stdout)
+        return match[1].strip() if match else None
+
+    def show(self):
+        described = subprocess.run(
+            ["launchctl", "list", self.label],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if described.returncode:
+            # Not loaded. Absent is a valid state for a stopped service; the
+            # caller distinguishes it from an active one by ActiveState.
+            return {"ActiveState": "inactive", "SubState": "dead", "MainPID": "0"}
+        pid = re.search(r'"PID" = (\d+)', described.stdout)
+        return {
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": pid[1] if pid else "0",
+            # supervisor._runner_bound parses the systemd structure; launchd
+            # binding is verified through owns_pid instead, so declare the
+            # shape without claiming a match.
+            "ExecStart": "",
+            "ControlGroup": "",
+        }
+
+    def owns_pid(self, pid, snapshot):
+        """Prove the reported PID belongs to this label's job.
+
+        launchctl does not expose a control-group equivalent, so compare the
+        tracked PID against the one launchd reports for the same label.
+        """
+        if type(pid) is not int or pid <= 0:
+            return False
+        return snapshot.get("MainPID") == str(pid)
+
+    def action(self, action):
+        if action not in {"stop", "start"}:
+            raise up.UpgradeError("unsupported service action")
+        if action == "start":
+            subprocess.run(
+                ["launchctl", "kickstart", f"{self.domain}/{self.label}"],
+                capture_output=True,
+                check=True,
+                timeout=120,
+            )
+            return
+        # Force the restart: SIGKILL to the job so a wedged client cannot hold
+        # the instance into the maintenance window. KeepAlive brings it back
+        # only after start, so the instance stays down while the pointer moves.
+        subprocess.run(
+            ["launchctl", "kill", "SIGKILL", f"{self.domain}/{self.label}"],
+            capture_output=True,
+            check=True,
+            timeout=120,
+        )
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if self.show().get("ActiveState") != "active":
+                return
+            time.sleep(0.1)
+        raise up.UpgradeError("launchd job did not stop after SIGKILL")
+
+
 def _healthy(instance, record, service, snapshot, health, *, candidate=False):
     release = (record["candidate"] if candidate else record["baseline"]["active"])["release"]
     return (
@@ -81,32 +179,70 @@ def _runner_bound(instance, snapshot):
     match = re.fullmatch(
         r"\{ path=([^ ;]+) ; argv\[\]=([^;]+) ; .*\}", snapshot.get("ExecStart", "")
     )
-    return bool(
-        match
-        and match[1] == str(instance / "run")
-        and match[2].strip() == str(instance / "run") + " client"
-    )
+    if match:
+        return match[1] == str(instance / "run") and match[2].strip() == (
+            str(instance / "run") + " client"
+        )
+    # launchd does not serialize ExecStart this way. Its ProgramArguments are
+    # authoritative in the installed plist, so read the job definition instead
+    # of inferring intent from a running process's argv.
+    path = instance / "launchd" / f"com.device-runtime.{instance.name}.plist"
+    if not path.is_file() or path.is_symlink():
+        return False
+    try:
+        with path.open("rb") as stream:
+            job = plistlib.load(stream)
+    except (OSError, ValueError, plistlib.InvalidFileException):
+        return False
+    return job.get("ProgramArguments") == [str(instance / "run"), "client"]
 
 
 def profile(root):
-    if sys.platform != "linux":
-        raise up.UpgradeError("systemd supervision requires Linux")
     path = root / "upgrade-profile.json"
     if path.is_symlink():
         raise up.UpgradeError("invalid administrator profile")
     info = path.stat()
-    if info.st_uid != 0 or info.st_mode & 0o022:
+    # Linux profiles are provisioned by root; macOS installs are per-user, where
+    # ownership by root would be wrong. Both must stay non-writable by others.
+    if sys.platform == "linux" and info.st_uid != 0:
+        raise up.UpgradeError("profile must be administrator-owned and not writable by others")
+    if info.st_mode & 0o022:
         raise up.UpgradeError("profile must be administrator-owned and not writable by others")
     value = json.loads(path.read_text())
     if value.get("format_version") != 1 or value.get("role") != "client":
         raise up.UpgradeError("only an explicitly provisioned client profile is supported")
-    if value.get("root") != str(root) or not re.fullmatch(
-        r"[A-Za-z0-9_-]+\.service", value["unit"]
-    ):
+    if value.get("root") != str(root):
+        raise up.UpgradeError("profile binding mismatch")
+    if sys.platform == "darwin":
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", value.get("label", "")):
+            raise up.UpgradeError("profile binding mismatch")
+    elif not re.fullmatch(r"[A-Za-z0-9_-]+\.service", value.get("unit", "")):
         raise up.UpgradeError("profile binding mismatch")
     if value.get("allow_upgrade") is not True:
         raise up.UpgradeError("local policy disables upgrades")
     return value
+
+
+def _adapter(settings, adapter=None):
+    """Build the service adapter for this host, or pass an injected one through."""
+    if adapter is not None:
+        return adapter
+    if sys.platform == "darwin":
+        return Launchd(settings["label"], settings.get("domain"))
+    return Systemd(settings["unit"])
+
+
+def _service_key(settings):
+    """The identifier a supervision intent records for this service.
+
+    The profile schema is what decides: a profile that names a label is a
+    launchd job, one that names a unit is a systemd service. Reading the key
+    that exists keeps injected test profiles and both real platforms working
+    without having to trust the interpreter's platform alone.
+    """
+    if "label" in settings:
+        return settings["label"]
+    return settings["unit"]
 
 
 @legacy_operation
@@ -117,7 +253,7 @@ def reconcile_supervision(root, upgrade_id, *, adapter=None):
     with up._supervision_lease(instance, exclusive=True):
         record = up.status(instance, upgrade_id)
         intent = record.get("supervisor")
-        if not intent or intent["unit"] != settings["unit"]:
+        if not intent or intent["unit"] != _service_key(settings):
             raise up.UpgradeError("no matching supervision intent")
         if record["state"] in {"verified_local", "cancelled", "failed"}:
             return record
@@ -138,7 +274,7 @@ def reconcile_supervision(root, upgrade_id, *, adapter=None):
             k: v for k, v in baseline.items() if k != "active"
         }:
             raise up.UpgradeError("recovery binding changed")
-        service = adapter if adapter is not None else Systemd(settings["unit"])
+        service = _adapter(settings, adapter)
         snapshot = service.show()
         if not _runner_bound(instance, snapshot):
             raise up.UpgradeError("service binding changed")
@@ -193,7 +329,7 @@ def recover(root, upgrade_id, *, action, expected_record_sha256, confirmed=False
             "recovering-candidate",
         }
         if (
-            intent.get("unit") != settings["unit"]
+            intent.get("unit") != _service_key(settings)
             or intent.get("phase") not in phases
             or record["state"] not in {"unknown", "prepared", "publishing", "published"}
         ):
@@ -204,7 +340,7 @@ def recover(root, upgrade_id, *, action, expected_record_sha256, confirmed=False
             k: v for k, v in baseline.items() if k != "active"
         }:
             raise up.UpgradeError("recovery binding changed")
-        service = adapter if adapter is not None else Systemd(settings["unit"])
+        service = _adapter(settings, adapter)
         snapshot = service.show()
         if (
             not _runner_bound(instance, snapshot)
@@ -287,11 +423,11 @@ def resume_admission(root, upgrade_id, *, confirmed=False, adapter=None):
                 "service intent cannot be resumed; manual reconciliation required"
             )
         if (
-            record["supervisor"]["unit"] != settings["unit"]
+            record["supervisor"]["unit"] != _service_key(settings)
             or up._baseline(instance) != record["baseline"]
         ):
             raise up.UpgradeError("recovery binding changed")
-        service = adapter if adapter is not None else Systemd(settings["unit"])
+        service = _adapter(settings, adapter)
         snapshot = service.show()
         sock = instance / "state/client/maintenance.sock"
         health = request(sock, "status", upgrade_id)
@@ -333,7 +469,7 @@ def supervise(root, upgrade_id, *, confirmed=False, adapter=None, timeout=60):
         raise up.UpgradeError("interrupted supervisor requires reconciliation, not replay")
     if record["baseline"]["active"]["roles"] != ["client"]:
         raise up.UpgradeError("mixed-role instances require a separate maintenance plan")
-    service = adapter if adapter is not None else Systemd(settings["unit"])
+    service = _adapter(settings, adapter)
     snapshot = service.show()
     if not _runner_bound(instance, snapshot):
         raise up.UpgradeError("unit does not use the bound stable runner")
@@ -358,21 +494,33 @@ def supervise(root, upgrade_id, *, confirmed=False, adapter=None, timeout=60):
             instance, record, service, service.show(), request(sock, "status", upgrade_id)
         ):
             raise up.UpgradeError("old client identity or readiness unconfirmed")
-        record["supervisor"] = {"phase": "draining", "unit": settings["unit"]}
+        record["supervisor"] = {"phase": "draining", "unit": _service_key(settings)}
         up._save(path, record)
         try:
-            while True:
-                drained = request(sock, "drain", upgrade_id)
-                if drained.get("drained") is True:
-                    break
-                if time.monotonic() >= deadline:
-                    request(sock, "resume", upgrade_id)
-                    raise up.UpgradeError("tasks did not drain; service remains running")
-                time.sleep(0.1)
-            if not _healthy(
-                instance, record, service, service.show(), request(sock, "status", upgrade_id)
-            ):
-                raise up.UpgradeError("old client binding changed before stop")
+            # launchd restarts are forced: the job is SIGKILLed and in-flight
+            # work is abandoned. Draining first would only lengthen a window in
+            # which the answer is already "no", so this path skips it and goes
+            # straight to the stop. The systemd path keeps drain as its
+            # contract, because there SIGTERM is graceful and tasks survive.
+            #
+            # Keyed on the adapter, not the interpreter: an injected adapter in
+            # a test must get the same drain semantics as the real service it
+            # stands in for.
+            if getattr(service, "forced_restart", False):
+                pass
+            else:
+                while True:
+                    drained = request(sock, "drain", upgrade_id)
+                    if drained.get("drained") is True:
+                        break
+                    if time.monotonic() >= deadline:
+                        request(sock, "resume", upgrade_id)
+                        raise up.UpgradeError("tasks did not drain; service remains running")
+                    time.sleep(0.1)
+                if not _healthy(
+                    instance, record, service, service.show(), request(sock, "status", upgrade_id)
+                ):
+                    raise up.UpgradeError("old client binding changed before stop")
             up._policy(
                 instance,
                 release=record["candidate"]["release_version"],
@@ -380,7 +528,7 @@ def supervise(root, upgrade_id, *, confirmed=False, adapter=None, timeout=60):
             )
             # Durable intent before stopping: restart cannot blindly reissue it.
             path = instance / "upgrades" / (upgrade_id + ".json")
-            record["supervisor"] = {"phase": "stopping", "unit": settings["unit"]}
+            record["supervisor"] = {"phase": "stopping", "unit": _service_key(settings)}
             up._save(path, record)
             service.action("stop")
             stopped = service.show()
@@ -390,7 +538,7 @@ def supervise(root, upgrade_id, *, confirmed=False, adapter=None, timeout=60):
                 raise up.UpgradeError("service stop not confirmed")
             # Public activate validates candidate, original binding and exclusive runner lease.
             record = up.activate(instance, upgrade_id, stopped=True, _supervised=True)
-            record["supervisor"] = {"phase": "starting", "unit": settings["unit"]}
+            record["supervisor"] = {"phase": "starting", "unit": _service_key(settings)}
             up._save(path, record)
             service.action("start")
             deadline = time.monotonic() + timeout

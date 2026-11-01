@@ -861,3 +861,198 @@ def test_publication_pointer_preserves_exact_original_output_map(mapping):
         pointer.pop("task_output_map_sha256")
         with pytest.raises(up.UpgradeError, match="invalid expected active"):
             up._publication_pointer(record)
+
+
+class LaunchdFixture:
+    """Stands in for launchctl without touching a real launchd job."""
+
+    forced_restart = True
+
+    def __init__(self, root, macos_profile=False):
+        self.root = root
+        self.actions = []
+        self.running = True
+        self.macos_profile = macos_profile
+        self._pid = 7
+
+    def show(self):
+        if not self.running:
+            return {"ActiveState": "inactive", "SubState": "dead", "MainPID": "0"}
+        return {
+            "ActiveState": "active",
+            "SubState": "running",
+            "MainPID": str(self._pid),
+            "ExecStart": "",
+            "ControlGroup": "",
+        }
+
+    def owns_pid(self, pid, snapshot):
+        return snapshot.get("MainPID") == str(pid)
+
+    def action(self, name):
+        self.actions.append(name)
+        if name == "stop":
+            # A forced stop is a kill: the job is gone immediately, with no
+            # grace period and no chance to finish in-flight work.
+            self.running = False
+            self._pid = 0
+        else:
+            self.running = True
+            self._pid = 9
+
+
+def _write_launchd_plist(root):
+    import plistlib
+
+    directory = root / "launchd"
+    directory.mkdir(exist_ok=True)
+    path = directory / f"com.device-runtime.{root.name}.plist"
+    path.write_bytes(
+        plistlib.dumps({"ProgramArguments": [str(root / "run"), "client"]})
+    )
+    return path
+
+
+def _launchd_health(root, record, pid):
+    return {
+        "upgrade_id": "one",
+        "pid": pid,
+        "ready": True,
+        "maintenance_owner": None,
+        "python": str(
+            root / "releases" / up.life._read(root / "active.json")["release"]
+            / "client/venv/bin/python"
+        ),
+        "release": up.life._read(root / "active.json")["release"],
+        "device_id": up.life._read(root / "instance.json")["instance_id"],
+        "drained": True,
+    }
+
+
+def test_launchd_profile_binds_label_and_rejects_others(tmp_path, monkeypatch):
+    import json
+
+    root = tmp_path / "inst"
+    root.mkdir()
+    path = root / "upgrade-profile.json"
+    path.write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "role": "client",
+                "root": str(root),
+                "label": "com.device-runtime.inst",
+                "allow_upgrade": True,
+            }
+        )
+    )
+    monkeypatch.setattr(supervisor.sys, "platform", "darwin")
+    assert supervisor.profile(root)["label"] == "com.device-runtime.inst"
+    # A systemd-style profile is not a launchd binding.
+    path.write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "role": "client",
+                "root": str(root),
+                "unit": "device.service",
+                "allow_upgrade": True,
+            }
+        )
+    )
+    with pytest.raises(up.UpgradeError, match="binding mismatch"):
+        supervisor.profile(root)
+
+
+def test_launchd_profile_rejects_world_writable(tmp_path, monkeypatch):
+    import json
+
+    root = tmp_path / "inst"
+    root.mkdir()
+    path = root / "upgrade-profile.json"
+    path.write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "role": "client",
+                "root": str(root),
+                "label": "com.device-runtime.inst",
+                "allow_upgrade": True,
+            }
+        )
+    )
+    path.chmod(0o666)
+    monkeypatch.setattr(supervisor.sys, "platform", "darwin")
+    with pytest.raises(up.UpgradeError, match="not writable by others"):
+        supervisor.profile(root)
+
+
+def test_launchd_service_key_is_platform_neutral():
+    assert supervisor._service_key({"label": "com.x.y"}) == "com.x.y"
+    assert supervisor._service_key({"unit": "x.service"}) == "x.service"
+
+
+def test_runner_bound_reads_launchd_plist(tmp_path):
+    root = tmp_path / "inst"
+    root.mkdir()
+    assert not supervisor._runner_bound(root, {"ExecStart": ""})
+    _write_launchd_plist(root)
+    assert supervisor._runner_bound(root, {"ExecStart": ""})
+
+
+def test_runner_bound_rejects_plist_with_wrong_program(tmp_path):
+    import plistlib
+
+    root = tmp_path / "inst"
+    (root / "launchd").mkdir(parents=True)
+    (root / "launchd" / f"com.device-runtime.{root.name}.plist").write_bytes(
+        plistlib.dumps({"ProgramArguments": ["/bin/sh", "-c", "something else"]})
+    )
+    assert not supervisor._runner_bound(root, {"ExecStart": ""})
+
+
+def test_forced_restart_skips_drain_and_kills(single, upgraded, monkeypatch):
+    """The launchd path must not wait for a drain that the kill makes moot."""
+    up.prepare(single, upgraded, "one")
+    monkeypatch.setattr(supervisor, "profile", lambda root: {"label": "com.device-runtime.x"})
+    _write_launchd_plist(single)
+    asked = []
+    # The old client reports PID 7; the restarted candidate reports PID 9.
+    # Health is asked more than once, so the answer has to depend on the phase
+    # the supervisor is in rather than on a call counter.
+    def health(sock, action, upgrade_id):
+        asked.append(action)
+        if action == "drain":
+            raise AssertionError("forced restart must not drain")
+        running = service.show()["MainPID"]
+        return _launchd_health(single, None, int(running))
+
+    monkeypatch.setattr(supervisor, "request", health)
+    service = LaunchdFixture(single)
+    result = supervisor.supervise(single, "one", confirmed=True, adapter=service)
+    assert result["state"] == "verified_local"
+    assert service.actions == ["stop", "start"]
+    assert "drain" not in asked
+
+
+def test_launchd_stop_failure_is_unknown_not_replayed(single, upgraded, monkeypatch):
+    up.prepare(single, upgraded, "one")
+    monkeypatch.setattr(supervisor, "profile", lambda root: {"label": "com.device-runtime.x"})
+    _write_launchd_plist(single)
+    monkeypatch.setattr(
+        supervisor, "request", lambda sock, action, upgrade_id: _launchd_health(single, None, 7)
+    )
+
+    class Failing(LaunchdFixture):
+        def action(self, name):
+            self.actions.append(name)
+            if name == "stop":
+                raise OSError("launchctl unavailable")
+            self.running = True
+
+    service = Failing(single)
+    with pytest.raises(up.UpgradeError, match="reconcile"):
+        supervisor.supervise(single, "one", confirmed=True, adapter=service)
+    record = up.status(single, "one")
+    assert record["state"] == "unknown"
+    assert record["code"] == "supervised_maintenance_unconfirmed"
