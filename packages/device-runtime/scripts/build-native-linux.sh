@@ -33,8 +33,27 @@ fi
 [ "$(wc -c < "$archive" | tr -d ' ')" = 35356674 ] || { echo 'runtime size mismatch' >&2; exit 2; }
 printf '%s  %s\n' f829adc9d888e76c8801b4799ed444188d35239fcae3a9808a99ec5cb0d8d92c "$archive" | sha256sum -c -
 mkdir -p "$output"
-work=$(mktemp -d)
+# Reproducibility (see the header block below): the build tree must live at a
+# fixed path because uv writes the staging path into every console script it
+# generates, and both wheel installers record it in each direct_url.json. A
+# random mktemp directory therefore changed 21 payload files per build, which
+# made two builds of identical inputs produce different package hashes and left
+# the shipped scripts pointing at a directory that only ever existed on the
+# builder. Set DEVICE_NATIVE_BUILD_WORK to build somewhere else; the default is
+# stable so repeated builds are byte-identical.
+work=${DEVICE_NATIVE_BUILD_WORK:-/tmp/ai-device-native-build}
+rm -rf "$work"
+mkdir -p "$work"
 trap 'rm -rf "$work"' EXIT
+# Timestamps are pinned instead of inherited from the checkout and the wheel
+# extraction, so tar members and the dpkg control archive do not record when the
+# build happened.
+if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then
+ epoch=$SOURCE_DATE_EPOCH
+else
+ epoch=315532800
+fi
+case $epoch in ''|*[!0-9]*) echo 'SOURCE_DATE_EPOCH must be an integer' >&2; exit 2 ;; esac
 root=$work/root
 home_final=/opt/ai-device/packages/$tree
 # The package ships one archive per tree instead of the expanded tree itself.
@@ -210,18 +229,99 @@ chmod 755 "$root/usr/bin/ai-device-native-helper"
 # not be writable by the client or group before a root helper trusts them.
 chmod -R go-w "$stage"
 chmod -R go-w "$stage_boot"
+# Erase the build path from the payload. This is both the last reproducibility
+# leak and a real defect: uv derives each console script's interpreter line and
+# each direct_url.json from the staging directory, so the shipped files named a
+# path that exists only on the builder. Rewrite them to the path the package
+# actually installs to, which is a pure substitution: identical inputs produce
+# identical bytes wherever the build ran.
+rewrite_prefix() {
+ [ -n "${1:-}" ] || return 0
+ for file in "$2"/runtime/bin/*; do
+  [ -f "$file" ] && [ ! -L "$file" ] || continue
+  head -c 2 "$file" 2>/dev/null | grep -q '#!' || continue
+  sed -i "s|$1|$3|g" "$file"
+ done
+ find "$2" -name direct_url.json -type f | while read -r file; do
+  sed -i "s|$1|$3|g" "$file"
+ done
+}
+rewrite_prefix "$stage" "$stage" "$home_final"
+rewrite_prefix "$stage_boot" "$stage_boot" "$bootstrap"
+# uv stamps every installed distribution with a uv_cache.json holding the
+# install moment in nanoseconds, and RECORD then hashes that file. Both are build
+# artifacts with no bearing on the payload, but they made each build differ. Pin
+# the timestamp to the same epoch the archives use and repair the RECORD digest,
+# which is the one link the installation code verifies. The rewrite is done in
+# Python because the digest is urlsafe-base64 of a sha256 and the size field must
+# be recomputed alongside it.
+#
+# RECORD also hashes the console scripts and direct_url.json rewritten above.
+# Their staged length depends on how long the build path was, so leaving those
+# entries untouched kept the build path's length in the package even though the
+# files themselves were already path-independent.
+normalize_dist_info() {
+ [ -n "${1:-}" ] || return 0
+ # Use the main tree's interpreter for both trees: the bootstrap is deliberately
+ # minimal and the rewrite only needs stdlib.
+ "$stage/runtime/bin/python3.13" -I -B - "$1" "$epoch" <<'PY' || return 1
+import base64, hashlib, pathlib, sys
+root, epoch = pathlib.Path(sys.argv[1]), int(sys.argv[2])
+stamp = ('{"timestamp":{"secs_since_epoch":%d,"nanos_since_epoch":0},'
+         '"commit":null,"tags":null,"env":{},"directories":{}}' % epoch)
+site = root / 'runtime' / 'lib' / 'python3.13' / 'site-packages'
+for cache in site.glob('*.dist-info/uv_cache.json'):
+    cache.write_text(stamp, encoding='utf-8')
+
+def digest_of(path):
+    return base64.urlsafe_b64encode(hashlib.sha256(path.read_bytes()).digest()).rstrip(b'=').decode()
+
+for record in site.glob('*.dist-info/RECORD'):
+    lines = record.read_text(encoding='utf-8').splitlines()
+    out = []
+    for line in lines:
+        parts = line.split(',')
+        if len(parts) < 3 or not parts[1].startswith('sha256='):
+            out.append(line)
+            continue
+        target = parts[0]
+        # RECORD paths are relative to site-packages; console scripts live three
+        # levels up in the runtime bin directory.
+        resolved = (site / target).resolve()
+        if not resolved.is_file():
+            out.append(line)
+            continue
+        out.append(target + ',sha256=' + digest_of(resolved) + ',' + str(resolved.stat().st_size))
+    record.write_text('\n'.join(out) + '\n', encoding='utf-8')
+PY
+}
+normalize_dist_info "$stage"
+normalize_dist_info "$stage_boot"
 # Building the bootstrap imports CPython modules, which leaves __pycache__ trees
 # inside the payload. Bytecode belongs to the running interpreter, not to the
 # package, so ship a clean tree and let erase handle only caches created later.
 find "$stage" "$stage_boot" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
+# Pin every mtime after the last mutation: bytecode removal, the prefix rewrite
+# and the earlier chmod all update directories, so doing this any sooner would
+# keep the build time in the archive headers.
+find "$stage" "$stage_boot" -exec touch -h -d "@$epoch" {} + 2>/dev/null || true
 # Package the finished trees as archives. The expansion happens on the target
 # host, in the post-install hook, where the pointer is also moved: the package
 # manager only ever writes and removes one file per tree.
 #
 # No compression: dpkg and rpm already compress their payload, and gzip here
 # would only add a decompression pass at install time for no size win.
-(cd "$stage" && tar -cf "$root$payload_tar" --owner=0 --group=0 .)
-(cd "$stage_boot" && tar -cf "$root$payload_boot_tar" --owner=0 --group=0 .)
+#
+# Members are sorted and their metadata pinned so the archive depends only on the
+# tree contents. Without --sort=name the order follows the filesystem, and
+# without the owner/mode/time overrides tar records the builder's account and the
+# moment the build ran.
+(cd "$stage" && tar -cf "$root$payload_tar" \
+  --sort=name --mtime="@$epoch" --owner=0 --group=0 --numeric-owner \
+  --mode='u+rwX,go+rX,go-w,ug-s' .)
+(cd "$stage_boot" && tar -cf "$root$payload_boot_tar" \
+  --sort=name --mtime="@$epoch" --owner=0 --group=0 --numeric-owner \
+  --mode='u+rwX,go+rX,go-w,ug-s' .)
 chmod 644 "$root$payload_tar" "$root$payload_boot_tar"
 # The digest is written by the hooks after expansion, so the published tree can
 # be compared against the archive it came from. It ships beside the archive as a
@@ -441,7 +541,15 @@ done
 EOF
  chmod 755 "$root/DEBIAN/prerm"
  sed -i "s#__TREE__#$tree#g" "$root/DEBIAN/prerm"
- dpkg-deb --build "$root" "$output/ai-device-native-client_${pkgver}_amd64.deb"
+ # Pin the control archive metadata and the compression instead of inheriting
+ # the builder's defaults. Debian and Ubuntu disagree here (xz vs zstd), and
+ # threads reorder the compressed stream, so an unpinned build of the same tree
+ # produced different bytes on each host. zstd matches the Ubuntu 24.04 target
+ # and is what a signed release has historically been built with.
+ find "$root" -exec touch -h -d "@$epoch" {} + 2>/dev/null || true
+ SOURCE_DATE_EPOCH="$epoch" dpkg-deb --build --root-owner-group \
+  --threads-max=1 -Z"${DEVICE_NATIVE_DEB_COMPRESSION:-zstd}" -z9 \
+  "$root" "$output/ai-device-native-client_${pkgver}_amd64.deb"
 else
  mkdir -p "$work/rpm/BUILD" "$work/rpm/RPMS" "$work/rpm/SOURCES" "$work/rpm/SPECS" "$work/rpm/SRPMS"
  cat > "$work/rpm/SPECS/native.spec" <<EOF
