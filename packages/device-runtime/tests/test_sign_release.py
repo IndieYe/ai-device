@@ -119,6 +119,37 @@ def test_control_requires_the_identity_fields():
         _control("control.tar", _tar([("./control", b"Package: x\nVersion: 1\n")]))
 
 
+def test_control_reads_a_zstd_member():
+    """dpkg on newer releases emits ``control.tar.zst``; that path must work.
+
+    The zstd branch streams the tar through a decompression reader. Wrapping
+    that reader in ``contextlib.closing`` made the teardown call a ``close``
+    attribute the wrapper does not expose, so every zstd package failed to sign
+    while the xz packages in earlier builds hid it.
+    """
+    zstandard = pytest.importorskip("zstandard")
+    raw = _tar([("./control", CONTROL)])
+    body = zstandard.ZstdCompressor().compress(raw)
+    fields = _control("control.tar.zst", body)
+    assert fields["Package"] == "ai-device-native-client"
+    assert fields["Version"] == "0.2.4-1"
+    assert fields["Architecture"] == "amd64"
+
+
+def test_payload_root_reads_a_zstd_member():
+    """The manifest lookup takes the same zstd path, so both are covered."""
+    zstandard = pytest.importorskip("zstandard")
+    inner = _tar([("./bundle/manifest.json", json.dumps(MANIFEST).encode())])
+    entries = [
+        (f"./opt/ai-device/payloads/{TREE}.tar", inner),
+        (f"./opt/ai-device/payloads/{TREE}-bootstrap.tar", _tar([("./run", b"x")])),
+    ]
+    body = zstandard.ZstdCompressor().compress(_tar(entries))
+    found, root = _manifest("data.tar.zst", body)
+    assert json.loads(found) == MANIFEST
+    assert root == f"opt/ai-device/payloads/{TREE}.tar"
+
+
 def test_ar_members_are_read_without_a_system_ar(tmp_path):
     path = tmp_path / "pkg.deb"
     path.write_bytes(_deb(_payload_entries()))

@@ -64,7 +64,11 @@ def _open_tar(data_name, body):
         from zstandard import ZstdDecompressor
 
         reader = ZstdDecompressor(max_window_size=134217728).stream_reader(io.BytesIO(body))
-        return contextlib.closing(reader), tarfile.open(fileobj=reader, mode="r|")
+        # The selftest has to shut the reader down before the tar is closed: a
+        # streamed tar keeps reading lazily. ``closing`` wraps the reader and
+        # only exposes ``close``, so keep the underlying object too -- closing
+        # the wrapper alone is not what the caller needs.
+        return reader, tarfile.open(fileobj=reader, mode="r|")
     if suffix == "xz":
         import lzma
 
@@ -85,6 +89,9 @@ def _archive(data_name, body):
             yield archive
     finally:
         if closer is not None:
+            # ``closer`` is the raw decompression reader, not a ``closing``
+            # wrapper: calling ``closer.close`` would raise AttributeError and
+            # turn a successful read into a signing failure.
             closer.close()
 
 
