@@ -29,6 +29,9 @@ Bash/FS 的 MCP 服务使用各自的 `[mcp]` extra；Device extras 为 client�
 
 ## 文档
 
+- [macOS Device 用户级部署、迁移与验收](docs/macos-ai-workstation-setup-and-verification.md)
+- [macOS 可选配套工具：tmux、Harness 与管理员配置](docs/macos-optional-tools.md)（非 Device 必需依赖）
+
 - [需求和验收](doc/requirements/ai-device-monorepo-migration.md)
 - [实施状态与验证边界](docs/implementation-status.md)
 - [阶段C验收矩阵](docs/stage-c-acceptance.md)

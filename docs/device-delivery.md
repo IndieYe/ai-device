@@ -130,9 +130,12 @@ uv run --no-project --python 3.13 --with "$DEVICE_WHEEL" python -I -m device_run
   instance.json                # 稳定实例身份
   config/roles.json            # URL/设备ID/端口；不存凭证
   state/<center|client|mcp>/   # journal/任务记录/输出，绝不由重建覆盖
-  run                         # 只依赖标准库的稳定启动入口
+  run                         # 稳定入口；带私有runtime时为Shell launcher
+  current                     # 私有runtime形式：活动release的单行指针
+  run-runner                  # 私有runtime形式：由外层run调用的Python主体
   active.json                 # 活动release与bundle指纹
   releases/<version>-<id>/     # bundle副本、准备记录与角色venv
+    runtime/bin/python3.13    # 私有runtime形式：外层run选择的解释器
   .installation.lock          # 安装独占/运行共享租约
   task-output-map.json        # 仅恢复client实例：受管旧任务路径映射，私有且与身份/活动指针绑定
 ```
@@ -144,9 +147,11 @@ uv run --no-project --python 3.13 --with "$DEVICE_WHEEL" python -I -m device_run
 "$ROOT/run" mcp      # DEVICE_RUNTIME_ADMIN_TOKEN；API_URL来自roles.json
 ```
 
+上述 current、run-runner 和 release 内 runtime 项仅适用于带私有 runtime 的交付形式；历史 Python 单文件入口不保证包含这些项。备份／恢复应保持活动指针、元数据与对应 release 一致，不仅复制 run。
+
 中心 admin token 和各设备 token 必须不同，各 token 至少16字符，具体配对规则沿用 Device Runtime。中心的 `DEVICE_RUNTIME_DEVICE_TOKENS` 是 `{device_id: token}` JSON 对象，key 使用客户端持久配置的设备 ID；token 由用户受控注入，不提供示例假 token。凭证只由进程环境供给，不写入持久 roles/config、命令参数、聊天或日志；安装器不会复制真实配置或生成/输出凭证。`run` 保持共享租约并将 SIGTERM/SIGINT 转发给子进程；重建遇到租约时拒绝。绕过入口直接运行的进程无法由此锁检测，所以操作前必须由用户确认该实例已停止。AI 不得停止真实实例；开发测试只收口明确属于测试的进程。
 
-`run` 当前 shebang 是 `#!/usr/bin/env python3`，调用方（包括 AI 宿主）的 PATH 必须能找到可运行该入口及标准库的 python3；入口不依赖 Device 第三方包，再选择角色 venv 的 Python >=3.13。uv 准备角色环境不保证宿主 PATH 已有 python3，不能承诺无 Python 安装。AI/MCP 配置使用绝对 `<root>/run` 与单独的 `mcp` 参数，而不是某个 release 内的 Python；新软件切换、回退、同版本重建均无需改 AI 路径。首期没有 launchd/开机自启或自动进程恢复。
+带私有 runtime 的当前交付形式中，`run` 是 `#!/bin/sh` launcher：读取 `current`，选择活动 release 的私有解释器，再调用 `run-runner`；不要用 Python 执行外层 run，也不要直接调用内部 run-runner。历史不带私有 runtime 的安装分支保留 Python 单文件入口，需要调用环境提供合适的 python3 PATH；应核对已安装入口及其配套版本，不混用两种形式。AI/MCP 配置使用绝对 `<root>/run` 与单独的 `mcp` 参数，而不是某个 release 内的 Python；新软件切换、回退、同版本重建均无需改 AI 路径。首期没有 launchd/开机自启或自动进程恢复。
 
 ## stdio AI/MCP 配置
 
