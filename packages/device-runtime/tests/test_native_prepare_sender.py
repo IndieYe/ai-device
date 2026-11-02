@@ -155,6 +155,36 @@ def test_guard_exit_without_receipt_is_unknown_even_when_lock_free(tmp_path, mon
     assert module.observe_senders(directory, {})["retry_allowed"] is False
 
 
+def test_absent_sender_directory_is_reported_not_raised(tmp_path):
+    """A preparation rejected before the sender tree exists must stay retireable.
+
+    Envelope and bundle verification run before the sender is entered, so a
+    refused package leaves an intent/failed pair with no .senders directory.
+    Raising here made that operation unretireable and blocked every later
+    upgrade on the instance.
+    """
+    from device_runtime.native_prepare_sender import observe_senders
+
+    result = observe_senders(tmp_path / "never-created", {"request": 1})
+
+    assert result["state"] == "no_senders_recorded"
+    assert result["commands"] == []
+    # Reporting the absence is not a recovery: nothing observed a process end.
+    assert result["retry_allowed"] is False
+    assert result["descendants_confirmed"] is False
+
+
+def test_sender_directory_that_is_not_a_directory_is_refused(tmp_path):
+    """The absent-directory allowance must not accept an unusable path."""
+    from device_runtime.native_prepare_sender import observe_senders
+
+    bogus = tmp_path / "senders"
+    bogus.write_text("not a directory")
+
+    with pytest.raises(ValueError):
+        observe_senders(bogus, {"request": 1})
+
+
 def test_direct_reaping_does_not_prove_descendant_completion(tmp_path):
     import time
 

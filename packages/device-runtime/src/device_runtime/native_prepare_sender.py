@@ -122,9 +122,26 @@ def observe_senders(directory, request):
 
     Lock availability plus matching direct-child receipts is deliberately not
     sufficient to prove descendants terminated or the preparation is reusable.
+
+    A preparation can fail before the sender directory exists: verification of
+    the envelope and bundle happens first, so a rejected package leaves an
+    ``intent``/``failed`` pair with no ``.senders`` tree at all. Reading that as
+    an error would make the operation unretireable and block every later upgrade
+    on the instance. An absent directory proves no sender command was recorded,
+    which is reported as ``no_senders_recorded`` and still requires the caller to
+    treat descendants as unconfirmed.
     """
     directory = Path(directory)
-    report = {"retry_allowed": False, "descendants_confirmed": False, "commands": []}
+    report = {
+        "retry_allowed": False,
+        "descendants_confirmed": False,
+        "commands": [],
+        "state": "no_senders_recorded",
+    }
+    if not directory.exists():
+        return report
+    if directory.is_symlink() or not directory.is_dir():
+        raise ValueError("invalid sender directory")
     fd = os.open(directory / "execution.lock", os.O_RDWR | os.O_NOFOLLOW)
     try:
         try:

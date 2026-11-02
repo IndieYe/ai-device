@@ -151,10 +151,18 @@ def retire_preparation(root, operation_id):
             if value.get("state") != "failed" or value.get("request") != request:
                 raise PreparationError("only failed or incomplete preparations may retire")
         observation = observe_senders(stem.with_suffix(".senders"), request)
-        if (
-            observation["state"] != "process_trees_reaped"
-            or not observation["descendants_confirmed"]
-        ):
+        # A preparation rejected before the sender tree was created recorded no
+        # command, so there is no process to reap and nothing to wait for. That
+        # is the only shape allowed to retire without a reap receipt; any recorded
+        # sender still needs the full subreaper evidence below.
+        if observation["state"] == "no_senders_recorded":
+            reaped = True
+        else:
+            reaped = (
+                observation["state"] == "process_trees_reaped"
+                and observation["descendants_confirmed"]
+            )
+        if not reaped:
             raise PreparationError("complete process-tree reaping required; remains blocked")
         receipt = {
             "state": "retired_without_replay",
