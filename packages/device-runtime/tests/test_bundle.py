@@ -371,3 +371,55 @@ def test_linux_bundle_declares_native_extras_in_manifest(tmp_path, artifacts):
     assert built["roles"] == {"client": {"components": ["device", "bash", "fs"],
                                          "device_extras": ["client", "native"]}}
     assert inspect_bundle(output)["roles"] == built["roles"]
+
+
+def test_format_two_linux_bundle_is_readable_without_native_extra(tmp_path, artifacts):
+    """A bundle published before LINUX_CLIENT_EXTRAS must stay readable.
+
+    Refusing it would make every 0.2.x instance un-upgradable: lifecycle
+    re-inspects the live release before it will prepare a candidate, so the old
+    bundle is read back on exactly the hosts that need the migration.
+    """
+    output = tmp_path / "legacy"
+    build_bundle(output, target_system="linux", **artifacts)
+    manifest = json.loads((output / "manifest.json").read_text())
+    # Reproduce what a 0.2.x publisher wrote: no native extra in the contract.
+    manifest["roles"]["client"]["device_extras"] = ["client"]
+    (output / "manifest.json").write_text(json.dumps(manifest))
+
+    assert inspect_bundle(output)["roles"]["client"]["device_extras"] == ["client"]
+
+
+def test_format_three_linux_bundle_still_requires_native_extra(tmp_path, artifacts):
+    """The compatibility branch must not widen what a new bundle may declare."""
+    output = tmp_path / "current"
+    build_bundle(output, target_system="linux", **artifacts)
+    manifest = json.loads((output / "manifest.json").read_text())
+    # Claiming format 3 says the bundle ships its offline wheel set, so dropping
+    # the extra that selects those wheels must not pass as a current bundle.
+    manifest["format_version"] = 3
+    manifest["roles"]["client"]["device_extras"] = ["client"]
+    (output / "manifest.json").write_text(json.dumps(manifest))
+
+    with pytest.raises(BundleError):
+        inspect_bundle(output)
+
+
+def test_legacy_extras_relaxation_is_limited_to_that_one_field(tmp_path, artifacts):
+    """Format 2 may omit native, but nothing else about the role may drift."""
+    output = tmp_path / "drift"
+    build_bundle(output, target_system="linux", **artifacts)
+    manifest = json.loads((output / "manifest.json").read_text())
+    manifest["roles"]["client"]["device_extras"] = ["client", "server"]
+    (output / "manifest.json").write_text(json.dumps(manifest))
+
+    with pytest.raises(BundleError):
+        inspect_bundle(output)
+
+    # Components are never relaxed, even for format 2.
+    manifest["roles"]["client"]["device_extras"] = ["client"]
+    manifest["roles"]["client"]["components"] = ["device", "bash"]
+    (output / "manifest.json").write_text(json.dumps(manifest))
+
+    with pytest.raises(BundleError):
+        inspect_bundle(output)

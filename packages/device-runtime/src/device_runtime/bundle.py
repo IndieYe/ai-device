@@ -53,6 +53,39 @@ def role_contract(role, system="darwin"):
     return contract
 
 
+def _roles_match(declared, expected, format_version):
+    """Compare a manifest's roles to the contract its format prescribes.
+
+    Format 2 predates ``LINUX_CLIENT_EXTRAS``. A Linux client bundle published
+    before that change declares ``[client]``, and refusing it here would make
+    every 0.2.x instance un-upgradable: lifecycle re-inspects the live release
+    before it can prepare a candidate, so the old bundle is read back on exactly
+    the hosts that need the migration.
+
+    Only the extras list is relaxed, and only for format 2. Components must match
+    exactly, and format 3 keeps the strict comparison so a newly built bundle
+    cannot quietly drop the extra its offline wheel set depends on. Reading a
+    historical bundle back is a narrower permission than accepting a new one.
+    """
+    if not isinstance(declared, dict) or set(declared) != set(expected):
+        return False
+    for name, contract in expected.items():
+        actual = declared[name]
+        if not isinstance(actual, dict) or set(actual) != set(contract):
+            return False
+        if actual["components"] != contract["components"]:
+            return False
+        extras = actual["device_extras"]
+        if extras == contract["device_extras"]:
+            continue
+        if format_version != 2 or not isinstance(extras, list):
+            return False
+        # The historical declaration is the current one minus the added extra.
+        if sorted(extras) != sorted(set(contract["device_extras"]) - {"native"}):
+            return False
+    return True
+
+
 class BundleError(ValueError):
     """Invalid or incomplete delivery artifacts, not a runtime-service failure."""
 
@@ -162,11 +195,11 @@ def inspect_bundle(directory):
     directory = Path(directory)
     try:
         manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+        if manifest["format_version"] not in (2, 3):
+            raise BundleError("unsupported bundle format, target or role layout")
         target, roles = target_contract(manifest["target"]["system"])
-        if (
-            manifest["format_version"] not in (2, 3)
-            or manifest["target"] != target
-            or manifest["roles"] != roles
+        if manifest["target"] != target or not _roles_match(
+            manifest["roles"], roles, manifest["format_version"]
         ):
             raise BundleError("unsupported bundle format, target or role layout")
         _version(manifest["release_version"])
