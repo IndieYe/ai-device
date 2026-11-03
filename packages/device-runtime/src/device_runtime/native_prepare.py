@@ -110,6 +110,35 @@ def _retired(stem, request):
     return True
 
 
+def _reached_sender_entry(extracted, request):
+    """Whether candidate verification completed, i.e. the sender was entered.
+
+    ``prepare_candidate`` publishes ``candidate.json`` as its last durable act,
+    and ``PreparationSender`` is entered strictly after it returns. The receipt
+    therefore marks the boundary: a preparation that has one had already reached
+    the sender entry point.
+
+    The receipt is bound to this preparation by ``release_sha256``, the same
+    digest the intent records. A receipt naming a different release, a symlink,
+    or an unparseable file is not accepted as evidence, so a receipt planted
+    from another candidate cannot hide a deleted sender tree.
+    """
+    receipt = extracted / "candidate.json"
+    if receipt.is_symlink():
+        raise PreparationError("invalid candidate receipt")
+    if not receipt.is_file():
+        return False
+    try:
+        value = candidate._json(receipt.read_bytes())
+    except (ValueError, OSError) as exc:
+        raise PreparationError("invalid candidate receipt") from exc
+    if value.get("state") != "authenticated_extracted" or value.get(
+        "release_sha256"
+    ) != request.get("release_sha256"):
+        raise PreparationError("invalid candidate receipt")
+    return True
+
+
 def retire_preparation(root, operation_id):
     """Explicit administrator retirement; retains all artifacts, never reruns.
 
@@ -150,7 +179,31 @@ def retire_preparation(root, operation_id):
             value = candidate._json(result.read_bytes())
             if value.get("state") != "failed" or value.get("request") != request:
                 raise PreparationError("only failed or incomplete preparations may retire")
-        observation = observe_senders(stem.with_suffix(".senders"), request)
+        # An absent .senders directory only proves nothing was recorded *now*.
+        # native-candidates sits in the instance owner's writable tree, so the
+        # owner can delete the sender tree for a preparation whose commands ran
+        # or are still running. Distinguish the two shapes with evidence that
+        # predates the sender entry point:
+        #
+        # prepare_candidate() publishes .extracted/candidate.json only after the
+        # payload is fully extracted and verified, and PreparationSender is
+        # entered strictly after that returns. So the presence of .extracted
+        # proves the run reached the sender entry point, which makes a missing
+        # .senders destroyed evidence rather than an unstarted preparation.
+        # Its absence means the run stopped inside candidate verification and
+        # no command could have been sent.
+        extracted = stem.with_suffix(".extracted")
+        if _reached_sender_entry(extracted, request):
+            stage_reached = "sender_entered"
+        elif not os.path.lexists(extracted):
+            stage_reached = "before_sender"
+        else:
+            # Present but without its completion receipt: the extraction was
+            # interrupted, so nothing here proves the stage either way.
+            stage_reached = None
+        observation = observe_senders(
+            stem.with_suffix(".senders"), request, stage_reached=stage_reached
+        )
         # A preparation rejected before the sender tree was created recorded no
         # command, so there is no process to reap and nothing to wait for. That
         # is the only shape allowed to retire without a reap receipt; any recorded

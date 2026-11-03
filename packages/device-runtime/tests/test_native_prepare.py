@@ -459,3 +459,130 @@ def test_prepare_without_pointer_passes_no_runtime_source(preparation):
     assert prepare(preparation)["state"] == "runtime_prepared"
 
     assert calls[0][3]["runtime_source"] is None
+
+def _failed_preparation(preparation, monkeypatch):
+    """Leave a genuine intent/failed pair by failing the preparation once."""
+    root = preparation[0]
+
+    # Fail inside candidate verification, before PreparationSender is entered.
+    # Failing core._prepare would be too late: the sender tree exists by then.
+    def fail(*a, **kw):
+        raise ValueError("injected")
+
+    monkeypatch.setattr(np.candidate, "prepare_candidate", fail)
+    with pytest.raises(ValueError, match="injected"):
+        prepare(preparation)
+    request = json.loads((root / "native-candidates/one.intent.json").read_text())
+    # The production fixture mocks binding; retirement separately validates its
+    # administrator marker/owner/source boundary.
+    (root / np.MARKER).write_text(
+        json.dumps({"schema_version": 2, "binding": {"root": str(root), "uid": root.stat().st_uid}})
+    )
+    request["binding_sha256"] = np.helper._digest(root / np.MARKER)
+    (root / "native-candidates/one.intent.json").write_text(json.dumps(request))
+    (root / "native-candidates/one.result.json").write_text(
+        json.dumps({"state": "failed", "request": request})
+    )
+    monkeypatch.setattr(np.sys, "platform", "linux")
+    monkeypatch.setattr(np.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(np.helper, "_trusted_marker", lambda _: None)
+    # prepare_candidate removes the destination on any failure; the fixture mock
+    # leaves it behind, so mirror the production cleanup.
+    import shutil
+
+    shutil.rmtree(root / "native-candidates/one.extracted", ignore_errors=True)
+    return root
+
+
+def test_retirement_allows_a_preparation_rejected_before_the_sender(preparation, monkeypatch):
+    """The original 9cafbcc case: verification failed, no sender tree exists.
+
+    prepare_candidate removes .extracted on any failure, so its absence is the
+    evidence that the run stopped before the sender entry point.
+    """
+    root = _failed_preparation(preparation, monkeypatch)
+    assert not (root / "native-candidates/one.extracted").exists()
+
+    receipt = np.retire_preparation(str(root), "one")
+
+    assert receipt["state"] == "retired_without_replay"
+
+
+def test_retirement_refuses_a_deleted_sender_tree(preparation, monkeypatch):
+    """A missing .senders after candidate verification is destroyed evidence.
+
+    The sender is entered only after .extracted/candidate.json is published, so a
+    completed receipt plus an absent sender tree means the tree was removed.
+    native-candidates is inside the instance owner's writable tree, so this
+    distinction cannot be inferred from absence alone.
+    """
+    root = _failed_preparation(preparation, monkeypatch)
+    directory = root / "native-candidates/one.extracted"
+    directory.mkdir(mode=0o700)
+    (directory / "candidate.json").write_text(
+        json.dumps(
+            {
+                "state": "authenticated_extracted",
+                "release_sha256": json.loads(
+                    (root / "native-candidates/one.intent.json").read_text()
+                )["release_sha256"],
+            }
+        )
+    )
+
+    with pytest.raises(np.PreparationError, match="process-tree"):
+        np.retire_preparation(str(root), "one")
+
+    assert not (root / "native-candidates/one.retired.json").exists()
+
+
+def test_retirement_refuses_an_interrupted_extraction_without_senders(preparation, monkeypatch):
+    """An .extracted directory without its receipt proves nothing either way."""
+    root = _failed_preparation(preparation, monkeypatch)
+    (root / "native-candidates/one.extracted").mkdir(mode=0o700)
+
+    with pytest.raises(np.PreparationError, match="process-tree"):
+        np.retire_preparation(str(root), "one")
+
+
+def test_retirement_refuses_a_forged_candidate_receipt(preparation, monkeypatch):
+    """A planted receipt must not be usable to hide a deleted sender tree."""
+    root = _failed_preparation(preparation, monkeypatch)
+    directory = root / "native-candidates/one.extracted"
+    directory.mkdir(mode=0o700)
+    (directory / "candidate.json").write_text(json.dumps({"state": "invented"}))
+
+    with pytest.raises(np.PreparationError, match="invalid candidate receipt"):
+        np.retire_preparation(str(root), "one")
+
+
+def test_retirement_refuses_a_symlinked_candidate_receipt(preparation, monkeypatch):
+    """A symlink is not a receipt, so it cannot be used to fake the stage."""
+    root = _failed_preparation(preparation, monkeypatch)
+    directory = root / "native-candidates/one.extracted"
+    directory.mkdir(mode=0o700)
+    target = root / "native-candidates/elsewhere.json"
+    target.write_text(json.dumps({"state": "authenticated_extracted"}))
+    (directory / "candidate.json").symlink_to(target)
+
+    with pytest.raises(np.PreparationError, match="invalid candidate receipt"):
+        np.retire_preparation(str(root), "one")
+
+
+def test_retirement_refuses_a_receipt_from_another_candidate(preparation, monkeypatch):
+    """A receipt copied from a different preparation cannot fake the stage.
+
+    The receipt is bound to this preparation by release_sha256, so planting one
+    from another candidate is rejected instead of hiding a deleted sender tree.
+    """
+    root = _failed_preparation(preparation, monkeypatch)
+    directory = root / "native-candidates/one.extracted"
+    directory.mkdir(mode=0o700)
+    (directory / "candidate.json").write_text(
+        json.dumps(
+            {"state": "authenticated_extracted", "release_sha256": "different-release"}
+        )
+    )
+
+    with pytest.raises(np.PreparationError, match="invalid candidate receipt"):
+        np.retire_preparation(str(root), "one")

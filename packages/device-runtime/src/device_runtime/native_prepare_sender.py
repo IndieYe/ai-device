@@ -117,7 +117,7 @@ class PreparationSender:
         return result
 
 
-def observe_senders(directory, request):
+def observe_senders(directory, request, *, stage_reached=None):
     """Read-only diagnostics. Neither a recovery receipt nor retry authority.
 
     Lock availability plus matching direct-child receipts is deliberately not
@@ -127,18 +127,38 @@ def observe_senders(directory, request):
     the envelope and bundle happens first, so a rejected package leaves an
     ``intent``/``failed`` pair with no ``.senders`` tree at all. Reading that as
     an error would make the operation unretireable and block every later upgrade
-    on the instance. An absent directory proves no sender command was recorded,
-    which is reported as ``no_senders_recorded`` and still requires the caller to
-    treat descendants as unconfirmed.
+    on the instance.
+
+    An absent directory is *not* by itself proof that no sender command was
+    recorded. ``native-candidates`` lives inside the instance owner's writable
+    tree, so the owner can delete ``.senders`` and turn a preparation whose
+    commands were recorded, or are still running, into what looks like a
+    never-started one. The caller must supply independent evidence of the stage
+    the preparation reached, in ``stage_reached``:
+
+    * ``"before_sender"`` -- the run stopped inside candidate verification, so
+      the sender tree was never entered and no command can exist. This is the
+      only case that may report ``no_senders_recorded``.
+    * ``"sender_entered"`` -- the run passed the sender entry point, so a missing
+      tree means the evidence was destroyed or replaced. Never retired without
+      reaping receipts; reported as ``sender_evidence_missing``.
+    * ``None`` -- the caller has no stage evidence. A missing directory stays
+      unconfirmed and blocking.
     """
     directory = Path(directory)
     report = {
         "retry_allowed": False,
         "descendants_confirmed": False,
         "commands": [],
-        "state": "no_senders_recorded",
+        "state": "sender_evidence_missing",
     }
     if not directory.exists():
+        # A dangling symlink never reaches is_dir(); treat it as destroyed
+        # evidence rather than absence.
+        if directory.is_symlink():
+            raise ValueError("invalid sender directory")
+        if stage_reached == "before_sender":
+            return {**report, "state": "no_senders_recorded"}
         return report
     if directory.is_symlink() or not directory.is_dir():
         raise ValueError("invalid sender directory")

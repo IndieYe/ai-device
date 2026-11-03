@@ -165,13 +165,65 @@ def test_absent_sender_directory_is_reported_not_raised(tmp_path):
     """
     from device_runtime.native_prepare_sender import observe_senders
 
-    result = observe_senders(tmp_path / "never-created", {"request": 1})
+    result = observe_senders(
+        tmp_path / "never-created", {"request": 1}, stage_reached="before_sender"
+    )
 
     assert result["state"] == "no_senders_recorded"
     assert result["commands"] == []
     # Reporting the absence is not a recovery: nothing observed a process end.
     assert result["retry_allowed"] is False
     assert result["descendants_confirmed"] is False
+
+
+def test_absent_sender_directory_without_stage_evidence_blocks(tmp_path):
+    """Absence alone never authorises retirement.
+
+    native-candidates lives inside the instance owner's writable tree, so a
+    missing .senders directory is equally consistent with a never-started
+    preparation and with a deleted one. Without independent stage evidence the
+    caller must stay blocked rather than guess.
+    """
+    from device_runtime.native_prepare_sender import observe_senders
+
+    result = observe_senders(tmp_path / "never-created", {"request": 1})
+
+    assert result["state"] == "sender_evidence_missing"
+    assert result["retry_allowed"] is False
+    assert result["descendants_confirmed"] is False
+
+
+def test_absent_sender_directory_after_sender_entry_blocks(tmp_path):
+    """A deleted sender tree must not read as an unstarted preparation.
+
+    The owner can remove .senders and rebuild the appearance of a preparation
+    that never sent a command. Once the stage evidence proves the run passed
+    the sender entry point, the missing tree is destroyed evidence.
+    """
+    from device_runtime.native_prepare_sender import observe_senders
+
+    result = observe_senders(
+        tmp_path / "never-created", {"request": 1}, stage_reached="sender_entered"
+    )
+
+    assert result["state"] == "sender_evidence_missing"
+    assert result["descendants_confirmed"] is False
+
+
+def test_dangling_sender_symlink_is_refused_not_treated_as_absent(tmp_path):
+    """A dangling symlink is destroyed evidence, never absence.
+
+    directory.exists() is False for a dangling symlink as well as for a missing
+    path, so the absence branch must reject links explicitly or it would accept
+    a replaced sender tree.
+    """
+    from device_runtime.native_prepare_sender import observe_senders
+
+    link = tmp_path / "senders"
+    link.symlink_to(tmp_path / "gone")
+
+    with pytest.raises(ValueError):
+        observe_senders(link, {"request": 1}, stage_reached="before_sender")
 
 
 def test_sender_directory_that_is_not_a_directory_is_refused(tmp_path):
