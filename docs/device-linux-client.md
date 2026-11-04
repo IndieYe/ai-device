@@ -1,5 +1,7 @@
 # Linux Device 客户端（Ubuntu 容器首期）
 
+> 历史指南：旧 Linux 实例/原生包路径已由完整包重构替代，不再作为当前操作入口。请参阅 [完整包开发指南](client-native-linux-development.md)；阶段仍在实施，不代表最终交付完成。
+
 > 三包迁移说明：本文保留来源项目的历史交付与验收记录，不代表新仓本次已完成相同平台验收。新包名称和当前支持范围以 [阶段C验收](stage-c-acceptance.md) 为准；AI 助手专属配置留在宿主仓库。
 
 本期复用 Device、Bash、FS 核心，新增 Linux **client 角色**的可重建交付契约。macOS 仍支持 center/mcp/client；不据此声明 Linux center/mcp 正式交付、公网或 systemd 已验收。

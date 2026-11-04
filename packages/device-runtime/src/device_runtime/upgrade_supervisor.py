@@ -1,4 +1,4 @@
-"""One-shot service supervisor for Linux/systemd and macOS/launchd, independent
+"""Legacy one-shot service supervisor for macOS/launchd, independent
 of the managed process.
 
 Profile provisioning is an explicit administrator operation, never auto-adoption.
@@ -12,56 +12,10 @@ import re
 import subprocess
 import sys
 import time
-from pathlib import Path
 
 from . import upgrader as up
 from .maintenance import request
 from .management_lock import legacy_operation
-
-
-class Systemd:
-    def __init__(self, unit):
-        self.unit = unit
-
-    def show(self):
-        result = subprocess.run(
-            [
-                "systemctl",
-                "show",
-                self.unit,
-                "--property=ActiveState",
-                "--property=SubState",
-                "--property=MainPID",
-                "--property=ControlGroup",
-                "--property=ExecStart",
-                "--property=EnvironmentFiles",
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=30,
-        )
-        return dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
-
-    def owns_pid(self, pid, snapshot):
-        if type(pid) is not int or pid <= 0 or not snapshot.get("ControlGroup"):
-            return False
-        try:
-            lines = Path(f"/proc/{pid}/cgroup").read_text().splitlines()
-        except OSError:
-            return False
-        group = snapshot["ControlGroup"]
-        return any(
-            line.rsplit(":", 1)[-1] == group or line.rsplit(":", 1)[-1].startswith(group + "/")
-            for line in lines
-        )
-
-    def action(self, action):
-        if action not in {"stop", "start"}:
-            raise up.UpgradeError("unsupported service action")
-        subprocess.run(
-            ["systemctl", action, self.unit], capture_output=True, check=True, timeout=120
-        )
 
 
 class Launchd:
@@ -229,7 +183,7 @@ def _adapter(settings, adapter=None):
         return adapter
     if sys.platform == "darwin":
         return Launchd(settings["label"], settings.get("domain"))
-    return Systemd(settings["unit"])
+    raise up.UpgradeError("legacy service supervision is macOS-only; use the Linux client DEB")
 
 
 def _service_key(settings):

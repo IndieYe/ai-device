@@ -261,19 +261,13 @@ CLI 的 bash 使用 --command，script 支持 --script 或 --script-file；--std
 
 隔离跨阶段验收使用FakeModel驱动真实Agent→ServerPool→stdio Device MCP→HTTP中心→WebSocket客户端→真实Bash/FS，不调用付费模型。动态验证在macOS；Linux实机、远程TLS/异机、Windows/发布另行验收。
 
-## Linux 客户端交付
+## Linux 客户端完整包交付（重构中）
 
-Linux 首期开放 client 角色，macOS 三角色保持不变。构建 Linux bundle 使用
-`bundle build --target-system linux`；默认仍构建 darwin bundle。安装及生命周期
-按主机平台和 bundle 角色校验，不能跨平台安装/恢复，也不支持 Linux center/mcp 正式交付。
+Ubuntu 24.04 amd64 客户端采用自带 Python/依赖的 DEB，构建时预装，目标机不再组装实例 venv。安装、重装、升级共用 apt/dpkg 路径；忙时拒绝、停止确认后替换，本机就绪与连接中心分别报告。
 
-**原生包只交付 `.deb`（Ubuntu 24.04 amd64）。** RPM 不在支持范围：验签候选链只接受
-`linux-amd64-deb` 目标并驱动 dpkg，RPM 包能安装和升级但无法进入受控更新路径。
-`scripts/build-native-linux.sh rpm` 因此默认拒绝，仅在
-`DEVICE_NATIVE_ALLOW_UNDELIVERED_RPM=1` 时用于布局检查。
+构建入口为 `scripts/build-client-tree.py` 和 `scripts/build-client-deb.py`，稳定客户端入口为 `ai-device-client`。旧 `build-native-linux.sh` 与旧 payload 组装脚本已退役，不再提供 RPM 构建或旧候选/helper 包主路径。
 
-详细边界、Ubuntu Python 3.13 工具链、凭证与容器验收说明见
-[Linux 客户端指南](../../docs/device-linux-client.md)。容器验证不代表公网、systemd、主机重启或其他架构已验收。
+准确操作、制品与剩余门禁见 [Linux 完整包开发指南](../../docs/client-native-linux-development.md)。当前仍为未签名开发包、阶段未最终验收；Mac 新 PKG 尚未实现，中心/MCP 和共享旧实例能力没有因此删除。历史 Linux 指南不能代替新包验收。
 
 ## 低层 Bash 提交的短暂等待（非新版执行工具）
 

@@ -35,10 +35,6 @@ ROLES = {
     "mcp": {"components": ["device"], "device_extras": ["mcp"]},
     "client": {"components": ["device", "bash", "fs"], "device_extras": ["client"]},
 }
-# Linux clients sign and verify native releases at run time, so they need the
-# native extra (cryptography, zstandard). The dependency wheel set is built for
-# Linux only, and a macOS bundle would then declare extras it cannot ship.
-LINUX_CLIENT_EXTRAS = ["client", "native"]
 
 
 def role_contract(role, system="darwin"):
@@ -48,42 +44,12 @@ def role_contract(role, system="darwin"):
     if system not in ("darwin", "linux"):
         raise BundleError("unsupported bundle target system")
     contract = copy.deepcopy(ROLES[role])
-    if system == "linux" and role == "client":
-        contract["device_extras"] = list(LINUX_CLIENT_EXTRAS)
     return contract
 
 
 def _roles_match(declared, expected, format_version):
-    """Compare a manifest's roles to the contract its format prescribes.
-
-    Format 2 predates ``LINUX_CLIENT_EXTRAS``. A Linux client bundle published
-    before that change declares ``[client]``, and refusing it here would make
-    every 0.2.x instance un-upgradable: lifecycle re-inspects the live release
-    before it can prepare a candidate, so the old bundle is read back on exactly
-    the hosts that need the migration.
-
-    Only the extras list is relaxed, and only for format 2. Components must match
-    exactly, and format 3 keeps the strict comparison so a newly built bundle
-    cannot quietly drop the extra its offline wheel set depends on. Reading a
-    historical bundle back is a narrower permission than accepting a new one.
-    """
-    if not isinstance(declared, dict) or set(declared) != set(expected):
-        return False
-    for name, contract in expected.items():
-        actual = declared[name]
-        if not isinstance(actual, dict) or set(actual) != set(contract):
-            return False
-        if actual["components"] != contract["components"]:
-            return False
-        extras = actual["device_extras"]
-        if extras == contract["device_extras"]:
-            continue
-        if format_version != 2 or not isinstance(extras, list):
-            return False
-        # The historical declaration is the current one minus the added extra.
-        if sorted(extras) != sorted(set(contract["device_extras"]) - {"native"}):
-            return False
-    return True
+    """Old native-client upgrade extras are no longer a delivery contract."""
+    return declared == expected
 
 
 class BundleError(ValueError):

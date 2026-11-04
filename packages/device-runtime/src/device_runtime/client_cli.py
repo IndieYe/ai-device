@@ -1,0 +1,107 @@
+"""Client-only CLI, independent of bundle and legacy upgrade management."""
+
+import argparse
+import asyncio
+import json
+import os
+from pathlib import Path
+
+
+def add_arguments(client):
+    client.add_argument("--server-url", required=True)
+    client.add_argument("--device-id", required=True)
+    client.add_argument("--state-dir", type=Path, required=True)
+    client.add_argument("--token-env", default="DEVICE_RUNTIME_TOKEN")
+    client.add_argument(
+        "--maintenance", action="store_true", help="Enable local upgrade control socket"
+    )
+    from .limits import DEFAULT_CONCURRENCY, positive_limit
+
+    def concurrency(value):
+        try:
+            return positive_limit(int(value))
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(
+                "concurrency limits must be positive integers"
+            ) from exc
+
+    for name in ("max-concurrent-requests", "max-concurrent-queries", "max-active-tasks"):
+        client.add_argument(
+            f"--{name}",
+            type=concurrency,
+            default=DEFAULT_CONCURRENCY,
+            help="positive concurrency limit (default: %(default)s)",
+        )
+
+
+def run(args, *, token=None):
+    from .client import DeviceClient
+    from .executor import LocalExecutor
+
+    if token is None:
+        token = os.environ.get(args.token_env)
+    if not token or len(token) < 16:
+        raise ValueError("configure the device token environment variable")
+    executor = LocalExecutor(args.state_dir, args.device_id, max_active_tasks=args.max_active_tasks)
+    runtime = DeviceClient(
+        server_url=args.server_url,
+        device_id=args.device_id,
+        token=token,
+        state_dir=args.state_dir,
+        executor=executor,
+        maintenance=args.maintenance,
+        max_concurrent_requests=args.max_concurrent_requests,
+        max_concurrent_queries=args.max_concurrent_queries,
+    )
+
+    async def run_client():
+        import signal
+
+        loop = asyncio.get_running_loop()
+        task = asyncio.create_task(runtime.run())
+        loop.add_signal_handler(signal.SIGTERM, task.cancel)
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        finally:
+            loop.remove_signal_handler(signal.SIGTERM)
+
+    asyncio.run(run_client())
+
+
+def main(argv=None):
+    from .version import runtime_version
+
+    parser = argparse.ArgumentParser(prog="device-runtime client")
+    parser.add_argument("--version", action="version", version=json.dumps(runtime_version()))
+    # Installed services use a single explicit config file; direct CLI flags
+    # remain available for development and existing center-side launchers.
+    import sys
+
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    configured = any(item == "--config" or item.startswith("--config=") for item in arguments)
+    if configured:
+        parser.add_argument("--config", required=True, type=Path)
+    else:
+        add_arguments(parser)
+    args = parser.parse_args(arguments)
+    try:
+        if configured:
+            from .client_config import load
+
+            settings, token = load(args.config)
+            run(settings, token=token)
+        else:
+            run(args)
+    except KeyboardInterrupt:
+        pass
+    except (ValueError, RuntimeError, ImportError, OSError) as exc:
+        parser.exit(
+            2,
+            f"device-runtime client: {type(exc).__name__}: configuration or runtime unavailable\n",
+        )
+
+
+if __name__ == "__main__":
+    main()

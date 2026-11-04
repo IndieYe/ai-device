@@ -358,8 +358,14 @@ def _supported_host():
         raise InstallationError("delivery supports macOS and Linux clients only")
 
 
+def _check_legacy_client_roles(roles):
+    if sys.platform == "linux" and "client" in roles:
+        raise InstallationError("Linux clients require the complete client DEB, not a legacy instance")
+
+
 def _check_target(manifest, roles):
     _supported_host()
+    _check_legacy_client_roles(roles)
     if manifest["target"]["system"] != sys.platform:
         raise InstallationError("bundle target does not match host platform")
     if manifest["format_version"] == 3:
@@ -536,6 +542,7 @@ def install_instance(
     runtime_lock=None,
 ):
     _supported_host()
+    _check_legacy_client_roles(roles)
     runner_content = RUNNER
     instance_id = _identity(instance_id)
     root = (

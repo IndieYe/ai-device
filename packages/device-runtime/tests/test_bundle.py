@@ -348,38 +348,33 @@ def test_format_one_is_not_silently_installed_with_new_roles(tmp_path, artifacts
         inspect_bundle(output)
 
 
-def test_linux_client_ships_native_extra_and_darwin_does_not(tmp_path):
-    """Linux clients verify signed releases, so their contract carries native."""
+def test_client_contract_has_no_retired_native_extra(tmp_path):
+    """Clients no longer carry the retired signed-upgrade runtime."""
     from device_runtime.bundle import role_contract, target_contract
 
     _, linux = target_contract("linux")
     assert set(linux) == {"client"}
-    assert linux["client"]["device_extras"] == ["client", "native"]
+    assert linux["client"]["device_extras"] == ["client"]
 
     _, darwin = target_contract("darwin")
     assert darwin["client"]["device_extras"] == ["client"]
     # Adding an extra for one system must not leak into the shared constants.
     assert role_contract("client", "darwin")["device_extras"] == ["client"]
-    assert role_contract("client", "linux")["device_extras"] == ["client", "native"]
+    assert role_contract("client", "linux")["device_extras"] == ["client"]
     assert role_contract("center", "linux")["device_extras"] == ["server"]
 
 
-def test_linux_bundle_declares_native_extras_in_manifest(tmp_path, artifacts):
+def test_linux_bundle_declares_client_extra_in_manifest(tmp_path, artifacts):
     """The published manifest is what installation resolves extras from."""
     output = tmp_path / "linux"
     built = build_bundle(output, target_system="linux", **artifacts)
     assert built["roles"] == {"client": {"components": ["device", "bash", "fs"],
-                                         "device_extras": ["client", "native"]}}
+                                         "device_extras": ["client"]}}
     assert inspect_bundle(output)["roles"] == built["roles"]
 
 
 def test_format_two_linux_bundle_is_readable_without_native_extra(tmp_path, artifacts):
-    """A bundle published before LINUX_CLIENT_EXTRAS must stay readable.
-
-    Refusing it would make every 0.2.x instance un-upgradable: lifecycle
-    re-inspects the live release before it will prepare a candidate, so the old
-    bundle is read back on exactly the hosts that need the migration.
-    """
+    """Format 2 client-only manifests still match the shared role contract."""
     output = tmp_path / "legacy"
     build_bundle(output, target_system="linux", **artifacts)
     manifest = json.loads((output / "manifest.json").read_text())
@@ -390,7 +385,7 @@ def test_format_two_linux_bundle_is_readable_without_native_extra(tmp_path, arti
     assert inspect_bundle(output)["roles"]["client"]["device_extras"] == ["client"]
 
 
-def test_format_three_linux_bundle_still_requires_native_extra(tmp_path, artifacts):
+def test_format_three_linux_bundle_rejects_retired_native_extra(tmp_path, artifacts):
     """The compatibility branch must not widen what a new bundle may declare."""
     output = tmp_path / "current"
     build_bundle(output, target_system="linux", **artifacts)
@@ -398,15 +393,15 @@ def test_format_three_linux_bundle_still_requires_native_extra(tmp_path, artifac
     # Claiming format 3 says the bundle ships its offline wheel set, so dropping
     # the extra that selects those wheels must not pass as a current bundle.
     manifest["format_version"] = 3
-    manifest["roles"]["client"]["device_extras"] = ["client"]
+    manifest["roles"]["client"]["device_extras"] = ["client", "native"]
     (output / "manifest.json").write_text(json.dumps(manifest))
 
     with pytest.raises(BundleError):
         inspect_bundle(output)
 
 
-def test_legacy_extras_relaxation_is_limited_to_that_one_field(tmp_path, artifacts):
-    """Format 2 may omit native, but nothing else about the role may drift."""
+def test_role_contract_rejects_extras_and_component_drift(tmp_path, artifacts):
+    """Both extras and components must match exactly."""
     output = tmp_path / "drift"
     build_bundle(output, target_system="linux", **artifacts)
     manifest = json.loads((output / "manifest.json").read_text())

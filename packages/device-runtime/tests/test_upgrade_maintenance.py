@@ -1056,3 +1056,19 @@ def test_launchd_stop_failure_is_unknown_not_replayed(single, upgraded, monkeypa
     record = up.status(single, "one")
     assert record["state"] == "unknown"
     assert record["code"] == "supervised_maintenance_unconfirmed"
+
+
+@pytest.mark.parametrize("platform", ["linux", "win32"])
+def test_legacy_supervisor_has_no_non_mac_service_adapter(monkeypatch, platform):
+    monkeypatch.setattr(supervisor.sys, "platform", platform)
+    with pytest.raises(up.UpgradeError, match="use the Linux client DEB"):
+        supervisor._adapter({"unit": "old-client.service"})
+    assert not hasattr(supervisor, "Systemd")
+
+
+def test_legacy_supervisor_keeps_mac_and_injected_adapters(monkeypatch):
+    monkeypatch.setattr(supervisor.sys, "platform", "darwin")
+    assert isinstance(supervisor._adapter({"label": "test.client"}), supervisor.Launchd)
+    injected = object()
+    monkeypatch.setattr(supervisor.sys, "platform", "linux")
+    assert supervisor._adapter({}, injected) is injected

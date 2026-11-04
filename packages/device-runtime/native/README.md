@@ -1,6 +1,6 @@
 # P1 原生运行时构建输入
 
-本目录保存准确的构建输入锁，不包含运行时二进制或用户凭证。当前是 P1 的运行时准备子模块，**不是已经完成的 Device 原生安装包**。
+本目录保存准确的构建输入锁，不包含运行时二进制或用户凭证。当前 Linux 完整包构建仍读取其中的输入锁，操作指南见 [Linux 客户端完整包](../../../docs/client-native-linux-development.md)。本页后续 P1、候选、签名、DEB/RPM 多树包段落为历史资料，不是当前安装路径；Linux 仅交付新 DEB，Mac 新 PKG 尚未交付。
 
 ## 构建锁
 
@@ -13,7 +13,7 @@
 
 ## 依赖锁
 
-`dependency-lock.json` 固定 Linux client 的第三方 wheel 集合：13 个 wheel 的准确文件名、大小、SHA256、来源 URL 与许可证，以及对应 `pins`。其中 `cryptography`、`zstandard`、`cffi`、`pycparser` 属于 `native` extra，Linux client 在运行期验签与读写压缩载荷需要它们，因此随包交付；缺失时激活后的实例没有签名能力。
+`dependency-lock.json` 保留旧构建输入集合的准确文件名、大小、SHA256、来源 URL、许可证和 `pins`，仍供新构建校验输入来源。锁中历史 `cryptography`、`zstandard`、`cffi`、`pycparser` 不代表新客户端运行必需：旧 `native` extra 已删除，新完整包仅按 client 运行依赖离线安装，不再使用旧签名/压缩候选链。实际随包集合以新包 `third-party-inventory.json` 为准，不把整个历史输入集合等同运行依赖。
 
 全部 wheel 兼容 `dependencies.py` 的 cp313 / glibc 2.17 目标，下载时必须按锁内 URL 取，不能依赖解析器的默认平台标签（默认会得到 `manylinux_2_34` 变体并被拒绝）。
 
@@ -55,7 +55,9 @@ macOS 将 target 改为 `darwin-arm64`，使用对应归档。目的目录必须
 
 实验不等于正式 helper、Device 包构建、实例锁和签名发布已完成，也没有证明 systemd、登录／机器重启或中心升级。当前阶段状态和准确结果见仓库 `docs/native-lifecycle-implementation.md`。
 
-## P1 Linux开发包主路径（进行中）
+## 旧 Linux 开发包路径（历史，已退役构建入口）
+
+> 以下仅保留历史设计记录，不是当前安装指南。旧 build-native-linux.sh 与 assemble-native-payload.py 已删除；新入口见 [完整包开发指南](../../../docs/client-native-linux-development.md)。
 
 新增 `native_install.py` 调用现有 `install_instance`，不复制release生命周期。安装器必须由选定普通用户执行，拒绝root创建实例；包内自带runtime、uv及离线client依赖。`installation.install_instance(runner_python=...)` 在发布active前写入绝对解释器shebang，旧调用不传参时行为保持。
 

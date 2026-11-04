@@ -1,18 +1,23 @@
 """Separate server/client CLI entrypoints; secrets are read from environment only."""
 
 import argparse
-import asyncio
 import json
 import os
 import sys
 from pathlib import Path
 
-from .bundle import BundleError, add_bundle_parser, run_bundle
-from .installation import InstallationError, add_instance_parser, run_instance
 from .protocol import MAX_MESSAGE_BYTES
 
 
 def main():
+    if sys.argv[1:2] == ["client"]:
+        from .client_cli import main as client_main
+
+        return client_main(sys.argv[2:])
+
+    from .bundle import BundleError, add_bundle_parser, run_bundle
+    from .installation import InstallationError, add_instance_parser, run_instance
+
     if sys.argv[1:2] == ["ops"]:
         from .operations_cli import main as operations_main
 
@@ -23,31 +28,9 @@ def main():
     parser = argparse.ArgumentParser(prog="device-runtime")
     parser.add_argument("--version", action="version", version=json.dumps(runtime_version()))
     modes = parser.add_subparsers(dest="mode", required=True)
-    client = modes.add_parser("client")
-    client.add_argument("--server-url", required=True)
-    client.add_argument("--device-id", required=True)
-    client.add_argument("--state-dir", type=Path, required=True)
-    client.add_argument("--token-env", default="DEVICE_RUNTIME_TOKEN")
-    client.add_argument(
-        "--maintenance", action="store_true", help="Enable local upgrade control socket"
-    )
-    from .limits import DEFAULT_CONCURRENCY, positive_limit
+    from .client_cli import add_arguments
 
-    def concurrency(value):
-        try:
-            return positive_limit(int(value))
-        except ValueError as exc:
-            raise argparse.ArgumentTypeError(
-                "concurrency limits must be positive integers"
-            ) from exc
-
-    for name in ("max-concurrent-requests", "max-concurrent-queries", "max-active-tasks"):
-        client.add_argument(
-            f"--{name}",
-            type=concurrency,
-            default=DEFAULT_CONCURRENCY,
-            help="positive concurrency limit (default: %(default)s)",
-        )
+    add_arguments(modes.add_parser("client"))
     server = modes.add_parser("server")
     server.add_argument("--state-dir", type=Path, required=True)
     server.add_argument("--host", default="127.0.0.1")
@@ -70,40 +53,9 @@ def main():
         elif args.mode == "instance":
             run_instance(args)
         elif args.mode == "client":
-            from .client import DeviceClient
-            from .executor import LocalExecutor
+            from .client_cli import run
 
-            token = os.environ.get(args.token_env)
-            if not token or len(token) < 16:
-                raise ValueError("configure the device token environment variable")
-            executor = LocalExecutor(
-                args.state_dir, args.device_id, max_active_tasks=args.max_active_tasks
-            )
-            runtime = DeviceClient(
-                server_url=args.server_url,
-                device_id=args.device_id,
-                token=token,
-                state_dir=args.state_dir,
-                executor=executor,
-                maintenance=args.maintenance,
-                max_concurrent_requests=args.max_concurrent_requests,
-                max_concurrent_queries=args.max_concurrent_queries,
-            )
-
-            async def run_client():
-                import signal
-
-                loop = asyncio.get_running_loop()
-                task = asyncio.create_task(runtime.run())
-                loop.add_signal_handler(signal.SIGTERM, task.cancel)
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-                finally:
-                    loop.remove_signal_handler(signal.SIGTERM)
-
-            asyncio.run(run_client())
+            run(args)
         else:
             if args.host not in ("127.0.0.1", "::1", "localhost"):
                 raise ValueError(

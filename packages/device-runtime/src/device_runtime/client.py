@@ -112,7 +112,10 @@ class DeviceClient:
     async def maintenance_status(self, upgrade_id):
         import os
 
+        from .version import runtime_version
+
         return {
+            "runtime_version": runtime_version(),
             "upgrade_id": upgrade_id,
             "pid": os.getpid(),
             "python": sys.executable,
@@ -138,6 +141,25 @@ class DeviceClient:
                 "active_requests": requests,
                 "active_tasks": tasks,
             }
+
+    async def maintenance_acquire(self, owner):
+        """Pause only an idle client; ownership belongs to one live socket."""
+        async with self._lifecycle_lock:
+            if self._closed.is_set() or not self._initialized:
+                raise ValueError("client is not ready")
+            if self._maintenance_id is not None:
+                raise ValueError("maintenance is already held")
+            requests = len(self._tasks)
+            tasks = await self.executor.tasks.active_count()
+            acquired = requests == 0 and tasks == 0
+            if acquired:
+                self._maintenance_id = owner
+            return {"acquired": acquired, "active_requests": requests, "active_tasks": tasks}
+
+    async def maintenance_release(self, owner):
+        async with self._lifecycle_lock:
+            if self._maintenance_id == owner:
+                self._maintenance_id = None
 
     async def maintenance_resume(self, upgrade_id):
         async with self._lifecycle_lock:

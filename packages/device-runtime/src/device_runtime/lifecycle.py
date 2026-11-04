@@ -53,6 +53,7 @@ STATE_COMPATIBILITY = {
     "0.2.5": 1,
     "0.2.6": 1,
     "0.2.7": 1,
+    "0.3.4": 1,
 }
 
 # The only state format this code can read and write. A release that declares a

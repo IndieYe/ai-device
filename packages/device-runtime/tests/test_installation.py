@@ -66,7 +66,7 @@ def make_runtime(root, python=None):
     source = Path(root).parent / (Path(root).name + "-runtime-src")
     target = source / "bin" / "python3.13"
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(f"#!/bin/sh\nexec {python} \"$@\"\n")
+    target.write_text(f'#!/bin/sh\nexec {python} "$@"\n')
     target.chmod(0o755)
     return source
 
@@ -96,7 +96,7 @@ def add_runtime(root, release=None, python=None):
     if python is None:
         python = sys.executable
     if not target.exists():
-        target.write_text(f"#!/bin/sh\nexec {python} \"$@\"\n")
+        target.write_text(f'#!/bin/sh\nexec {python} "$@"\n')
         target.chmod(0o755)
     return target
 
@@ -234,13 +234,20 @@ def test_install_existing_instance_remains_untouched(tmp_path, delivery, fake_uv
     root.mkdir()
     (root / "keep").write_bytes(b"preserve")
     with pytest.raises(InstallationError, match="destination already exists"):
-        install_instance(delivery, instance_id="fixture", roles=["client"], root=root,
-                         server_url="http://127.0.0.1:9")
+        install_instance(
+            delivery,
+            instance_id="fixture",
+            roles=["client"],
+            root=root,
+            server_url="http://127.0.0.1:9",
+        )
     assert sorted(p.name for p in root.iterdir()) == ["keep"]
     assert (root / "keep").read_bytes() == b"preserve"
 
 
-def test_install_directory_creation_permission_error_is_not_existing(tmp_path, delivery, fake_uv, monkeypatch):
+def test_install_directory_creation_permission_error_is_not_existing(
+    tmp_path, delivery, fake_uv, monkeypatch
+):
     root = tmp_path / "denied"
     original = module.Path.mkdir
 
@@ -250,15 +257,24 @@ def test_install_directory_creation_permission_error_is_not_existing(tmp_path, d
         return original(path, *args, **kwargs)
 
     monkeypatch.setattr(module.Path, "mkdir", denied)
-    with pytest.raises(InstallationError, match=r"cannot create instance directory \(errno 13\)") as captured:
-        install_instance(delivery, instance_id="fixture", roles=["client"], root=root,
-                         server_url="http://127.0.0.1:9")
+    with pytest.raises(
+        InstallationError, match=r"cannot create instance directory \(errno 13\)"
+    ) as captured:
+        install_instance(
+            delivery,
+            instance_id="fixture",
+            roles=["client"],
+            root=root,
+            server_url="http://127.0.0.1:9",
+        )
     assert isinstance(captured.value.__cause__, PermissionError)
     assert not root.exists()
 
 
 @pytest.mark.parametrize("error_number", [13, 28])
-def test_install_io_failure_keeps_partial_state_and_reports_cause(tmp_path, delivery, fake_uv, monkeypatch, error_number):
+def test_install_io_failure_keeps_partial_state_and_reports_cause(
+    tmp_path, delivery, fake_uv, monkeypatch, error_number
+):
     root = tmp_path / "partial-instance"
 
     def fail_prepare(root, *args, **kwargs):
@@ -267,8 +283,13 @@ def test_install_io_failure_keeps_partial_state_and_reports_cause(tmp_path, deli
 
     monkeypatch.setattr(module, "_prepare", fail_prepare)
     with pytest.raises(InstallationError, match="partial.*retained") as captured:
-        install_instance(delivery, instance_id="fixture", roles=["client"], root=root,
-                         server_url="http://127.0.0.1:9")
+        install_instance(
+            delivery,
+            instance_id="fixture",
+            roles=["client"],
+            root=root,
+            server_url="http://127.0.0.1:9",
+        )
     assert isinstance(captured.value.__cause__, OSError)
     assert captured.value.__cause__.errno == error_number
     assert str(error_number) in str(captured.value)
@@ -445,9 +466,7 @@ def test_runner_error_is_controlled_and_keeps_config_private(tmp_path, delivery,
     root = tmp_path / "instance"
     create(root, delivery)
     add_runtime(root)
-    result = subprocess.run(
-        [str(root / "run"), "mcp"], capture_output=True, text=True, check=False
-    )
+    result = subprocess.run([str(root / "run"), "mcp"], capture_output=True, text=True, check=False)
     assert result.returncode == 2 and "Traceback" not in result.stderr
 
 
@@ -943,8 +962,10 @@ def test_invalid_explicit_uv_refused_before_release(tmp_path, delivery, fake_uv,
     assert set((root / "releases").iterdir()) == before
 
 
-def test_linux_client_install_requests_native_extra(tmp_path, delivery, fake_uv, monkeypatch):
-    """A Linux bundle's declared extras -- not the module constant -- drive uv."""
+def test_linux_client_legacy_install_refused_before_writes(
+    tmp_path, delivery, fake_uv, monkeypatch
+):
+    """Linux client delivery must not recreate the old per-instance venv route."""
     linux = tmp_path / "linux-bundle"
     (tmp_path / "w").mkdir()
     wheels = {c: make_wheel(tmp_path / "w", c) for c in COMPONENTS}
@@ -972,14 +993,11 @@ def test_linux_client_install_requests_native_extra(tmp_path, delivery, fake_uv,
         target_system="linux",
     )
     monkeypatch.setattr(module.sys, "platform", "linux")
-    create(tmp_path / "linux instance", linux)
-    installs = [args for args, _ in fake_uv if "install" in args]
-    assert len(installs) == 1
-    device = next(arg for arg in installs[0] if "ai-device[" in arg)
-    assert device.endswith("ai-device[client,native] @ " + next(
-        arg.split(" @ ")[1] for arg in installs[0] if "ai-device[" in arg
-    ))
-    assert "client" in device and "native" in device
+    root = tmp_path / "linux instance"
+    with pytest.raises(InstallationError, match="complete client DEB"):
+        create(root, linux)
+    assert not root.exists()
+    assert not fake_uv
 
 
 def _darwin_manifest(monkeypatch, macos="13.6", machine="arm64"):
@@ -1029,3 +1047,18 @@ def test_darwin_format3_rejects_invalid_dependency_target(monkeypatch):
     }
     with pytest.raises(InstallationError, match="invalid local dependency target"):
         module._check_target(manifest, ["client"])
+
+
+@pytest.mark.parametrize("roles", [["client"], ["center", "client"]])
+def test_linux_legacy_prepare_refuses_client_roles(monkeypatch, roles):
+    monkeypatch.setattr(module.sys, "platform", "linux")
+    with pytest.raises(InstallationError, match="complete client DEB"):
+        module._check_target({"target": {"system": "linux"}}, roles)
+
+
+@pytest.mark.parametrize("roles", [["center"], ["mcp"], ["center", "mcp"]])
+def test_linux_non_client_target_unchanged(monkeypatch, roles):
+    monkeypatch.setattr(module.sys, "platform", "linux")
+    module._check_target(
+        {"target": {"system": "linux"}, "format_version": 2, "roles": roles}, roles
+    )
