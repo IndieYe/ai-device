@@ -426,10 +426,21 @@ def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
     )
     diagnostic = (packaged.stdout or "") + (packaged.stderr or "")
     (output / "pkgbuild.log").write_text(diagnostic)
-    if "permission denied" in diagnostic.lower() or "operation not permitted" in diagnostic.lower():
-        raise ValueError("pkgbuild permission error; retained output/pkgbuild.log for diagnosis")
+    # pkgbuild emits "write: Permission denied" on stderr even when it succeeds:
+    # that is its own probe of the destination, not a failure of ours. The exit
+    # status is the authoritative signal, so the permission text must not be
+    # treated as fatal on its own -- doing that rejected every good build and
+    # masked the real error. When the build does fail, the text is kept in
+    # pkgbuild.log and quoted in the message so an ownership problem can still
+    # be told apart from a packaging problem.
     if packaged.returncode != 0:
-        raise ValueError("pkgbuild failed; retained output/pkgbuild.log for diagnosis")
+        detail = ""
+        if "permission denied" in diagnostic.lower() or "operation not permitted" in diagnostic.lower():
+            detail = " (pkgbuild reported a permission error; see pkgbuild.log)"
+        raise ValueError(
+            f"pkgbuild failed with status {packaged.returncode}{detail}; "
+            "retained output/pkgbuild.log for diagnosis"
+        )
     # Verify the emitted package rather than assuming --ownership succeeded.
     # Expansion does not install or execute package scripts.
     expanded = output / "component-audit"
