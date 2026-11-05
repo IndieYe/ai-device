@@ -374,3 +374,162 @@ def test_generated_postinstall_verb_matches_the_shipped_binary(builder, tree, tm
     )
     assert rejected.returncode == 64
     assert "unknown verb" in rejected.stderr
+
+
+def test_default_build_stays_inspection_only(builder, tmp_path):
+    """The verification switch must be opt-in.
+
+    A default build that quietly became installable would turn every existing
+    artifact and every future one into a real install candidate, so the default
+    contract is asserted here rather than left to the caller remembering a flag.
+    """
+    xml = ET.fromstring(builder.distribution("0.3.4.1"))
+    assert xml.find("installation-check").get("script") == "rejectInspection()"
+    assert "inspection only" in xml.find("title").text
+    # The default preinstall still refuses unconditionally. Asserting the exact
+    # text (rather than a substring) keeps a future rewrite that accidentally
+    # drops the refusal from passing as "unchanged default".
+    assert "exit 1" in builder.PREINSTALL
+    assert "Inspection-only" in builder.PREINSTALL
+    assert "$STAGE" not in builder.PREINSTALL
+
+
+def test_verification_distribution_is_installable_and_distinguishable(builder):
+    xml = ET.fromstring(builder.distribution("0.3.4.1", mode="verification"))
+    # No blanket refusal: this product is meant to install.
+    assert xml.find("installation-check").get("script") == "verifyInstallTarget()"
+    assert "rejectInspection" not in ET.tostring(xml, encoding="unicode")
+    # The artifact has to be self-describing, because the two products look the
+    # same to anyone who moves a file around later.
+    assert "VERIFICATION" in xml.find("title").text
+    assert "not for release" in xml.find("title").text
+
+
+def test_verification_product_identifier_differs_from_inspection(builder):
+    """A rehearsal install must not leave a receipt that a release collides with.
+
+    Receipts are keyed by product identifier, so sharing one would make an
+    installed verification build indistinguishable from an installed release.
+    """
+    inspect_pkg = ET.fromstring(builder.distribution("0.3.4.1"))
+    verify_pkg = ET.fromstring(builder.distribution("0.3.4.1", mode="verification"))
+    inspect_id = inspect_pkg.find("pkg-ref").get("id")
+    verify_id = verify_pkg.find("pkg-ref").get("id")
+    assert inspect_id == builder.IDENTIFIER
+    assert verify_id == builder.VERIFICATION_IDENTIFIER
+    assert (inspect_id, verify_id) == (
+        "local.ai-device.client.inspection",
+        "local.ai-device.client.verification",
+    )
+
+
+def test_verification_preinstall_refuses_existing_stage(builder):
+    """The residue check is the reason a verification build can install safely.
+
+    It refuses on existence rather than on content: the installer cannot
+    attribute what it finds, and `commit_staged_program` swaps an existing
+    program tree into the stage, so a merge into a pre-existing stage would
+    publish content this package never authored.
+    """
+    script = builder.PREINSTALL_RESIDUE.format(
+        stage="/opt/ai-device-client-stage-0.3.4.1-aaaaaaaaaaaa"
+    )
+    assert "/opt/ai-device-client-stage-0.3.4.1-aaaaaaaaaaaa" in script
+    assert "[ -e \"$STAGE\" ]" in script
+    # A dangling symlink fails -e but still occupies the name and would still
+    # be merged into, so the link test is not redundant.
+    assert "[ -L \"$STAGE\" ]" in script
+    assert "exit 1" in script
+    # It must NOT refuse unconditionally: that is the inspection behaviour.
+    assert "Inspection-only" not in script
+    assert script.count("exit 1") == 1
+
+
+def test_verification_build_writes_installable_preinstall_and_name(builder, tree, tmp_path):
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout=".\t40755\t0/0\n")
+
+    output = tmp_path / "verify"
+    result = builder.build(tree, output, "0.3.4.1", run=run, mode="verification")
+    # The filename has to carry the mode: it is the only thing a human sees
+    # before double-clicking it on a real machine.
+    assert result.name == "ai-device-client-0.3.4.1-arm64-verification.pkg"
+    preinstall = (output / "scripts/preinstall").read_text()
+    assert preinstall == builder.PREINSTALL_RESIDUE.format(
+        stage="/opt/ai-device-client-stage-0.3.4.1-aaaaaaaaaaaa"
+    )
+    assert builder.COMMIT_TOKENS  # module still exposes the native outcome map
+    assert calls[0][calls[0].index("--identifier") + 1] == builder.VERIFICATION_IDENTIFIER
+
+
+def test_inspection_build_still_names_itself_inspection(builder, tree, tmp_path):
+    def run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 0, stdout=".\t40755\t0/0\n")
+
+    output = tmp_path / "inspect"
+    result = builder.build(tree, output, "0.3.4.1", run=run)
+    assert result.name == "ai-device-client-0.3.4.1-arm64-inspection.pkg"
+    assert (output / "scripts/preinstall").read_text() == builder.PREINSTALL
+    assert "verification" not in (output / "Distribution.xml").read_text().lower()
+
+
+def test_stage_only_postinstall_does_not_publish(builder, tree, tmp_path):
+    """Stage-only must stop before the commit, or it cannot answer the C4 question.
+
+    A normal install ends with RENAME_SWAP, which parks the previous program
+    tree at the stage path. Observing the stage afterwards then shows the swap's
+    result, not what the Installer did while writing the payload. Stage-only
+    exists solely to leave the payload in that pre-swap state, so any commit
+    invocation here would defeat its only purpose.
+    """
+    def run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 0, stdout=".\t40755\t0/0\n")
+
+    output = tmp_path / "stageonly"
+    result = builder.build(tree, output, "0.3.4.1", run=run, mode="stage_only")
+    postinstall = (output / "scripts/postinstall").read_text()
+    assert '"$ENTRY" "$VERB"' not in postinstall
+    assert postinstall.count("exit 1") == 1
+    # The stage is still expected to be populated; refusing when it is empty
+    # keeps a silently-skipped payload from looking like a successful run.
+    assert "[ ! -d \"$STAGE\" ]" in postinstall
+    assert "STAGE_ONLY_PAYLOAD_WRITTEN_V1" in postinstall
+    assert result.name == "ai-device-client-0.3.4.1-arm64-verification-stage-only.pkg"
+
+
+def test_stage_only_still_has_the_residue_preinstall(builder, tree, tmp_path):
+    """Stage-only is still an install, so it inherits the same preinstall gate."""
+    def run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 0, stdout=".\t40755\t0/0\n")
+
+    output = tmp_path / "stageonly-pre"
+    builder.build(tree, output, "0.3.4.1", run=run, mode="stage_only")
+    assert (output / "scripts/preinstall").read_text() == builder.PREINSTALL_RESIDUE.format(
+        stage="/opt/ai-device-client-stage-0.3.4.1-aaaaaaaaaaaa"
+    )
+
+
+def test_all_three_modes_have_distinct_identifiers(builder):
+    """Receipts are keyed by identifier, so sharing one corrupts install state."""
+    seen = {
+        ET.fromstring(builder.distribution("0.3.4.1", mode=m)).find("pkg-ref").get("id")
+        for m in ("inspection", "verification", "stage_only")
+    }
+    assert len(seen) == 3
+
+
+def test_unknown_mode_is_rejected(builder):
+    with pytest.raises(ValueError, match="unknown package mode"):
+        builder.distribution("0.3.4.1", mode="release")
+
+
+def test_installable_modes_reject_installation_check_only_for_inspection(builder):
+    """Only the inspection product may hard-refuse; the others must be usable."""
+    for mode in ("verification", "stage_only"):
+        xml = ET.fromstring(builder.distribution("0.3.4.1", mode=mode))
+        assert xml.find("installation-check").get("script") == "verifyInstallTarget()"
+        assert "rejectInspection" not in ET.tostring(xml, encoding="unicode")
+        assert "not for release" in xml.find("title").text

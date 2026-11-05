@@ -15,6 +15,15 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 IDENTIFIER = "local.ai-device.client.inspection"
+# Installable builds must never share an identifier with the inspection product:
+# receipts are keyed by it, so a rehearsal install would be indistinguishable
+# from a real one and a later release would collide with it. Each installable
+# mode gets its own, and stage-only gets its own again because it leaves the
+# machine with a payload in place and nothing published.
+VERIFICATION_IDENTIFIER = "local.ai-device.client.verification"
+STAGE_ONLY_IDENTIFIER = "local.ai-device.client.verification.stage-only"
+
+MODES = ("inspection", "verification", "stage_only")
 
 # Payload location and the live program path are deliberately different.
 #
@@ -119,6 +128,37 @@ echo 'Inspection-only package: macOS client lifecycle is not enabled; installati
 exit 1
 """
 
+# A verification build may actually install, so its preinstall has to do the
+# one job the inspection build never reaches: refuse when the stage path it is
+# about to populate already exists.
+#
+# The reason is that the publish step cannot distinguish its own leftovers from
+# foreign content. `commit_staged_program` renames an existing program tree onto
+# the stage (RENAME_SWAP), so an A->B upgrade leaves A sitting at B's stage. Any
+# tree the installer then merges into a pre-existing stage directory is content
+# this package never authored, and the commit would publish it wholesale. The
+# check is deliberately fail-closed and deliberately crude: it refuses on
+# existence, not on content, because content cannot be attributed here.
+#
+# -e and -L are separate on purpose: a dangling symlink fails -e but still
+# occupies the name and would still be merged into.
+#
+# Scope limit, stated so this check is not mistaken for an installation mutex:
+# it is a point-in-time test that runs in preinstall. It cannot stop a second
+# installer that also observed an absent stage from racing this one between the
+# check and the payload write, and it says nothing about processes still holding
+# the old program tree open. Serialization against a concurrent installer is
+# not provided here.
+PREINSTALL_RESIDUE = """#!/bin/sh
+set -eu
+STAGE='{stage}'
+if [ -e "$STAGE" ] || [ -L "$STAGE" ]; then
+    echo 'PROGRAM_COMMIT_REFUSED_V1: stage path already exists and its content cannot be attributed; remove it and retry' >&2
+    exit 1
+fi
+exit 0
+"""
+
 # Character-for-character the strings `commit_staged_program` returns, so the
 # script reports the native outcome instead of re-deriving it in shell.
 COMMIT_TOKENS = {
@@ -168,9 +208,57 @@ exit 0
 """
 
 
-def distribution(version):
+# The inspection build and the default verification build both run the commit
+# in postinstall. For residue research that is useless on its own: the commit's
+# RENAME_SWAP leaves the previous program tree at the stage path, so inspecting
+# the stage afterwards cannot tell "the Installer preserved a foreign file while
+# writing the payload" from "the commit swapped an old tree back into place".
+#
+# Stage-only keeps the payload write and drops the publish, which is the only
+# way to observe the post-payload / pre-swap state. Nothing is published, so it
+# is a research instrument and not a deployment path.
+POSTINSTALL_STAGE_ONLY = """#!/bin/sh
+# Verification, stage-only: stop before the publish step on purpose.
+set -eu
+STAGE='{stage}'
+if [ ! -d "$STAGE" ]; then
+    echo 'STAGE_ONLY_NO_PAYLOAD_V1' >&2
+    exit 1
+fi
+echo 'STAGE_ONLY_PAYLOAD_WRITTEN_V1'
+exit 0
+"""
+
+
+def distribution(version, *, mode="inspection"):
+    """Build the Distribution.xml for one of three deliberately distinct products.
+
+    inspection  — refuses at both the product and the component level. The
+                  historical contract; unchanged.
+    verification — installs and publishes via postinstall. For rehearsing the
+                  real lifecycle on a disposable machine.
+    stage_only  — installs the payload and stops before publishing. Exists
+                  because the commit's RENAME_SWAP leaves the previous program
+                  tree at the stage path, so "stage after a normal install"
+                  cannot distinguish Installer payload behaviour from commit
+                  behaviour. Only this mode can observe the post-payload /
+                  pre-swap state.
+    """
+    if mode not in MODES:
+        raise ValueError(f"unknown package mode: {mode!r}")
+    installable = mode != "inspection"
+    identifier = {
+        "inspection": IDENTIFIER,
+        "verification": VERIFICATION_IDENTIFIER,
+        "stage_only": STAGE_ONLY_IDENTIFIER,
+    }[mode]
+    title = {
+        "inspection": "AI Device Client — inspection only",
+        "verification": "AI Device Client — VERIFICATION BUILD, not for release",
+        "stage_only": "AI Device Client — VERIFICATION stage-only, not for release",
+    }[mode]
     root = ET.Element("installer-gui-script", {"minSpecVersion": "2"})
-    ET.SubElement(root, "title").text = "AI Device Client — inspection only"
+    ET.SubElement(root, "title").text = title
     ET.SubElement(
         root,
         "options",
@@ -189,8 +277,25 @@ def distribution(version):
             "enable_localSystem": "true",
         },
     )
-    ET.SubElement(root, "installation-check", {"script": "rejectInspection()"})
-    ET.SubElement(root, "script").text = """
+    if installable:
+        # No blanket refusal: this build exists to be installed on a disposable
+        # arm64 machine. The check still runs so a wrong-architecture or
+        # already-present live program stops the install before any payload is
+        # written.
+        ET.SubElement(root, "installation-check", {"script": "verifyInstallTarget()"})
+        ET.SubElement(root, "script").text = """
+function verifyInstallTarget() {
+    if (system.compareVersions(system.version.ProductVersion, '11.0') < 0) {
+        my.result.type = 'Fatal';
+        my.result.message = 'Verification build requires macOS 11 or later.';
+        return false;
+    }
+    return true;
+}
+"""
+    else:
+        ET.SubElement(root, "installation-check", {"script": "rejectInspection()"})
+        ET.SubElement(root, "script").text = """
 function rejectInspection() {
     my.result.type = 'Fatal';
     my.result.message = 'Inspection-only package; installation is disabled.';
@@ -200,8 +305,8 @@ function rejectInspection() {
     outline = ET.SubElement(root, "choices-outline")
     ET.SubElement(outline, "line", {"choice": "client"})
     choice = ET.SubElement(root, "choice", {"id": "client", "visible": "false"})
-    ET.SubElement(choice, "pkg-ref", {"id": IDENTIFIER})
-    ET.SubElement(root, "pkg-ref", {"id": IDENTIFIER, "version": version}).text = "client.pkg"
+    ET.SubElement(choice, "pkg-ref", {"id": identifier})
+    ET.SubElement(root, "pkg-ref", {"id": identifier, "version": version}).text = "client.pkg"
     return ET.tostring(root, encoding="unicode", xml_declaration=True)
 
 
@@ -217,7 +322,9 @@ def validate_bom(text):
 
 
 def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
-          stage=None):
+          stage=None, mode="inspection"):
+    if mode not in MODES:
+        raise ValueError(f"unknown package mode: {mode!r}")
     if (platform.system(), platform.machine()) != ("Darwin", "arm64"):
         raise ValueError("PKG construction requires native macOS arm64")
     if not re.fullmatch(r"[0-9]+(?:\.[0-9]+){0,3}", version):
@@ -267,22 +374,34 @@ def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
     scripts = output / "scripts"
     scripts.mkdir()
     preinstall = scripts / "preinstall"
-    preinstall.write_text(PREINSTALL)
+    # The inspection build keeps its unconditional refusal; only an installable
+    # mode gets a preinstall that is allowed to proceed.
+    preinstall.write_text(
+        PREINSTALL_RESIDUE.format(stage=stage) if mode != "inspection" else PREINSTALL
+    )
     preinstall.chmod(0o755)
     postinstall = scripts / "postinstall"
-    postinstall.write_text(
-        POSTINSTALL.format(
-            program=program,
-            stage=stage,
-            entry=f"{stage}/bin/{COMMIT_ENTRY}",
-            verb=verb_from_header("PROGRAM_VERB_COMMIT"),
-            status_dir=COMMIT_STATUS_DIR,
-            status_file=COMMIT_STATUS_FILE,
+    if mode == "stage_only":
+        postinstall.write_text(POSTINSTALL_STAGE_ONLY.format(stage=stage))
+    else:
+        postinstall.write_text(
+            POSTINSTALL.format(
+                program=program,
+                stage=stage,
+                entry=f"{stage}/bin/{COMMIT_ENTRY}",
+                verb=verb_from_header("PROGRAM_VERB_COMMIT"),
+                status_dir=COMMIT_STATUS_DIR,
+                status_file=COMMIT_STATUS_FILE,
+            )
         )
-    )
     postinstall.chmod(0o755)
     dist = output / "Distribution.xml"
-    dist.write_text(distribution(version))
+    dist.write_text(distribution(version, mode=mode))
+    identifier = {
+        "inspection": IDENTIFIER,
+        "verification": VERIFICATION_IDENTIFIER,
+        "stage_only": STAGE_ONLY_IDENTIFIER,
+    }[mode]
     execute = run or subprocess.run
     packaged = execute(
         [
@@ -292,7 +411,7 @@ def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
             "--scripts",
             str(scripts),
             "--identifier",
-            IDENTIFIER,
+            identifier,
             "--version",
             version,
             "--install-location",
@@ -333,7 +452,12 @@ def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
         text=True,
     )
     validate_bom(bom.stdout)
-    result = output / f"ai-device-client-{version}-arm64-inspection.pkg"
+    suffix = {
+        "inspection": "inspection",
+        "verification": "verification",
+        "stage_only": "verification-stage-only",
+    }[mode]
+    result = output / f"ai-device-client-{version}-arm64-{suffix}.pkg"
     execute(
         [
             "/usr/bin/productbuild",
@@ -353,5 +477,20 @@ if __name__ == "__main__":
     parser.add_argument("--tree", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--version", required=True)
+    parser.add_argument(
+        "--verification",
+        action="store_true",
+        help="Emit an installable package for disposable-machine verification "
+        "instead of the default inspection-only product.",
+    )
+    parser.add_argument(
+        "--stage-only",
+        action="store_true",
+        help="Verification variant that writes the payload and stops before "
+        "publishing, so the post-payload/pre-swap stage can be observed.",
+    )
     args = parser.parse_args()
-    print(build(args.tree, args.output, args.version))
+    if args.stage_only and args.verification:
+        parser.error("--verification and --stage-only are separate products")
+    mode = "stage_only" if args.stage_only else "verification" if args.verification else "inspection"
+    print(build(args.tree, args.output, args.version, mode=mode))
