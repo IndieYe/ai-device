@@ -203,3 +203,151 @@ def test_cli_errors_do_not_expose_input_or_traceback(config, field):
     assert sensitive not in output
     assert "Traceback" not in output
     assert "configuration or runtime unavailable" in result.stderr
+
+
+@pytest.mark.parametrize("stage", ["directory", "token", "complete"])
+def test_initialize_explicit_resume_preserves_interrupted_files(tmp_path, stage):
+    from device_runtime.client_config import initialize
+
+    directory = tmp_path / "config"
+    directory.mkdir(mode=0o700)
+    token = "test-only-resume-secret"
+    arguments = {
+        "server_url": "wss://example.test",
+        "device_id": "client-one",
+        "state_dir": tmp_path / "state",
+        "token": token,
+    }
+    if stage in ("token", "complete"):
+        (directory / "token").write_text(token + "\n")
+        (directory / "token").chmod(0o600)
+    if stage == "complete":
+        (directory / "client.json").write_text(
+            json.dumps(
+                {
+                    "server_url": arguments["server_url"],
+                    "device_id": "client-one",
+                    "state_dir": str(tmp_path / "state"),
+                    "token_file": str(directory / "token"),
+                }
+            )
+        )
+        (directory / "client.json").chmod(0o600)
+    before = {p.name: (p.stat().st_ino, p.read_bytes()) for p in directory.iterdir()}
+    path = initialize(directory, **arguments, resume=True)
+    assert load(path)[1] == token
+    for name, snapshot in before.items():
+        assert ((directory / name).stat().st_ino, (directory / name).read_bytes()) == snapshot
+    assert not (tmp_path / "state").exists()
+
+
+def test_initialize_resume_mismatch_preserves_token(tmp_path):
+    from device_runtime.client_config import initialize
+
+    directory = tmp_path / "config"
+    directory.mkdir(mode=0o700)
+    path = directory / "token"
+    path.write_text("original-test-secret\n")
+    path.chmod(0o600)
+    with pytest.raises(ValueError):
+        initialize(
+            directory,
+            server_url="wss://example.test",
+            device_id="client-one",
+            state_dir=tmp_path / "state",
+            token="different-test-secret",
+            resume=True,
+        )
+    assert path.read_text() == "original-test-secret\n"
+    assert not (directory / "client.json").exists()
+
+
+@pytest.mark.parametrize("kind", ["partial", "symlink", "public", "extra", "different"])
+def test_initialize_resume_rejects_ambiguous_state(tmp_path, kind):
+    from device_runtime.client_config import initialize
+
+    directory = tmp_path / "config"
+    args = {
+        "server_url": "wss://example.test",
+        "device_id": "client-one",
+        "state_dir": tmp_path / "state",
+        "token": "test-only-resume-secret",
+    }
+    initialize(directory, **args)
+    if kind == "partial":
+        (directory / "client.json").write_text("{")
+    elif kind == "symlink":
+        (directory / "alias").symlink_to(directory / "token")
+    elif kind == "public":
+        (directory / "token").chmod(0o644)
+    elif kind == "extra":
+        (directory / "unexpected").write_text("keep")
+    else:
+        args["device_id"] = "other-client"
+    before = {p.name: p.read_bytes() for p in directory.iterdir()}
+    with pytest.raises(ValueError):
+        initialize(directory, **args, resume=True)
+    assert {p.name: p.read_bytes() for p in directory.iterdir()} == before
+
+
+def test_setup_cli_explicit_resume_no_secret_output(tmp_path, monkeypatch, capsys):
+    import io
+
+    from device_runtime.client_setup import main
+
+    directory = tmp_path / "config"
+    directory.mkdir(mode=0o700)
+    secret = "test-only-cli-resume-secret"
+    (directory / "token").write_text(secret + "\n")
+    (directory / "token").chmod(0o600)
+    args = [
+        "--config-dir",
+        str(directory),
+        "--state-dir",
+        str(tmp_path / "state"),
+        "--server-url",
+        "wss://example.test",
+        "--device-id",
+        "client-one",
+        "--token-stdin",
+    ]
+    monkeypatch.setattr("sys.stdin", io.StringIO(secret + "\n"))
+    with pytest.raises(SystemExit) as error:
+        main(args)
+    assert error.value.code == 2
+    assert "--resume" in capsys.readouterr().err
+    monkeypatch.setattr("sys.stdin", io.StringIO(secret + "\n"))
+    main([*args, "--resume"])
+    output = capsys.readouterr()
+    assert "Configured:" in output.out
+    assert secret not in output.out + output.err
+
+
+def test_initialize_cleanup_cannot_delete_successful_resume_token(tmp_path, monkeypatch):
+    import os
+
+    import device_runtime.client_config as config
+
+    directory = tmp_path / "config"
+    args = {
+        "server_url": "wss://example.test",
+        "device_id": "client-one",
+        "state_dir": tmp_path / "state",
+        "token": "test-only-concurrent-secret",
+    }
+    original = config.os.open
+    resumed = []
+    entered = False
+
+    def interleaved_open(path, flags, *rest, **kwargs):
+        nonlocal entered
+        if str(path).endswith("client.json") and flags & os.O_CREAT and not entered:
+            entered = True
+            resumed.append(config.initialize(directory, **args, resume=True))
+        return original(path, flags, *rest, **kwargs)
+
+    monkeypatch.setattr(config.os, "open", interleaved_open)
+    with pytest.raises(OSError):
+        config.initialize(directory, **args)
+    assert len(resumed) == 1
+    assert load(resumed[0])[1] == args["token"]

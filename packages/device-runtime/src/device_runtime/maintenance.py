@@ -84,7 +84,22 @@ class MaintenanceServer:
                     # EOF or any release byte ends the lease, including an
                     # installer crash. The installer holds this socket until
                     # the service is confirmed stopped, not just asked to stop.
-                    await reader.read(1)
+                    # Legacy callers close or send any release byte. Only
+                    # this same acquired connection may request instance exit.
+                    command = await reader.read(1)
+                    if command == b"P":
+                        # One bounded round-trip proves this lease's peer is
+                        # still responsive after the caller sampled identity.
+                        challenge = await asyncio.wait_for(reader.readexactly(32), 5)
+                        if self.client._maintenance_exit_callback is None:
+                            raise ValueError("lease peer binding is not enabled")
+                        writer.write(challenge)
+                        await writer.drain()
+                        command = await reader.read(1)
+                    if command == b"X":
+                        result = await self.client.maintenance_exit(owner)
+                        writer.write(json.dumps(result).encode() + b"\n")
+                        await writer.drain()
                 return
             upgrade_id = data.get("upgrade_id")
             if not isinstance(upgrade_id, str) or not re.fullmatch(
@@ -101,7 +116,14 @@ class MaintenanceServer:
                 raise ValueError("unsupported maintenance action")
             writer.write(json.dumps(result).encode() + b"\n")
             await writer.drain()
-        except (ValueError, OSError, TimeoutError, KeyError, TypeError):
+        except (
+            ValueError,
+            OSError,
+            TimeoutError,
+            KeyError,
+            TypeError,
+            asyncio.IncompleteReadError,
+        ):
             writer.write(b'{"error":"maintenance_unavailable"}\n')
         finally:
             if owner is not None:
@@ -186,4 +208,66 @@ def idle_lease(path, *, timeout=5):
             raise ValueError("client maintenance unavailable")
         if not result["acquired"]:
             raise ClientBusy("client is busy; retry when tasks finish")
-        yield
+        yield IdleLease(connection)
+
+
+class IdleLease:
+    """Single-use exit request on the already acquired socket, never reconnect.
+
+    Response loss is unknown, not safe to retry against a successor instance.
+    A successful response is commitment only, not proof that cleanup completed.
+    """
+
+    def __init__(self, connection):
+        self._connection = connection
+        self._exit_attempted = False
+        self._binding_attempted = False
+
+    def bind_peer(self, sample):
+        """Sample identity around a fresh same-connection round trip, once.
+
+        sample(socket) must use kernel peer identity, not service-label lookup.
+        Failure poisons exit on this lease; never retry on another connection.
+        """
+        import secrets
+
+        if self._binding_attempted or self._exit_attempted:
+            raise ValueError("lease peer binding already attempted")
+        self._binding_attempted = True
+        try:
+            before = sample(self._connection)
+            if before is None:
+                raise ValueError("lease peer unavailable")
+            nonce = secrets.token_bytes(32)
+            self._connection.sendall(b"P" + nonce)
+            response = b""
+            while len(response) < 32:
+                part = self._connection.recv(32 - len(response))
+                if not part:
+                    raise ValueError("lease peer unavailable")
+                response += part
+            if response != nonce or sample(self._connection) != before:
+                raise ValueError("lease peer changed")
+            return before
+        except (OSError, ValueError):
+            self._exit_attempted = True
+            raise ValueError("lease peer binding unknown; exit refused") from None
+
+    def request_exit(self):
+        if self._exit_attempted:
+            raise ValueError("lease exit already attempted; do not replay")
+        self._exit_attempted = True
+        try:
+            self._connection.sendall(b"X")
+            data = b""
+            while not data.endswith(b"\n"):
+                chunk = self._connection.recv(4096)
+                if not chunk or len(data) + len(chunk) > 4096:
+                    raise ValueError("lease exit result unknown; do not replay")
+                data += chunk
+            result = json.loads(data)
+            if not isinstance(result, dict) or result.get("exit_committed") is not True:
+                raise ValueError("lease exit refused or unknown; do not replay")
+        except (OSError, ValueError):
+            raise ValueError("lease exit refused or unknown; do not replay") from None
+        return {"exit_committed": True}

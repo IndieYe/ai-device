@@ -10,6 +10,11 @@ from .client_config import initialize
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Complete missing configuration files without overwriting existing files",
+    )
     parser.add_argument("--config-dir", type=Path, required=True)
     parser.add_argument("--state-dir", type=Path, required=True)
     parser.add_argument("--server-url", required=True)
@@ -31,9 +36,13 @@ def main(argv=None):
             device_id=args.device_id,
             state_dir=args.state_dir,
             token=token,
+            resume=args.resume,
         )
     except FileExistsError:
-        parser.exit(2, "configuration already exists; existing files were not overwritten\n")
+        parser.exit(
+            2,
+            "configuration directory already exists; inspect its state, then use --resume only for matching inputs; existing files were not overwritten\n",
+        )
     except (ValueError, TypeError, OSError):
         parser.exit(2, "configuration failed; check URL, identity, token, paths and permissions\n")
     print(f"Configured: {path}. Service registration/start is still required.")

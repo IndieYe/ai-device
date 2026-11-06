@@ -75,6 +75,8 @@ class DeviceClient:
         if active_path.is_file():
             self._loaded_release = json.loads(active_path.read_text()).get("release")
         self._maintenance_id = None
+        self._maintenance_exit_callback = None
+        self._maintenance_exit_committed = False
         self._maintenance_server = None
         self._maintenance_enabled = (
             maintenance or (self.state_dir.parent.parent / "upgrade-profile.json").is_file()
@@ -156,14 +158,44 @@ class DeviceClient:
                 self._maintenance_id = owner
             return {"acquired": acquired, "active_requests": requests, "active_tasks": tasks}
 
-    async def maintenance_release(self, owner):
+    async def maintenance_exit(self, owner):
+        """Commit normal exit for this live lease only, never a service label.
+
+        The installed Mac entry opts in with a synchronous cancellation
+        scheduler. The lifecycle lock is the linearization boundary shared
+        with admission. An acknowledged request is NOT proof of process exit.
+        """
         async with self._lifecycle_lock:
-            if self._maintenance_id == owner:
+            if self._maintenance_exit_callback is None:
+                raise ValueError("lease exit is not enabled")
+            if (
+                self._closed.is_set()
+                or not self._initialized
+                or self._maintenance_id != owner
+                or self._maintenance_exit_committed
+            ):
+                raise ValueError("lease exit is not available")
+            if self._tasks or await self.executor.tasks.active_count():
+                raise ValueError("client is not idle")
+            self._maintenance_exit_committed = True
+            self._closed.set()
+            # Callback schedules cancellation; never awaits cleanup under the
+            # lifecycle lock. A later disconnect cannot reopen admission.
+            self._maintenance_exit_callback()
+            return {"exit_committed": True}
+
+    async def maintenance_release(self, owner):
+        # Monotonic on the same event loop: committed exit can never resume.
+        # Do not wait behind executor cleanup merely to release a dead lease.
+        if self._maintenance_exit_committed:
+            return
+        async with self._lifecycle_lock:
+            if self._maintenance_id == owner and not self._maintenance_exit_committed:
                 self._maintenance_id = None
 
     async def maintenance_resume(self, upgrade_id):
         async with self._lifecycle_lock:
-            if self._maintenance_id != upgrade_id:
+            if self._maintenance_id != upgrade_id or self._maintenance_exit_committed:
                 raise ValueError("maintenance owner mismatch")
             self._maintenance_id = None
             return {"upgrade_id": upgrade_id, "resumed": True}

@@ -34,7 +34,7 @@ def add_arguments(client):
         )
 
 
-def run(args, *, token=None):
+def run(args, *, token=None, lease_exit=False):
     from .client import DeviceClient
     from .executor import LocalExecutor
 
@@ -43,6 +43,11 @@ def run(args, *, token=None):
     if not token or len(token) < 16:
         raise ValueError("configure the device token environment variable")
     executor = LocalExecutor(args.state_dir, args.device_id, max_active_tasks=args.max_active_tasks)
+    if lease_exit:
+        import sys
+
+        if sys.platform != "darwin":
+            raise ValueError("lease exit requires the managed macOS entry")
     runtime = DeviceClient(
         server_url=args.server_url,
         device_id=args.device_id,
@@ -59,18 +64,21 @@ def run(args, *, token=None):
 
         loop = asyncio.get_running_loop()
         task = asyncio.create_task(runtime.run())
+        if lease_exit:
+            runtime._maintenance_exit_callback = lambda: loop.call_soon(task.cancel)
         loop.add_signal_handler(signal.SIGTERM, task.cancel)
         try:
             await task
         except asyncio.CancelledError:
             pass
         finally:
+            runtime._maintenance_exit_callback = None
             loop.remove_signal_handler(signal.SIGTERM)
 
     asyncio.run(run_client())
 
 
-def main(argv=None):
+def main(argv=None, *, lease_exit=False):
     from .version import runtime_version
 
     parser = argparse.ArgumentParser(prog="device-runtime client")
@@ -91,8 +99,13 @@ def main(argv=None):
             from .client_config import load
 
             settings, token = load(args.config)
-            run(settings, token=token)
+            if lease_exit:
+                run(settings, token=token, lease_exit=True)
+            else:
+                run(settings, token=token)
         else:
+            if lease_exit:
+                raise ValueError("lease exit requires installed configuration")
             run(args)
     except KeyboardInterrupt:
         pass

@@ -1,4 +1,4 @@
-"""Build a ready-to-run Linux client tree from already verified offline inputs.
+"""Build a ready-to-run native client tree from already verified offline inputs.
 
 Run only in the disposable target-platform builder. No service operations.
 Input hashes are checked against the supplied repository locks before extraction.
@@ -56,12 +56,117 @@ def relocate_python_scripts(runtime):
             )
 
 
+def build_target():
+    host = (platform.system(), platform.machine())
+    if host == ("Linux", "x86_64"):
+        return "linux-x86_64", "linux-amd64", "tool-lock.json", "dependency-lock.json"
+    if host == ("Darwin", "arm64"):
+        return (
+            "darwin-arm64",
+            "darwin-arm64",
+            "tool-lock-darwin-arm64.json",
+            "dependency-lock-darwin-arm64.json",
+        )
+    raise ValueError("build requires native Linux amd64 or macOS arm64")
+
+
+def write_client_identity(output):
+    """Match version.py source fingerprint without importing target code."""
+    import ast
+    import re
+
+    package = output / "runtime/lib/python3.13/site-packages/device_runtime"
+    syntax = ast.parse((package / "__init__.py").read_text())
+    versions = [
+        node.value.value
+        for node in syntax.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "__version__" for target in node.targets
+        )
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    ]
+    if len(versions) != 1 or not re.fullmatch(r"[A-Za-z0-9.+_-]{1,64}", versions[0]):
+        raise ValueError("client source version is ambiguous or invalid")
+    digest = hashlib.sha256()
+    for path in sorted(package.rglob("*.py")):
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("client source must be regular files")
+        name, content = path.relative_to(package).as_posix().encode(), path.read_bytes()
+        digest.update(len(name).to_bytes(8, "big") + name)
+        digest.update(len(content).to_bytes(8, "big") + content)
+    identity = {"version": versions[0], "build_id": "sha256:" + digest.hexdigest()}
+    with (output / "client-identity.json").open("x") as stream:
+        stream.write(json.dumps(identity, separators=(",", ":")) + "\n")
+    return identity
+
+
+def build_macos_commit_entry(output):
+    """Compile the standalone commit executable used by the package postinstall.
+
+    Separate from client-macos-installer.m on purpose: that binary embeds a
+    resource-table.h generated from the finished tree, so it cannot be produced
+    as part of the tree it describes. This entry only renames one directory and
+    needs no inventory.
+    """
+    source = Path(__file__).resolve().parents[1] / "native/client-macos-commit-main.c"
+    target = output / "bin/ai-device-client-commit"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "/usr/bin/xcrun",
+            "clang",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-O2",
+            "-arch",
+            "arm64",
+            "-mmacosx-version-min=11.0",
+            "-I",
+            str(Path(__file__).resolve().parents[1] / "native"),
+            str(source),
+            "-o",
+            str(target),
+        ],
+        check=True,
+    )
+    subprocess.run(["/usr/bin/lipo", "-verify_arch", "arm64", str(target)], check=True)
+    target.chmod(0o755)
+
+
+def build_macos_launcher(output):
+    """Compile the fixed managed entry; never execute or register it here."""
+    source = Path(__file__).resolve().parents[1] / "native/client-macos-launcher.c"
+    target = output / "bin/ai-device-client-launcher"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "/usr/bin/xcrun",
+            "clang",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-O2",
+            "-arch",
+            "arm64",
+            "-mmacosx-version-min=11.0",
+            str(source),
+            "-o",
+            str(target),
+        ],
+        check=True,
+    )
+    subprocess.run(["/usr/bin/lipo", "-verify_arch", "arm64", str(target)], check=True)
+    target.chmod(0o755)
+
+
 def build(inputs, locks, output):
-    if platform.system() != "Linux" or platform.machine() != "x86_64":
-        raise ValueError("build inside the Linux amd64 builder")
-    runtime = json.loads((locks / "runtime-lock.json").read_text())["targets"]["linux-x86_64"]
-    tools = json.loads((locks / "tool-lock.json").read_text())
-    dependencies = json.loads((locks / "dependency-lock.json").read_text())
+    target, manifest_platform, tool_lock, dependency_lock = build_target()
+    runtime = json.loads((locks / "runtime-lock.json").read_text())["targets"][target]
+    tools = json.loads((locks / tool_lock).read_text())
+    dependencies = json.loads((locks / dependency_lock).read_text())
     verify(inputs / "python.tar.gz", runtime)
     verify(inputs / "uv.whl", tools)
     for item in dependencies["wheels"]:
@@ -155,18 +260,22 @@ def build(inputs, locks, output):
             + "\n"
         )
         relocate_python_scripts(output / "runtime")
+        if target == "darwin-arm64":
+            build_macos_launcher(output)
+            build_macos_commit_entry(output)
         records = verify_installed_wheels(
             inputs / "wheels", output / "runtime/lib/python3.13/site-packages"
         )
+        write_client_identity(output)
         (output / "build-manifest.json").write_text(
             json.dumps(
                 {
                     "schema_version": 1,
-                    "platform": "linux-amd64",
+                    "platform": manifest_platform,
                     "application_wheels": records,
                     "runtime_sha256": runtime["sha256"],
                     "dependency_lock_sha256": hashlib.sha256(
-                        (locks / "dependency-lock.json").read_bytes()
+                        (locks / dependency_lock).read_bytes()
                     ).hexdigest(),
                 },
                 indent=2,
