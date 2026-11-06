@@ -140,11 +140,11 @@ sudo installer -pkg ./ai-device-<version>-arm64.pkg -target /
 
 macOS 已配置用户已登录时，升级必须正确卸载/加载该用户服务，避免 KeepAlive 在替换窗口重启旧进程。系统安装器负责的程序写入和用户服务操作边界要清晰，不新增常驻提权 helper。桌面/辅助功能等 OS 权限不自动授予，缺失时如实提示。
 
-**实现边界（2026-11-05）：** 服务加载/卸载使用 `launchctl bootstrap <gui/UID> <注册的plist>` 与 `launchctl bootout gui/UID/local.ai-device.client`，仅针对已登记的唯一目标，不使用 `-k`、`disable`、进程信号或服务集合清理；非零退出、超时与无响应一律为 unknown，不重试、不回滚、不推断为相反状态。升级窗口顺序为：确认旧实例完整退出（租约自退出证据）→ `bootout` 卸载 → 替换程序 → 释放 `start`/`runtime` 锁 → `bootstrap` 重新加载并按其 `RunAtLoad` 启动，**不再另发 `kickstart`**。
+**实现边界（2026-11-05）：** 服务加载/卸载使用 `launchctl bootstrap <gui/UID> <注册的plist>` 与 `launchctl bootout gui/UID/local.ai-device.client`，仅针对已登记的唯一目标，不使用 `-k`、`disable`、进程信号或服务集合清理；非零退出、超时与无响应一律为 unknown，不重试、不回滚、不推断为相反状态。升级窗口顺序为：确认旧实例完整退出（租约自退出证据）→ `bootout` 卸载 → 替换程序 → 释放 `start`/`runtime` 锁 → `bootstrap` 重新加载并按其 `RunAtLoad` 启动，**不再另发 `kickstart`**。释放锁的必要性与两种锁的具体语义见 §7.1.1。
 
 两个约束必须同时满足，否则顺序不成立：
 
-- `start`/`runtime` 必须在 `bootstrap` **之前**释放。`bootstrap` 一加载作业，launchd 就会拉起 launcher，而 launcher 以 `LOCK_NB` 取这两把锁；协调器若仍持有，launcher 会直接退出且不 `exec`，作业停在“已加载但未运行”。因此“全程持锁直到 ready”是错误实现，`management` 锁跨重载保留。
+- `runtime`/`start` 锁必须在 `bootstrap` **之前**按正确方式释放或转换。`runtime.lock` 是独占锁，与 launcher 必冲突；`start.lock` 由 launcher 以 `LOCK_SH` 共享获取，协调方若同样用共享锁则**不阻塞启动**，只有以独占方式持有时才阻塞（§7.1.1 真机实测）。两种冲突的共同后果都是 launcher 退出 0 且不 `exec`，而 `KeepAlive: {SuccessfulExit: false}` 不因零退出重启，作业因此静默停摆。所以“全程持锁直到 ready”是错误实现，`management` 锁跨重载保留。
 - `bootstrap` 只保证作业被加载，不保证目标已在服务。就绪必须以只读状态查询在调用方 deadline 内**有界观察**得到；这是观察，不是重放启动请求。身份不匹配与“尚未就绪”在查询层不可区分，因此失败一律以耗尽 deadline 收敛并判失败。
 
 `bootout` 具有服务终止效应，可能强杀进程，不能仅因 argv 中没有 `kill` 就描述为“无信号”；`bootout` 的实际影响范围是否满足停止保证仍为 unknown，生产放行前必须另行确认。
@@ -167,6 +167,23 @@ macOS 已配置用户已登录时，升级必须正确卸载/加载该用户服�
 8. 输出明确结果，释放本次控制资源。
 
 不是所有步骤必须是独立命令或持久状态。包管理器已有互斥和错误处理尽量复用，不再建立候选/批准/激活/回执多套升级事务。
+
+#### 7.1.1 加载与就绪不是同一件事（真机实测）
+
+`launchctl bootstrap` 成功只表示作业被加载，不表示目标已在服务。这一区别在真机上被反复重现（macminim6、gui/501、真实 launcher 与手工 plist）：
+
+| 锁状态 | bootstrap | launchd 报告 | 实际 |
+| --- | --- | --- | --- |
+| 锁空闲 | 0 | `state = spawn scheduled` | launcher 取锁并 exec，正常进入客户端 |
+| runtime 被独占，或 start 被独占 | 0 | `state = not running`，`last exit code = 0` | **未 exec**，无日志输出 |
+| start 仅被共享持有 | 0 | `state = spawn scheduled` | launcher 正常 exec |
+
+因此：
+
+- **不能把 `bootstrap` 返回 0 或作业存在当作启动成功。** 就绪必须由只读状态查询在调用方 deadline 内**有界观察**得出；这是观察，不是重放启动请求。身份不匹配与"尚未就绪"在查询层不可区分，失败一律以耗尽 deadline 收敛。
+- **launcher 遇锁忙时退出 0 且不 `exec`。** 配合 `KeepAlive: {SuccessfulExit: false}`，零退出不触发重启，作业会永久停在 `not running` 且**静默不自愈**。这比反复重启更难发现——反复重启至少有日志，静默停摆要等到检查就绪才暴露。
+- **`runtime` 锁必须在 `bootstrap` 前释放，`start` 锁则不必然。** `runtime.lock` 是独占锁，与 launcher 必冲突；`start.lock` 由 launcher 以 `LOCK_SH` 共享获取，协调方若同样使用共享锁则**不阻塞启动**，只有以独占方式持有时才阻塞。"全程持锁直到就绪"是错误实现。
+- 本节结论来自离线锁竞争与手工 plist 测试，**不包含**真实客户端连接、任务准入、GUI 登录登出或未登录更新；这些仍需另行授权的真机验收，不因本节存在而视为已验收。
 
 ### 7.2 忙闲与异常恢复
 
