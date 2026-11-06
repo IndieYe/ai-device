@@ -313,6 +313,29 @@ STATUS_DIR='{status_dir}'
 STATUS_FILE='{status_file}'
 UPGRADE_ENTRY='{upgrade_entry}'
 REGISTRATION='{registration}'
+# Record an outcome even on the early-refusal paths below. installer shows the
+# operator only "the install failed" and discards script stderr, so a message
+# that exists solely on stderr is a message nobody reads. The status file and
+# the note beside it are the only channel that survives the install.
+#
+# Takes its values from STATUS_CODE and STATUS_NOTE rather than positional
+# parameters: this text is a str.format template, and $1/$2 would be read as
+# replacement fields.
+record_status() {{
+    if mkdir -p -m 0700 "$STATUS_DIR" 2>/dev/null; then
+        if [ ! -L "$STATUS_DIR" ] && [ -d "$STATUS_DIR" ]; then
+            chown root:wheel "$STATUS_DIR" 2>/dev/null || true
+            chmod 0700 "$STATUS_DIR" 2>/dev/null || true
+            if [ ! -L "$STATUS_FILE" ]; then
+                printf '%s\n' "$STATUS_CODE" > "$STATUS_FILE" 2>/dev/null || true
+            fi
+            if [ -n "$STATUS_NOTE" ] && [ ! -L "$STATUS_DIR/install-note" ]; then
+                printf '%s\n' "$STATUS_NOTE" > "$STATUS_DIR/install-note" 2>/dev/null || true
+                chmod 0600 "$STATUS_DIR/install-note" 2>/dev/null || true
+            fi
+        fi
+    fi
+}}
 if [ ! -d "$STAGE" ]; then
     # Nothing was staged: refuse rather than touch the live program.
     echo 'PROGRAM_COMMIT_REFUSED_V1' >&2
@@ -328,6 +351,52 @@ fi
 if [ -f "$REGISTRATION" ]; then
     if [ ! -x "$UPGRADE_ENTRY" ]; then
         echo 'PROGRAM_COMMIT_REFUSED_V1: registered client but no upgrade entry in payload' >&2
+        exit 1
+    fi
+    # A registration with no live program tree is an orphaned identity: the
+    # registrar wrote registration.json, but the program it registers is gone.
+    # This happens whenever the program directory is removed without also
+    # removing the identity -- a manual rm, a disk error, a third-party cleaner.
+    #
+    # The upgrade coordinator cannot handle it, and its refusal is correct: it
+    # needs a running instance to ask for exit, and there is no program to run
+    # one from. But the refusal alone left the operator with "the install
+    # failed", no cause, and no way out -- every later install retried the same
+    # doomed branch. Detect it here, name it, and print the exact recovery
+    # command instead of running a coordinator that cannot succeed.
+    if [ ! -d "$PROGRAM" ]; then
+        STATUS_CODE=70
+        STATUS_NOTE="orphan: registration without program at $PROGRAM"
+        record_status
+        cat >&2 <<ORPHANED
+AI_DEVICE_CLIENT_IDENTITY_WITHOUT_PROGRAM_V1
+This machine has a client registration but no program at $PROGRAM.
+The upgrade path needs a running client to hand over, and there is none, so
+this install cannot proceed. Nothing has been changed on this machine.
+
+The registration records a user and uid only; configuration, token and
+business data are NOT part of it and are not touched by removing it.
+
+To recover, remove the orphaned identity, then install again:
+
+  sudo rm -f "$REGISTRATION"
+
+If a LaunchAgent for a client that no longer exists is still present, remove
+it too (it is a per-user file, so run it as that user):
+
+  rm -f "$HOME/Library/LaunchAgents/local.ai-device.client.plist"
+
+A previously interrupted install may also have left a staged payload behind.
+The preinstall checks for that and refuses, so clear any that remain:
+
+  sudo rm -rf /opt/ai-device-client-stage-*
+
+Then run this same installer again; it will take the first-install path.
+
+This message is also recorded at:
+  $STATUS_FILE
+  $STATUS_DIR/install-note
+ORPHANED
         exit 1
     fi
     # The stage path is this package's own payload. The entry verifies it
@@ -384,22 +453,9 @@ fi
 if [ -n "$result" ]; then
     echo "$result" >&2
 fi
-# Record the outcome without letting a planted symlink redirect the write.
-# The directory is private to root by contract: the client registration path
-# (ensure_directory) and the native management provisioning both reject a
-# directory that is not 0700 root:wheel, so 0755 here made registration fail
-# with "directory ownership or permissions are incompatible".
-if mkdir -p -m 0700 "$STATUS_DIR" 2>/dev/null; then
-    if [ ! -L "$STATUS_DIR" ] && [ -d "$STATUS_DIR" ]; then
-        # mkdir -m does not change a directory that already exists, so a tree
-        # installed by an earlier build stays 0755 unless it is corrected here.
-        chown root:wheel "$STATUS_DIR" 2>/dev/null || true
-        chmod 0700 "$STATUS_DIR" 2>/dev/null || true
-        if [ ! -L "$STATUS_FILE" ]; then
-            printf '%s\\n' "$status" > "$STATUS_FILE" 2>/dev/null || true
-        fi
-    fi
-fi
+STATUS_CODE="$status"
+STATUS_NOTE=''
+record_status
 if [ "$status" -ne 0 ]; then
     exit 1
 fi

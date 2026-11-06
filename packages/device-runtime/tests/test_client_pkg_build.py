@@ -782,6 +782,55 @@ def test_shipping_build_publishes_and_keeps_plain_artifact_name(builder, tree, t
     assert '"$ENTRY" "$VERB"' not in postinstall
 
 
+def test_postinstall_detects_registration_without_a_program(builder, tree, tmp_path):
+    """A registration whose program tree is gone must be named, not just refused.
+
+    Removing /opt/ai-device-client without removing registration.json leaves an
+    orphaned identity. The upgrade branch then fails because there is no running
+    instance to ask for exit, and the coordinator's refusal is correct but
+    indistinguishable from every other failure: the operator saw "the upgrade
+    failed" and every retry hit the same branch. Reproduced on real hardware
+    during A->B acceptance.
+    """
+
+    def run(argv, **kwargs):
+        if "clang" in argv:
+            Path(argv[argv.index("-o") + 1]).write_bytes(b"binary")
+        return subprocess.CompletedProcess(argv, 0, stdout=".\t40755\t0/0\n")
+
+    output = tmp_path / "orphan-notice"
+    builder.build(tree, output, "0.3.4.7", run=run, mode="shipping")
+    postinstall = (output / "scripts/postinstall").read_text()
+
+    # The check must sit inside the registered branch, before the coordinator,
+    # or it cannot tell an orphan from a normal upgrade.
+    assert "AI_DEVICE_CLIENT_IDENTITY_WITHOUT_PROGRAM_V1" in postinstall
+    registered = postinstall.index('if [ -f "$REGISTRATION" ]')
+    orphan = postinstall.index("AI_DEVICE_CLIENT_IDENTITY_WITHOUT_PROGRAM_V1")
+    coordinator = postinstall.index("upgrade-registered-program")
+    assert registered < orphan < coordinator
+    # Recovery must be a command the operator can actually run, not prose.
+    assert 'sudo rm -f "$REGISTRATION"' in postinstall
+    # install-status and install-note are the only channels that survive the
+    # install: installer discards script stderr, so an early exit that skips the
+    # status write leaves the operator with nothing at all.
+    assert "record_status" in postinstall
+    # Called before the notice: the status must be written even if the heredoc
+    # or the subsequent exit fails, and the notice names where to find it.
+    orphan_block = postinstall[registered:orphan]
+    assert "record_status" in orphan_block
+    assert "install-note" in postinstall
+    # A leftover stage from an interrupted install makes preinstall refuse, so a
+    # recovery that omits it sends the operator straight back to the same error.
+    assert "ai-device-client-stage-" in postinstall
+    # The status writer must not consume positional parameters: this text is a
+    # str.format template, and $1/$2 are parsed as replacement fields.
+    assert "record_status \"$" not in postinstall
+    # Config, token and business data must be stated as untouched, because the
+    # obvious fear on reading "remove the identity" is losing credentials.
+    assert "NOT part of it" in postinstall
+
+
 def test_shipping_postinstall_names_the_outstanding_configuration(builder, tree, tmp_path):
     """Installing the program is not the same as having a usable client.
 
