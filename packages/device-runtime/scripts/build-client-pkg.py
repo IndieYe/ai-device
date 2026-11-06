@@ -196,9 +196,19 @@ if [ -n "$result" ]; then
     echo "$result" >&2
 fi
 # Record the outcome without letting a planted symlink redirect the write.
-if mkdir -p -m 0755 "$STATUS_DIR" 2>/dev/null; then
-    if [ ! -L "$STATUS_DIR" ] && [ -d "$STATUS_DIR" ] && [ ! -L "$STATUS_FILE" ]; then
-        printf '%s\\n' "$status" > "$STATUS_FILE" 2>/dev/null || true
+# The directory is private to root by contract: the client registration path
+# (ensure_directory) and the native management provisioning both reject a
+# directory that is not 0700 root:wheel, so 0755 here made registration fail
+# with "directory ownership or permissions are incompatible".
+if mkdir -p -m 0700 "$STATUS_DIR" 2>/dev/null; then
+    if [ ! -L "$STATUS_DIR" ] && [ -d "$STATUS_DIR" ]; then
+        # mkdir -m does not change a directory that already exists, so a tree
+        # installed by an earlier build stays 0755 unless it is corrected here.
+        chown root:wheel "$STATUS_DIR" 2>/dev/null || true
+        chmod 0700 "$STATUS_DIR" 2>/dev/null || true
+        if [ ! -L "$STATUS_FILE" ]; then
+            printf '%s\\n' "$status" > "$STATUS_FILE" 2>/dev/null || true
+        fi
     fi
 fi
 if [ "$status" -ne 0 ]; then

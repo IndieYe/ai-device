@@ -342,6 +342,57 @@ def test_postinstall_reports_unknown_without_retrying(builder, tree, tmp_path):
     assert "exit 1" in postinstall
 
 
+def test_postinstall_creates_status_dir_private_to_root(builder, tree, tmp_path):
+    """The status directory is the registration directory; it must be private.
+
+    `ensure_directory` and the native management provisioning both reject a
+    directory that is not 0700 root:wheel. The script used `mkdir -m 0755`,
+    so a freshly installed tree could never register: the client raised
+    "directory ownership or permissions are incompatible".
+    """
+
+    def run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 0, stdout=".\t40755\t0/0\n")
+
+    builder.build(tree, tmp_path / "package", "0.3.4.1", run=run)
+    postinstall = (tmp_path / "package/scripts/postinstall").read_text()
+    assert 'mkdir -p -m 0700 "$STATUS_DIR"' in postinstall
+    # Permit "0755" only inside this script's explanatory comments about the
+    # old mode; the executable part must not create a world-readable directory.
+    code = "\n".join(
+        line for line in postinstall.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert "0755" not in code
+    # mkdir -m is a no-op on an existing directory, so the script must correct
+    # a tree installed by an earlier build instead of leaving it at 0755.
+    assert 'chmod 0700 "$STATUS_DIR"' in postinstall
+    assert 'chown root:wheel "$STATUS_DIR"' in postinstall
+
+
+def test_status_dir_mode_matches_the_registration_contract(builder, tree, tmp_path):
+    """The package and the client must agree on the private mode.
+
+    Asserting the literal string only pins one side. This compares the mode in
+    the generated script against the constant the registration path enforces,
+    so the two cannot drift apart again without failing here.
+    """
+
+    def run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 0, stdout=".\t40755\t0/0\n")
+
+    builder.build(tree, tmp_path / "package", "0.3.4.1", run=run)
+    postinstall = (tmp_path / "package/scripts/postinstall").read_text()
+    source = (
+        Path(builder.__file__).resolve().parents[1]
+        / "src/device_runtime/client_macos_management.py"
+    ).read_text()
+    # ensure_directory builds the mode as `0o700 if private else 0o755` and
+    # rejects anything carrying the private mask.
+    assert "mode=0o700 if private else 0o755" in source
+    assert "forbidden = 0o077" in source
+    assert 'mkdir -p -m 0700 "$STATUS_DIR"' in postinstall
+
+
 def test_generated_postinstall_verb_matches_the_shipped_binary(builder, tree, tmp_path):
     """The generated script and the compiled commit binary must agree on the verb.
 
