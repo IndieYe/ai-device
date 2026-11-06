@@ -142,6 +142,8 @@ macOS 已配置用户已登录时，升级必须正确卸载/加载该用户服�
 
 **实现边界（2026-11-05）：** 服务加载/卸载使用 `launchctl bootstrap <gui/UID> <注册的plist>` 与 `launchctl bootout gui/UID/local.ai-device.client`，仅针对已登记的唯一目标，不使用 `-k`、`disable`、进程信号或服务集合清理；非零退出、超时与无响应一律为 unknown，不重试、不回滚、不推断为相反状态。升级窗口顺序为：确认旧实例完整退出（租约自退出证据）→ `bootout` 卸载 → 替换程序 → 释放 `start`/`runtime` 锁 → `bootstrap` 重新加载并按其 `RunAtLoad` 启动，**不再另发 `kickstart`**。释放锁的必要性与两种锁的具体语义见 §7.1.1。
 
+**升级协调器的交付形态（2026-11-06）：** 执行该窗口的原生入口 `upgrade-registered-program` 编译在 `client-macos-installer.m` 内，由 `build-client-pkg.py --upgrade-entry` 单独产出 `/opt/ai-device-client-upgrade` 层，安装后为 `installer-inspection` 与同级 `resources/client-tree`。它**不能**放进被升级的程序树：`locate_bound_resources` 以 `<exe 所在目录>/resources/client-tree` 定位资源，`tree_owner_valid` 要求该树 root 所有且无组/其他写位，而程序树正是被本操作替换的对象且其 stage 路径逐构建变化。该层不发布任何程序，发布仍是协调器的运行时动作；入口自身仍拒绝忙实例并要求 `--confirm-idle-instance-exits`。分层可构建已由 44 项构建测试与一次真实 arm64 构建验证，**不代表升级窗口本身已通过验收**。
+
 两个约束必须同时满足，否则顺序不成立：
 
 - `runtime`/`start` 锁必须在 `bootstrap` **之前**按正确方式释放或转换。`runtime.lock` 是独占锁，与 launcher 必冲突；`start.lock` 由 launcher 以 `LOCK_SH` 共享获取，协调方若同样用共享锁则**不阻塞启动**，只有以独占方式持有时才阻塞（§7.1.1 真机实测）。两种冲突的共同后果都是 launcher 退出 0 且不 `exec`，而 `KeepAlive: {SuccessfulExit: false}` 不因零退出重启，作业因此静默停摆。所以“全程持锁直到 ready”是错误实现，`management` 锁跨重载保留。
