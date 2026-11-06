@@ -86,6 +86,14 @@ def build(tree, output, version):
         '-m device_runtime.client_cli "$@"\n'
     )
     entry.chmod(0o755)
+    # Registration is a separate root-only entry so choosing the service user
+    # never runs through the client loop or the legacy management CLI.
+    register = root / "usr/bin/ai-device-client-register"
+    register.write_text(
+        '#!/bin/sh\nexec /opt/ai-device-client/runtime/bin/python3 -I -B '
+        '-m device_runtime.client_register_cli "$@"\n'
+    )
+    register.chmod(0o755)
     control = root / "DEBIAN"
     control.mkdir()
     (control / "control").write_text(f"""Package: ai-device-client

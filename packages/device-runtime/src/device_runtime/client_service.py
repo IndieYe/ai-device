@@ -117,6 +117,12 @@ class SystemdClient:
         if events.get("populated") != "0":
             raise ServiceError("client process group still has live processes")
 
+    def enable(self):
+        # Persist across reboots without starting: registration and start are
+        # separate operator decisions.
+        self._call("daemon-reload")
+        self._call("enable", UNIT)
+
     def stop_for_install(self, socket_path):
         """Return only after verified stop; do not replace files in this layer."""
         if self.state() == "stopped":
