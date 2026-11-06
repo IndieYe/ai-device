@@ -682,13 +682,13 @@ def test_stage_only_still_has_the_residue_preinstall(builder, tree, tmp_path):
     )
 
 
-def test_all_three_modes_have_distinct_identifiers(builder):
+def test_all_four_modes_have_distinct_identifiers(builder):
     """Receipts are keyed by identifier, so sharing one corrupts install state."""
     seen = {
         ET.fromstring(builder.distribution("0.3.4.1", mode=m)).find("pkg-ref").get("id")
-        for m in ("inspection", "verification", "stage_only")
+        for m in ("inspection", "verification", "stage_only", "shipping")
     }
-    assert len(seen) == 3
+    assert len(seen) == 4
 
 
 def test_unknown_mode_is_rejected(builder):
@@ -703,3 +703,95 @@ def test_installable_modes_reject_installation_check_only_for_inspection(builder
         assert xml.find("installation-check").get("script") == "verifyInstallTarget()"
         assert "rejectInspection" not in ET.tostring(xml, encoding="unicode")
         assert "not for release" in xml.find("title").text
+
+
+def test_shipping_product_carries_no_rehearsal_wording(builder):
+    """The deliverable must not tell its user it is a verification build.
+
+    Every other installable mode says so in the title and in the install-check
+    message -- the two strings a user actually reads. A shipping build reusing
+    either would ship the rehearsal disclaimer to real machines.
+    """
+    xml = ET.fromstring(builder.distribution("0.3.4.2", mode="shipping"))
+    assert xml.find("title").text == "AI Device Client"
+    rendered = ET.tostring(xml, encoding="unicode").lower()
+    assert "verification" not in rendered
+    assert "not for release" not in rendered
+    script = xml.find("script").text
+    assert "This client requires macOS 11 or later." in script
+    # It is still an installable product: the rejection path is inspection-only.
+    assert xml.find("installation-check").get("script") == "verifyInstallTarget()"
+
+
+def test_shipping_identifier_does_not_reuse_a_rehearsal_identifier(builder):
+    """A shipping receipt must be distinguishable from every rehearsal one."""
+    shipping = ET.fromstring(builder.distribution("0.3.4.2", mode="shipping")).find("pkg-ref").get("id")
+    assert shipping == builder.SHIPPING_IDENTIFIER
+    for rehearsal in (builder.IDENTIFIER, builder.VERIFICATION_IDENTIFIER, builder.STAGE_ONLY_IDENTIFIER):
+        assert shipping != rehearsal
+
+
+def test_shipping_build_publishes_and_keeps_plain_artifact_name(builder, tree, tmp_path):
+    """Shipping must use the real commit path and an indistinguishable name.
+
+    A deliverable whose filename carries a mode word is a deliverable nobody
+    can confuse with a test build -- which reads as caution but means the file
+    users are told to install is the one file that cannot be named plainly.
+    Every rehearsal mode keeps its suffix, so the plain name is unambiguous.
+    """
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        if "clang" in argv:
+            Path(argv[argv.index("-o") + 1]).write_bytes(b"binary")
+        return subprocess.CompletedProcess(argv, 0, stdout=".\t40755\t0/0\n")
+
+    output = tmp_path / "ship"
+    result = builder.build(tree, output, "0.3.4.2", run=run, mode="shipping")
+    assert result.name == "ai-device-client-0.3.4.2-arm64.pkg"
+    component = next(call for call in calls if call[0].endswith("pkgbuild"))
+    assert component[component.index("--identifier") + 1] == builder.SHIPPING_IDENTIFIER
+    postinstall = (output / "scripts/postinstall").read_text()
+    # Same activation path as every installable build: the commit is real.
+    assert "upgrade-registered-program" in postinstall
+    assert '"$ENTRY" "$VERB"' in postinstall
+
+
+def test_shipping_postinstall_names_the_outstanding_configuration(builder, tree, tmp_path):
+    """Installing the program is not the same as having a usable client.
+
+    With no named user the package must stop after publishing and say so; the
+    requirement forbids guessing a user or picking a logged-in session. Before
+    this, a successful first install exited 0 and left nothing that would ever
+    start at login, with no indication why.
+    """
+    def run(argv, **kwargs):
+        if "clang" in argv:
+            Path(argv[argv.index("-o") + 1]).write_bytes(b"binary")
+        return subprocess.CompletedProcess(argv, 0, stdout=".\t40755\t0/0\n")
+
+    output = tmp_path / "ship-notice"
+    builder.build(tree, output, "0.3.4.2", run=run, mode="shipping")
+    postinstall = (output / "scripts/postinstall").read_text()
+    assert "AI_DEVICE_CLIENT_INSTALLED_NOT_REGISTERED_V1" in postinstall
+    # The notice is conditional: a registered upgrade must not print it.
+    assert 'if [ ! -f "$REGISTRATION" ]' in postinstall
+    # It has to name the real path and the real registrar module, or it sends
+    # the operator somewhere that refuses them.
+    assert "Library/Application Support/ai-device-client/client.json" in postinstall
+    assert "client_macos_register register" in postinstall
+
+
+def test_rehearsal_modes_stay_silent_about_configuration(builder, tree, tmp_path):
+    """Only the shipping product advises a user; a rehearsal build must not."""
+    def run(argv, **kwargs):
+        if "clang" in argv:
+            Path(argv[argv.index("-o") + 1]).write_bytes(b"binary")
+        return subprocess.CompletedProcess(argv, 0, stdout=".\t40755\t0/0\n")
+
+    output = tmp_path / "rehearsal-silent"
+    builder.build(tree, output, "0.3.4.2", run=run, mode="verification")
+    postinstall = (output / "scripts/postinstall").read_text()
+    assert "AI_DEVICE_CLIENT_INSTALLED_NOT_REGISTERED_V1" not in postinstall
+    assert "client_macos_register" not in postinstall

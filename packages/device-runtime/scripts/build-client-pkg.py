@@ -1,7 +1,12 @@
-"""Build an installation-disabled arm64 PKG for offline payload inspection.
+"""Build an arm64 client PKG in one of four deliberately distinct modes.
 
-This is not the shipping installer. Both product and component installation
-are rejected until the native lifecycle has been implemented and verified.
+The default product is still inspection-only and refuses installation. The
+installable products are selected with --mode: verification and stage_only are
+rehearsal instruments for a disposable machine, and shipping is the deliverable.
+
+The native lifecycle is implemented and this builds a real installer, but a
+shipping build is not yet a public release: it is unsigned/notarised, and the
+full first-install/A->B acceptance on real arm64 hardware is still outstanding.
 """
 
 import argparse
@@ -31,8 +36,15 @@ IDENTIFIER = "local.ai-device.client.inspection"
 # machine with a payload in place and nothing published.
 VERIFICATION_IDENTIFIER = "local.ai-device.client.verification"
 STAGE_ONLY_IDENTIFIER = "local.ai-device.client.verification.stage-only"
+# The product identifier carries no mode word on purpose: this is the identity
+# the receipt will have in the field. A release built under a "-release"
+# suffix would have to migrate its receipt on the next build, so the shipping
+# package takes the plain name and every rehearsal product keeps a distinguishing
+# suffix. Receipts are keyed by identifier alone, so this is also what makes a
+# rehearsal install refuse itself when a shipping package is already present.
+SHIPPING_IDENTIFIER = "local.ai-device.client"
 
-MODES = ("inspection", "verification", "stage_only")
+MODES = ("inspection", "verification", "stage_only", "shipping")
 
 # Payload location and the live program path are deliberately different.
 #
@@ -187,6 +199,49 @@ COMMIT_TOKENS = {
     2: "PROGRAM_COMMIT_UNKNOWN_V1",
 }
 
+# What a shipping install says after the program is published but this host has
+# no client identity yet.
+#
+# Publishing the program on a fresh machine is the whole job the package can do
+# by itself: the requirement is explicit that with no named user the installer
+# puts the program down and reports that configuration is outstanding, and that
+# it must not guess a user from root's HOME or pick one of several logged-in
+# sessions. So this is not a fallback -- it is the intended first-install end
+# state, and the only thing missing from the payload was saying so.
+#
+# Both verification and shipping reach this point; only shipping says anything,
+# because a rehearsal build is not something a user should be told to configure.
+SHIPPING_EPILOGUE = """# A shipping install that published the program on a machine with no client
+# identity is complete but not yet useful: nothing will start at login until a
+# user is chosen and registered. Report the next steps rather than exiting 0
+# silently and leaving the operator to discover an inert installation.
+#
+# Registration requires a configuration file that already exists and belongs to
+# the target user (it is validated as that user before anything is published),
+# so telling the operator to "run register --help" would only send them into a
+# refusal. The path below is the layout the registrar itself will read.
+if [ ! -f "$REGISTRATION" ]; then
+    cat >&2 <<'OUTSTANDING'
+AI_DEVICE_CLIENT_INSTALLED_NOT_REGISTERED_V1
+The client program is installed at $PROGRAM, but this machine has no client
+identity yet, so nothing will start at login.
+
+Still required, in this order:
+  1. As the user who should run the client, create
+     ~/Library/Application Support/ai-device-client/client.json with the centre
+     URL and device id, plus the device token in a sibling file named 'token'
+     (0600). Both must be owned by that user.
+  2. As an administrator, register that user:
+
+       sudo $PROGRAM/runtime/bin/python3 -I -B \\
+         -m device_runtime.client_macos_register register \\
+         --user <that-user> --confirm-legacy-clients-disabled
+
+The package does not choose a user for you and does not run a client as root.
+OUTSTANDING
+fi
+"""
+
 POSTINSTALL = """#!/bin/sh
 # Runs as root inside the installer's own transaction. The staged tree is never
 # written to the live path: it is published by one atomic rename either way.
@@ -196,7 +251,16 @@ POSTINSTALL = """#!/bin/sh
 #   registered   -> the upgrade coordinator, which asks the running instance
 #                   to exit, boots the job out, renames this payload over the
 #                   live tree, bootstraps once and observes readiness.
-#   unregistered -> first-program publication, unchanged.
+#   unregistered -> the commit verb on the staged binary: one atomic swap of
+#                   the payload onto the live path. This does NOT go through
+#                   `first-program`, so the first-install host-conflict and
+#                   management-lock composition is not exercised here; the only
+#                   gate is the preinstall residue check.
+#
+#                   (This line previously claimed first-program publication,
+#                   which the script has never called. Corrected because the
+#                   difference is exactly the unwired first-install path, not a
+#                   wording detail.)
 #
 # The upgrade path needs a running client to hand over. A logged-out user has
 # none, so the coordinator refuses instead of guessing, the install fails, and
@@ -262,7 +326,7 @@ fi
 if [ "$status" -ne 0 ]; then
     exit 1
 fi
-exit 0
+{epilogue}exit 0
 """
 
 
@@ -289,7 +353,7 @@ exit 0
 
 
 def distribution(version, *, mode="inspection"):
-    """Build the Distribution.xml for one of three deliberately distinct products.
+    """Build the Distribution.xml for one of four deliberately distinct products.
 
     inspection  — refuses at both the product and the component level. The
                   historical contract; unchanged.
@@ -301,6 +365,10 @@ def distribution(version, *, mode="inspection"):
                   cannot distinguish Installer payload behaviour from commit
                   behaviour. Only this mode can observe the post-payload /
                   pre-swap state.
+    shipping    — the deliverable. Same activation path as verification, but it
+                  reports a success the user can act on: an unregistered client
+                  is told how to configure and register, instead of the install
+                  succeeding silently on a machine where nothing will ever run.
     """
     if mode not in MODES:
         raise ValueError(f"unknown package mode: {mode!r}")
@@ -309,11 +377,13 @@ def distribution(version, *, mode="inspection"):
         "inspection": IDENTIFIER,
         "verification": VERIFICATION_IDENTIFIER,
         "stage_only": STAGE_ONLY_IDENTIFIER,
+        "shipping": SHIPPING_IDENTIFIER,
     }[mode]
     title = {
         "inspection": "AI Device Client — inspection only",
         "verification": "AI Device Client — VERIFICATION BUILD, not for release",
         "stage_only": "AI Device Client — VERIFICATION stage-only, not for release",
+        "shipping": "AI Device Client",
     }[mode]
     root = ET.Element("installer-gui-script", {"minSpecVersion": "2"})
     ET.SubElement(root, "title").text = title
@@ -341,15 +411,22 @@ def distribution(version, *, mode="inspection"):
         # already-present live program stops the install before any payload is
         # written.
         ET.SubElement(root, "installation-check", {"script": "verifyInstallTarget()"})
-        ET.SubElement(root, "script").text = """
-function verifyInstallTarget() {
-    if (system.compareVersions(system.version.ProductVersion, '11.0') < 0) {
+        # The shipping product drops the "VERIFICATION" wording from the only
+        # message an ordinary user is guaranteed to see.
+        message = (
+            "This client requires macOS 11 or later."
+            if mode == "shipping"
+            else "Verification build requires macOS 11 or later."
+        )
+        ET.SubElement(root, "script").text = f"""
+function verifyInstallTarget() {{
+    if (system.compareVersions(system.version.ProductVersion, '11.0') < 0) {{
         my.result.type = 'Fatal';
-        my.result.message = 'Verification build requires macOS 11 or later.';
+        my.result.message = '{message}';
         return false;
-    }
+    }}
     return true;
-}
+}}
 """
     else:
         ET.SubElement(root, "installation-check", {"script": "rejectInspection()"})
@@ -584,6 +661,7 @@ def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
                 status_file=COMMIT_STATUS_FILE,
                 upgrade_entry=f"{UPGRADE_ROOT}/{UPGRADE_ENTRY}",
                 registration=REGISTRATION_FILE,
+                epilogue=SHIPPING_EPILOGUE if mode == "shipping" else "",
             )
         )
     postinstall.chmod(0o755)
@@ -593,6 +671,7 @@ def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
         "inspection": IDENTIFIER,
         "verification": VERIFICATION_IDENTIFIER,
         "stage_only": STAGE_ONLY_IDENTIFIER,
+        "shipping": SHIPPING_IDENTIFIER,
     }[mode]
     execute = run or subprocess.run
     packaged = execute(
@@ -655,12 +734,17 @@ def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
         text=True,
     )
     validate_bom(bom.stdout)
-    suffix = {
-        "inspection": "inspection",
-        "verification": "verification",
-        "stage_only": "verification-stage-only",
-    }[mode]
-    result = output / f"ai-device-client-{version}-arm64-{suffix}.pkg"
+    # Shipping keeps the plain artifact name: every rehearsal product is
+    # distinguishable from the deliverable by its filename alone.
+    if mode == "shipping":
+        result = output / f"ai-device-client-{version}-arm64.pkg"
+    else:
+        suffix = {
+            "inspection": "inspection",
+            "verification": "verification",
+            "stage_only": "verification-stage-only",
+        }[mode]
+        result = output / f"ai-device-client-{version}-arm64-{suffix}.pkg"
     execute(
         [
             "/usr/bin/productbuild",
@@ -681,16 +765,13 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument(
-        "--verification",
-        action="store_true",
-        help="Emit an installable package for disposable-machine verification "
-        "instead of the default inspection-only product.",
-    )
-    parser.add_argument(
-        "--stage-only",
-        action="store_true",
-        help="Verification variant that writes the payload and stops before "
-        "publishing, so the post-payload/pre-swap stage can be observed.",
+        "--mode",
+        choices=MODES,
+        default="inspection",
+        help="Which product to emit. inspection (default) refuses installation; "
+        "verification installs and publishes for rehearsal on a disposable "
+        "machine; stage_only writes the payload and stops before publishing; "
+        "shipping is the deliverable.",
     )
     parser.add_argument(
         "--upgrade-entry",
@@ -702,11 +783,8 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     if args.upgrade_entry:
-        if args.stage_only or args.verification:
-            parser.error("--upgrade-entry is a separate product")
+        if args.mode != "inspection":
+            parser.error("--upgrade-entry is a separate product; it takes no --mode")
         print(build_upgrade_payload(args.tree, args.output))
         raise SystemExit(0)
-    if args.stage_only and args.verification:
-        parser.error("--verification and --stage-only are separate products")
-    mode = "stage_only" if args.stage_only else "verification" if args.verification else "inspection"
-    print(build(args.tree, args.output, args.version, mode=mode))
+    print(build(args.tree, args.output, args.version, mode=args.mode))
