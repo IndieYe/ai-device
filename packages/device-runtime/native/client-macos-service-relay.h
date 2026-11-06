@@ -34,9 +34,43 @@ static double service_relay_clock(void) {
 }
 #endif
 
-static int service_relay_relay(const char *management,uid_t owner,int management_fd,
-                               const char *tree,const char *module,const char *token,
-                               double deadline) {
+static int service_relay_relay_ex(const char *management,uid_t owner,int management_fd,
+                                  const char *tree,const char *module,const char *token,
+                                  double deadline,int attest);
+
+/* Attested form, kept under its original name for existing callers and tests.
+ * inline so a translation unit that only uses the explicit entry points does not
+ * trip -Wunused-function. */
+static inline int service_relay_relay(const char *management,uid_t owner,int management_fd,
+                                      const char *tree,const char *module,const char *token,
+                                      double deadline) {
+    return service_relay_relay_ex(management,owner,management_fd,tree,module,token,
+                                  deadline,1);
+}
+
+/* `attest` says whether `tree` must match the inventory compiled into THIS
+ * binary.
+ *
+ * It matters in exactly one direction. The relay only needs an interpreter that
+ * can import the load/unload module; that module drives launchctl and never
+ * reads the tree it came from. So the tree has to be trustworthy, but not
+ * necessarily be the version this entry was built for:
+ *
+ *   unload / forward load - the staged payload or the tree just published from
+ *       it. Both ARE this build, so they are attested against the inventory.
+ *
+ *   recovery load after a failed publication - the live path still holds the
+ *       PREVIOUS version. Requiring this build's inventory there made every
+ *       AFTER_UNLOAD restore impossible: verification failed before launchctl
+ *       was ever reached, the job stayed unloaded, and the client was left
+ *       stopped with a payload on disk that looked like a successful stage.
+ *       The old tree is still structurally checked (owner, modes, no writable
+ *       entries, no hard links) - which is what this helper actually relies on -
+ *       but it is deliberately not required to be byte-identical to a version
+ *       it predates. */
+static int service_relay_relay_ex(const char *management,uid_t owner,int management_fd,
+                                  const char *tree,const char *module,const char *token,
+                                  double deadline,int attest) {
     if (!tree || !*tree || !module || !token || !isfinite(deadline) || !(deadline>0) ||
         !private_lock_held(management_fd,management,"management.lock",owner)) return 0;
     /* Read the clock ONCE and validate that single reading. Comparing an
@@ -63,7 +97,7 @@ static int service_relay_relay(const char *management,uid_t owner,int management
      * to sit next to this executable. The checks below still run, so a caller
      * cannot pass an unverified or wrongly owned tree. */
     char python[PATH_MAX];
-    if (!verify_resource_tree(tree) || !tree_owner_valid(tree,owner,0) ||
+    if ((attest && !verify_resource_tree(tree)) || !tree_owner_valid(tree,owner,0) ||
         snprintf(python,sizeof python,"%s/runtime/bin/python3",tree)>=(int)sizeof python)
         return 0;
     int output[2];
@@ -139,14 +173,26 @@ static int service_relay_relay(const char *management,uid_t owner,int management
 static int load_registered_service_relay(const char *management,uid_t owner,
                                          int management_fd,const char *tree,
                                          double deadline) {
-    return service_relay_relay(management,owner,management_fd,tree,
-        SERVICE_RELAY_LOAD_MODULE,SERVICE_RELAY_LOAD_TOKEN,deadline);
+    return service_relay_relay_ex(management,owner,management_fd,tree,
+        SERVICE_RELAY_LOAD_MODULE,SERVICE_RELAY_LOAD_TOKEN,deadline,1);
+}
+
+/* Load a job whose definition points at a tree this binary did not build.
+ *
+ * Only the AFTER_UNLOAD restore path uses this. It is a separate entry point
+ * rather than a flag at the call site so the attested form stays the obvious
+ * default and this relaxation is visible by name. */
+static int load_registered_service_relay_unattested(const char *management,uid_t owner,
+                                                   int management_fd,const char *tree,
+                                                   double deadline) {
+    return service_relay_relay_ex(management,owner,management_fd,tree,
+        SERVICE_RELAY_LOAD_MODULE,SERVICE_RELAY_LOAD_TOKEN,deadline,0);
 }
 
 static int unload_registered_service_relay(const char *management,uid_t owner,
                                            int management_fd,const char *tree,
                                            double deadline) {
-    return service_relay_relay(management,owner,management_fd,tree,
-        SERVICE_RELAY_UNLOAD_MODULE,SERVICE_RELAY_UNLOAD_TOKEN,deadline);
+    return service_relay_relay_ex(management,owner,management_fd,tree,
+        SERVICE_RELAY_UNLOAD_MODULE,SERVICE_RELAY_UNLOAD_TOKEN,deadline,1);
 }
 #endif

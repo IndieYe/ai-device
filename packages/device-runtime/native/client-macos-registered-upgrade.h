@@ -222,10 +222,16 @@ static inline int upgrade_recover_after_stage(const char *management,uid_t manag
      * result is a load receipt only, never a readiness claim.
      *
      * The relay runs the live program path. For AFTER_HANDOFF that is the newly
-     * published tree; for AFTER_UNLOAD publication never started, so it is still
-     * the previous tree that is about to be restarted. In both cases it is the
-     * tree the definition actually points at, which is what the helper must use.
+     * published tree, which this build's inventory attests. For AFTER_UNLOAD
+     * publication never started, so the live path still holds the PREVIOUS
+     * version: it must not be checked against this build's inventory, or the
+     * restore could never run and a failed publication would leave the client
+     * stopped. The helper still requires that tree to be structurally valid and
+     * correctly owned; it simply does not require it to be this version.
      */
+    if (stage==UPGRADE_STAGE_AFTER_UNLOAD)
+        return load_registered_service_relay_unattested(management,manager,
+            guards->management,[paths[@"program"] fileSystemRepresentation],deadline);
     return load_registered_service_relay(management,manager,guards->management,
         [paths[@"program"] fileSystemRepresentation],deadline);
 }

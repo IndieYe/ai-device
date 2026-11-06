@@ -871,6 +871,11 @@ def test_registered_native_exit_acquires_runtime_without_python_coordinator(
         ' (void)m;(void)u;(void)fd;(void)d;if(!t||!*t)return 0;puts("SERVICE_UNLOADED");fflush(stdout);return 1;}\n'
         "static int load_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d) {\n"
         ' (void)m;(void)u;(void)fd;(void)d;if(!t||!*t)return 0;puts("SERVICE_LOADED");fflush(stdout);return 1;}\n'
+        # AFTER_UNLOAD restores the PREVIOUS tree, which this build's inventory
+        # cannot attest; the upgrade calls this variant instead. Same observable
+        # behaviour here because the relay header is excluded.
+        "static int load_registered_service_relay_unattested(const char *m,uid_t u,int fd,const char *t,double d) {\n"
+        ' (void)m;(void)u;(void)fd;(void)d;if(!t||!*t)return 0;puts("SERVICE_LOADED");fflush(stdout);return 1;}\n'
         f'#include "{native / "client-macos-program-commit.h"}"\n'
         f'#include "{native / "client-macos-registered-upgrade.h"}"\n'
         f'#include "{native / "client-macos-start-child.h"}"\n'

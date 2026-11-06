@@ -104,7 +104,9 @@ def build(tmp_path, name, run_cases):
         + run_cases
         + "\n"
         + "int main(void){@autoreleasepool{(void)load_registered_service_relay;"
+          "(void)load_registered_service_relay_unattested;"
           "(void)unload_registered_service_relay;"
+          "(void)service_relay_relay_ex;"
           "(void)request_bound_registered_start;"
           "(void)acquire_private_lock;return run_cases();}}\n"
     )
@@ -357,3 +359,85 @@ def test_released_lock_refuses_before_any_spawn(tmp_path):
     assert rows["matches"][1] == "1", rows   # old check: would have passed
     assert rows["held"][1] == "0", rows
     assert rows["relay"][1] == "0", rows     # new check: refuses
+
+
+def test_relay_refuses_a_tree_that_is_not_the_one_its_inventory_describes(tmp_path):
+    """AFTER_UNLOAD restores the PREVIOUS tree, which this build's inventory rejects.
+
+    The relay verifies whatever tree it is handed against the inventory compiled
+    into the calling entry. During a failed upgrade the sequence is:
+
+        unload  (staged = NEW tree, matches the inventory)
+        publish -> fails
+        recovery load (live path = OLD tree, does NOT match the inventory)
+
+    so the restore path asks the relay to run a tree the current binary cannot
+    attest. This test pins the actual behaviour instead of assuming it: the
+    verify stub used by every other test in this file returns 1 unconditionally,
+    which is exactly why none of them could see this.
+
+    It compiles the real verifier against the NEW tree's inventory and points it
+    at both trees. That is the decision the relay makes before it spawns
+    anything; the launchctl invocation itself is never reached.
+    """
+    if sys.platform != "darwin":
+        pytest.skip("Darwin compiler")
+    import importlib.util
+
+    scripts = Path(__file__).parents[1] / "scripts"
+    spec = importlib.util.spec_from_file_location(
+        "manifest", scripts / "client-macos-resource-manifest.py"
+    )
+    manifest = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(manifest)
+    inspection = importlib.util.spec_from_file_location(
+        "inspection", scripts / "build-client-nopayload-inspection.py"
+    )
+    builder = importlib.util.module_from_spec(inspection)
+    inspection.loader.exec_module(builder)
+
+    def make_tree(name, contents):
+        root = tmp_path / name
+        (root / "runtime" / "bin").mkdir(parents=True)
+        helper = root / "runtime" / "bin" / "python3"
+        helper.write_text(contents)
+        helper.chmod(0o755)
+        return root
+
+    new_tree = make_tree("new", "#!/bin/sh\necho NEW\n")
+    old_tree = make_tree("old", "#!/bin/sh\necho OLD\n")
+
+    # Build the verifier bound to the NEW tree, exactly as the shipped entry is.
+    # The second argument is the directory the compiled verifier is written to,
+    # not the source scripts path.
+    build = tmp_path / "verify-build"
+    builder.compile_resource_check(manifest.inventory(new_tree), tmp_path, build)
+
+    harness = tmp_path / "verify.m"
+    # RESOURCE_CHECK_LIBRARY suppresses the verifier's own main so this harness
+    # can call verify_resource_tree directly.
+    harness.write_text(
+        "#define RESOURCE_CHECK_LIBRARY\n#include <stdio.h>\n"
+        f'#include "{NATIVE}/client-macos-resource-check.c"\n'
+        "int main(int argc,char **argv){(void)argc;\n"
+        'printf("%d\\n",verify_resource_tree(argv[1]));return 0;}\n'
+    )
+    binary = tmp_path / "verify"
+    compiled = subprocess.run(
+        ["/usr/bin/xcrun", "clang", "-Wall", "-Wextra", "-Werror",
+         "-I", str(build), str(harness), "-o", str(binary)],
+        check=False, capture_output=True, text=True,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+
+    def verifies(tree):
+        result = subprocess.run(
+            [str(binary), str(tree)], check=True, capture_output=True, text=True
+        )
+        return result.stdout.strip() == "1"
+
+    # The control: the inventory does accept the tree it was built from.
+    assert verifies(new_tree)
+    # The defect: the previous tree is not attestable by this build, so the
+    # AFTER_UNLOAD recovery load cannot be satisfied by the relay as written.
+    assert not verifies(old_tree)

@@ -70,6 +70,7 @@ def test_upgrade_once_order(tmp_path, failure):
         "static int registered_target_exact(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return gate();}\n"
         "static int unload_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;return gate();}\n"
         "static int load_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;return gate();}\n"
+        "static int load_registered_service_relay_unattested(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;return gate();}\n"
         "static int registered_management_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;return g->management==1 && gate();}\n"
         "static int registered_management_confirmed(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}\n"
                 "static int handoff_registered_start(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;if(!gate())return 0;if(!registered_guards_current(m,u,p,g))return 0;g->start=-1;g->runtime=-1;return 1;}\n"
@@ -162,6 +163,7 @@ static int registered_target_exact(const char *m,uid_t u,NSDictionary *p,struct 
 static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d){(void)m;(void)u;(void)p;(void)g;(void)v;(void)b;(void)d;return 1;}
 static int handoff_registered_start(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}
 static int load_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;return 1;}
+static int load_registered_service_relay_unattested(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;return 1;}
 static int registered_management_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}
 static int registered_management_confirmed(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}
 static NSDictionary *read_target_identity(const char *s,uid_t u){(void)s;(void)u;return nil;}
@@ -296,6 +298,7 @@ def test_upgrade_invalid_clock_stops_before_next_action(
         "static int registered_management_confirmed(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}\n"
         "static int unload_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;actions++;return 1;}\n"
         "static int load_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;actions++;return 1;}\n"
+        "static int load_registered_service_relay_unattested(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;actions++;return 1;}\n"
         "static int handoff_registered_start(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;actions++;return 1;}\n"
         "static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d){(void)m;(void)u;(void)p;(void)g;(void)v;(void)b;(void)d;return 1;}\n"
         "static NSDictionary *read_target_identity(const char *s,uid_t u){(void)s;(void)u;return nil;}\n"
@@ -359,6 +362,7 @@ static int registered_management_confirmed(const char *m,uid_t u,NSDictionary *p
 static int registered_guards_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return guards_rc;}
 static int handoff_registered_start(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;handoff_calls++;if(!handoff_rc)return 0;g->start=-1;g->runtime=-1;return 1;}
 static int load_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;load_calls++;return load_rc;}
+static int load_registered_service_relay_unattested(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;load_calls++;return load_rc;}
 static double lease_clock(void){return 0;}
 static void unused_leaves(void){(void)registered_exit_current;(void)verify_resource_tree;(void)tree_owner_valid;(void)exit_registered_original;(void)commit_staged_program;(void)registered_target_exact;(void)unload_registered_service_relay;(void)query_registered_ready;(void)read_target_identity;(void)registered_management_current;}
 """
