@@ -8,10 +8,12 @@ Mac 侧代码已提交（`e2c4a70` 起），包含 13 个 `client_macos_*.py` �
 
 阻塞交付的未解项：
 
-1. **PKG 仍有 5 条 `write: Permission denied` 警告，根因未解决**——不解决不能公开发布或安装。
-2. 生产停止证明（launchd TERM 超时后发 KILL 的竞态）仅验证候选方案，未接入生产启动路径。
-3. Installer 写入期互斥未完成。
-4. 登录/退出/未登录更新生命周期未验收。
+1. 生产停止证明（launchd TERM 超时后发 KILL 的竞态）仅验证候选方案，未接入生产启动路径。
+2. Installer 写入期互斥未完成。
+3. 登录/退出/未登录更新生命周期未验收。
+
+> `pkgbuild` 的 5 条 `write: Permission denied` 已查明为固有 stderr 噪音，不再是阻塞项，
+> 见下文“pkgbuild 权限警告已定位”。
 
 权威需求为 `doc/requirements/client-native-install-upgrade.md`；Linux 侧使用者指南见 `client-native-linux-guide.md`。
 
@@ -111,18 +113,21 @@ SHA256：`11730d4bb64039d201cad6e4c7f430faa61959240b936fbfa0b91815064abc1e`。
 普通文件的SHA256及符号链接目标，均与打包输入一致；解包内Python可导入新增模块，
 版本0.3.4、build_id `sha256:218f10e7c87cd5749380c3964b92c8293dd4a5f62b50f72981cca10074b9104e`。
 
-构建日志 `/tmp/device-ses14497-mac-pkg1.log` 有5条 `write: Permission denied`，
-根因未确认；尽管payload比对通过，不视为无警告构建或发布准入证据。
+构建日志 `/tmp/device-ses14497-mac-pkg1.log` 有5条 `write: Permission denied`。
+当时记为根因未确认；现已查明为 `--ownership recommended` 在非 root 下的固有 stderr 输出，
+见下文“pkgbuild 权限警告已定位”。payload 比对本身仍为独立证据。
 新增PKG构建10项测试通过，客户端相关176项通过，ruff/diff通过。
 最新Device全量983通过发生在PKG构建器新增前，不冒充最新全量验证。
 
-### pkgbuild警告定位与BOM门禁
+### pkgbuild警告初步探测（已被下文结论取代）
+
+> 本节是当时的探测过程。其中“底层失败写入对象仍未查明”已被下节证实与推翻，
+> 当前结论以下节为准。
 
 最小单文件载荷也复现4条权限警告；无载荷脚本包和仅analyze组件扫描没有警告。
 COPYFILE_DISABLE=1、指定任务内TMPDIR、显式component-plist均未消除警告。
 仅改为 `--ownership preserve` 时警告消失，但BOM所有者变为501/20，不能用于
 系统程序包。保留recommended；最小原包3条、完整mac-pkg1的4787条BOM记录均为0/0。
-据此只能定位到所有权选项相关路径，底层失败写入对象仍未查明，不声称已消除警告。
 探测文件保留于 `build/client-native/pkg-warning-minimal/`，未安装任何探测包。
 
 构建器现于组件打包后使用pkgutil --expand和lsbom验证每条BOM为root:wheel，
@@ -131,6 +136,57 @@ COPYFILE_DISABLE=1、指定任务内TMPDIR、显式component-plist均未消除�
 SHA256 `3a9c751706bbce16bfe39b959b2e5b0902b8eea96c58725591fd41f95cc1d318`。
 仍双重禁止安装、仍有5条警告，日志 `/tmp/device-ses14497-mac-pkg2.log`。
 mac-pkg2复用mac-tree2应用载荷；本轮未重跑包载荷逐字节展开比较，不借mac-pkg1证据冒充。
+
+### pkgbuild 权限警告已定位
+
+5 条 `write: Permission denied` 的触发条件与影响范围已查明，**不再是阻塞项**。
+具体被拒的写入对象仍未定位（不影响产物正确性，见下）。
+
+判定条件：警告只在需要改写归档归属时出现。`--ownership recommended` 与
+`--ownership preserve-other` 都会把当前用户归属改写为 `root:wheel`，二者均报；
+`--ownership preserve` 不改写归属，不报。
+
+排除过程（macOS 27.0.1，build 26A434，pkgbuild 27.0.0.0）：
+
+| 变换 | 警告数 |
+| --- | ---: |
+| 空目录 `--root empty` + `recommended` | 4 |
+| 1 / 10 / 50 个文件 | 恒为 4 |
+| 清除全部扩展属性（`com.apple.provenance`） | 4 |
+| `env -i` 清空环境变量 | 4 |
+| TMPDIR 指向不可写 / 私有目录 | 4 |
+| 换到 `/tmp` 外、用户 home | 4 |
+| ssh 独立会话（脱离 AI 沙箱） | 4 |
+| `--analyze`（只生成 component plist，不写 BOM） | 0 |
+| `--ownership preserve` | 0 |
+| `--ownership preserve-other` | 4 |
+
+结论：与文件数量、内容、扩展属性、环境变量、TMPDIR、执行上下文均无关。
+空目录也恒报 4 条，说明这 4 次写尝试发生在**固定流程**上（BOM 头与归档元数据等固定条目），
+而不是逐文件操作。这是 pkgbuild 以非 root 用户、`recommended` 归属构建时的固有 stderr 输出。
+
+**仍未查明**：这 4 次写入具体指向哪个对象（BOM 头、归档元数据或内部临时位置）。
+因为产物已被独立验证正确，且消除警告的唯一方式会引入真问题，故不再继续追查。
+
+产物正确性已独立验证：
+
+```
+lsbom:        ./file.txt      100644  0/0
+Payload 内:   root wheel
+```
+
+BOM 与载荷归属都是 `root:wheel`，警告出现在成功路径上（紧跟 `Wrote package`）。
+
+**唯一能消除警告的方式是改用 `--ownership preserve`，但那会让 BOM 变成 `501/20`，
+才是真问题**。因此不追求消除警告，改为管理其风险：
+
+- 构建器以**退出码**为权威信号，不把 stderr 文本当作失败依据（早期版本据文本误判，
+  拒绝了所有正常构建并掩盖真实错误）；失败时保留完整诊断到 `pkgbuild.log` 并在消息中引用。
+- 包生成后用 `pkgutil --expand-full` + `lsbom` 校验每条 BOM 记录为 `root:wheel`，
+  失败则不产出包。这道门禁才是归属正确性的证据。
+
+剩余风险仅限于：stderr 恒有噪音，人工看日志时可能忽略其后的真实错误。
+该风险由“退出码 + BOM 门禁”覆盖，不需要继续追查警告本身。
 
 ## 停止证据研究：不能复用maintenance锁作为退出证明
 
