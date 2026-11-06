@@ -542,6 +542,11 @@ def stage_upgrade_entry(tree, root, build_directory, *, run=None):
     88 MB payload and introduce a second source that could disagree with the
     first; the embedded inventory already pins the content it will publish.
 
+    `tree` must be the tree that actually ships, not the source it was copied
+    from: the inventory is compared for exact entry count, so a superset makes
+    every install refuse. Callers that filter the copy must pass the filtered
+    result.
+
     The layer still lives outside the program tree: that tree is the object
     being replaced, and its stage path changes per build, so an entry inside it
     could not survive the swap it performs.
@@ -553,8 +558,8 @@ def stage_upgrade_entry(tree, root, build_directory, *, run=None):
     build_directory = Path(build_directory)
     build_directory.mkdir(parents=True, exist_ok=True)
     # `client-macos-installer.m` reaches resource-check.c through writer-probe.c,
-    # which includes a generated resource-table.h. It is built from the tree the
-    # package stages, so the embedded inventory and that payload cannot disagree.
+    # which includes a generated resource-table.h. It is built from the tree this
+    # package stages, so the embedded inventory describes exactly that payload.
     manifest = INVENTORY.inventory(tree)
     records = []
     for item in manifest["entries"]:
@@ -725,8 +730,13 @@ def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
     #
     # Only the entry is added, not a second tree: it embeds the inventory of the
     # very tree staged above and is handed that stage path at install time.
+    # `payload`, not `tree`: __pycache__ and *.pyc are excluded from the copy, so
+    # an inventory taken from the source tree would list four files the installed
+    # tree does not have, and verify_resource_tree requires an exact entry count.
+    # The result was a package that built and signed cleanly and then refused
+    # every install on real hardware. The manifest must describe what ships.
     if mode != "inspection":
-        stage_upgrade_entry(tree, output / "root", output / "upgrade-build", run=run)
+        stage_upgrade_entry(payload, output / "root", output / "upgrade-build", run=run)
     scripts = output / "scripts"
     scripts.mkdir()
     preinstall = scripts / "preinstall"

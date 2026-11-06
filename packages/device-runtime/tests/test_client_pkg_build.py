@@ -819,6 +819,47 @@ def test_shipping_postinstall_names_the_outstanding_configuration(builder, tree,
     assert "--user '<user>'" in postinstall
 
 
+def test_inventory_describes_the_shipped_payload_not_the_source_tree(
+    builder, tree, tmp_path, monkeypatch
+):
+    """A byte cache in the source tree must not end up in the embedded inventory.
+
+    The payload copy excludes __pycache__ and *.pyc, but the inventory used to be
+    taken from the source tree, so any tree that had ever been imported produced a
+    package whose inventory listed files that never shipped. verify_resource_tree
+    requires an exact entry count, so every install refused at the first program
+    step -- after a successful build, a successful pkgbuild and a successful
+    signature check. Found on real hardware; the build side was green throughout.
+    """
+    cache = tree / "runtime/lib/python3.13/encodings/__pycache__"
+    cache.mkdir(parents=True)
+    (cache / "__init__.cpython-313.pyc").write_bytes(b"cache")
+
+    seen = {}
+    original = builder.INVENTORY.inventory
+
+    def record(path):
+        result = original(path)
+        seen[Path(path).name] = sorted(
+            entry["path"] for entry in result["entries"]
+            if "__pycache__" in entry["path"]
+        )
+        return result
+
+    monkeypatch.setattr(builder.INVENTORY, "inventory", record)
+
+    def run(argv, **kwargs):
+        if "clang" in argv:
+            Path(argv[argv.index("-o") + 1]).write_bytes(b"binary")
+        return subprocess.CompletedProcess(argv, 0, stdout=".\t40755\t0/0\n")
+
+    output = tmp_path / "inventory-payload"
+    builder.build(tree, output, "0.3.4.6", run=run, mode="shipping")
+    # Only the payload may be measured, and it must carry no cache entries at all.
+    assert "tree" not in seen, "inventory was taken from the unshipped source tree"
+    assert all(not entries for entries in seen.values())
+
+
 def test_unregistered_branch_picks_a_primitive_that_matches_the_live_path(builder, tree, tmp_path):
     """First install must be gated, and a reinstall must still be possible.
 
