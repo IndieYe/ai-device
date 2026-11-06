@@ -2,9 +2,18 @@
 
 ## 当前状态
 
-尚未交付 PKG 安装升级路径，不可用于真实设备部署。Linux 交付已在提交
-`83ec055cf2cad1c531f912b7e42cfda12cd74b41` 合并本地 main，Mac 改动未提交。
-权威需求为 `doc/requirements/client-native-install-upgrade.md`。
+**阶段二进行中，尚未交付 PKG 安装升级路径，不可用于真实设备部署。**
+
+Mac 侧代码已提交（`e2c4a70` 起），包含 13 个 `client_macos_*.py` 模块、`scripts/build-client-pkg.py` 构建器、105 个测试文件；本节下方各节记录了演进过程，其中“改动未提交”类描述均已过时。
+
+阻塞交付的未解项：
+
+1. **PKG 仍有 5 条 `write: Permission denied` 警告，根因未解决**——不解决不能公开发布或安装。
+2. 生产停止证明（launchd TERM 超时后发 KILL 的竞态）仅验证候选方案，未接入生产启动路径。
+3. Installer 写入期互斥未完成。
+4. 登录/退出/未登录更新生命周期未验收。
+
+权威需求为 `doc/requirements/client-native-install-upgrade.md`；Linux 侧使用者指南见 `client-native-linux-guide.md`。
 
 已完成构建准备：平台锁选择、arm64 uv 工具锁、离线预装运行树。
 `build/client-native/mac-tree1` 是本阶段早期构建，不包含后续新增 Mac 布局模块。

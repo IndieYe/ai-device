@@ -29,6 +29,15 @@ Bash/FS 的 MCP 服务使用各自的 `[mcp]` extra；Device extras 为 client�
 
 ## 文档
 
+### 客户端安装升级
+
+- [Linux 客户端安装升级指南](docs/client-native-linux-guide.md)（Ubuntu 24.04 amd64，DEB/systemd）
+- [macOS 客户端开发记录](docs/client-native-macos-development.md)（阶段二进行中，尚未交付）
+- [旧路径退役与保留清单](docs/client-native-legacy-inventory.md)
+- [Linux 客户端开发记录与验收证据](docs/client-native-linux-development.md)
+
+### 其他
+
 - [macOS Device 用户级部署、迁移与验收](docs/macos-ai-workstation-setup-and-verification.md)
 - [macOS 可选配套工具：tmux、Harness 与管理员配置](docs/macos-optional-tools.md)（非 Device 必需依赖）
 
