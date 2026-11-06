@@ -187,6 +187,21 @@ macOS 已配置用户已登录时，升级必须正确卸载/加载该用户服�
 - **`runtime` 锁必须在 `bootstrap` 前释放，`start` 锁则不必然。** `runtime.lock` 是独占锁，与 launcher 必冲突；`start.lock` 由 launcher 以 `LOCK_SH` 共享获取，协调方若同样使用共享锁则**不阻塞启动**，只有以独占方式持有时才阻塞。"全程持锁直到就绪"是错误实现。
 - 本节结论来自离线锁竞争与手工 plist 测试，**不包含**真实客户端连接、任务准入、GUI 登录登出或未登录更新；这些仍需另行授权的真机验收，不因本节存在而视为已验收。
 
+#### 7.1.2 升级窗口端到端实测（2026-11-06，macminim6）
+
+条件：真实已登记 LaunchAgent（`register()` 建立 `registration.json` + 用户 plist）+ 本地假中心提供连接，非手工 plist。
+
+| 场景 | 入口输出 | rc | 结果 |
+| --- | --- | ---: | --- |
+| 空闲 | `AI_DEVICE_UPGRADE_READY_EXACT_V1` | 0 | 旧 pid 退出，`bootout` → 发布 → `bootstrap`，新 pid 就绪 |
+| 忙（有活动任务） | `AI_DEVICE_UPGRADE_REFUSED_V1` | 70 | pid 不变，程序未动，任务继续并成功完成 |
+
+- 成功路径已逐项核实：旧 pid 消失、新 pid 不同、`status.ready=true`、`runtime.lock` 由新实例的 fd 3 持有（而非协调器保留），`/opt/ai-device-client` 树 digest 未变（本次源与目标同一棵树）。
+- 忙拒绝后**新任务准入保持**：被拒时正在执行的 `sleep 25` 任务照常 `succeeded`，随后 `acquire` 恢复 `true`。
+- 一个已修复的缺陷：此前忙与“退出未确认”都被报成 `EXIT_UNKNOWN`（协调器只判断 `!= LEASE_ACCEPTED`，丢弃了 lease 层已有的 `LEASE_BUSY`）。两者的操作契约相反——`REFUSED` 可重试，`EXIT_UNKNOWN` 禁止重放——忙报 unknown 会让调用方以为产生了副作用。
+
+**仍未覆盖**：真实中心与真实设备凭证、GUI 登录/退出/重新登录、用户未登录时更新、卸载保数据、带真实不同版本 A→B 的完整窗口、中心/MCP 回归。本节只证明“空闲升级”与“忙拒绝且保持准入”两条路径在有真实 launchd 托管与真实维护 socket 的条件下成立。
+
 ### 7.2 忙闲与异常恢复
 
 - 活动任务包含客户端正在处理的请求及其管理的后台执行，不能只看 WebSocket 是否空闲或前台请求数。
