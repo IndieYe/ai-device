@@ -225,21 +225,48 @@ SHIPPING_EPILOGUE = """# A shipping install that published the program on a mach
 # so telling the operator to "run register --help" would only send them into a
 # refusal. The path below is the layout the registrar itself will read.
 if [ ! -f "$REGISTRATION" ]; then
-    cat >&2 <<'OUTSTANDING'
+    # Unquoted heredoc: $PROGRAM must expand, or the printed command is not the
+    # absolute path the operator can actually run.
+    cat >&2 <<OUTSTANDING
 AI_DEVICE_CLIENT_INSTALLED_NOT_REGISTERED_V1
 The client program is installed at $PROGRAM, but this machine has no client
 identity yet, so nothing will start at login.
 
-Still required, in this order:
+Still required, in this order. Do not paraphrase these paths: the registrar
+compares client.json against the fixed layout and refuses anything else.
+
   1. As the user who should run the client, create
-     ~/Library/Application Support/ai-device-client/client.json with the centre
-     URL and device id, plus the device token in a sibling file named 'token'
-     (0600). Both must be owned by that user.
-  2. As an administrator, register that user:
+     ~/Library/Application Support/ai-device-client/ with mode 0700, and inside
+     it two files owned by that user:
+
+       ~/Library/Application Support/ai-device-client/client.json  (0644)
+         exactly these four keys are required:
+         {"server_url": "<centre url>",
+          "device_id": "<device id>",
+          "state_dir": "$HOME/Library/Application Support/ai-device-client/state",
+          "token_file": "$HOME/Library/Application Support/ai-device-client/token"}
+
+       ~/Library/Application Support/ai-device-client/token  (0600)
+         the device token, one line, no extra keys
+
+     state_dir and token_file must be these absolute paths; the probe compares
+     them literally after expanding the account home.
+
+  2. As an administrator, register that user (quote the name; registration is
+     root-only and does not start the client):
 
        sudo $PROGRAM/runtime/bin/python3 -I -B \\
          -m device_runtime.client_macos_register register \\
-         --user <that-user> --confirm-legacy-clients-disabled
+         --user '<user>' --confirm-legacy-clients-disabled
+
+  3. The client starts at the next GUI login of that user. To start it now
+     without logging out, run this as that user (RunAtLoad starts it at once):
+
+       launchctl bootstrap gui/$(id -u) \\
+         "$HOME/Library/LaunchAgents/local.ai-device.client.plist"
+
+     The launcher resolves the account home from its own uid, so it must run in
+     that user's session; a root-session bootstrap would target the wrong home.
 
 The package does not choose a user for you and does not run a client as root.
 OUTSTANDING
@@ -250,26 +277,33 @@ POSTINSTALL = """#!/bin/sh
 # Runs as root inside the installer's own transaction. The staged tree is never
 # written to the live path: it is published by one atomic rename either way.
 #
-# One package, two paths, chosen by state rather than by the caller:
+# One package, three branches, chosen by state rather than by the caller:
 #
-#   registered   -> the upgrade coordinator, which asks the running instance
-#                   to exit, boots the job out, renames this payload over the
-#                   live tree, bootstraps once and observes readiness.
-#   unregistered -> the commit verb on the staged binary: one atomic swap of
-#                   the payload onto the live path. This does NOT go through
-#                   `first-program`, so the first-install host-conflict and
-#                   management-lock composition is not exercised here; the only
-#                   gate is the preinstall residue check.
+#   registration.json exists
+#                  -> the upgrade coordinator, which asks the running instance
+#                     to exit, boots the job out, renames this payload over the
+#                     live tree, bootstraps once and observes readiness.
+#   no registration, live program present
+#                  -> `commit`: one atomic rename of the payload onto the live
+#                     path. No host-conflict probe runs. That is acceptable only
+#                     because an absent identity means no registered service of
+#                     ours is running from that path; a program left by an
+#                     earlier install whose identity was removed is NOT detected
+#                     here, so a stale instance from it would keep running.
+#   no registration, live program absent
+#                  -> `first-program`, which carries the gates a bare rename
+#                     lacks: private management lock, inventory check against
+#                     this build's embedded hashes, and a read-only host
+#                     conflict probe. It publishes by copying, so the stage is
+#                     removed only after success (see below).
 #
-#                   (This line previously claimed first-program publication,
-#                   which the script has never called. Corrected because the
-#                   difference is exactly the unwired first-install path, not a
-#                   wording detail.)
+# Both non-registered branches invoke the upgrade entry, because that is the
+# executable carrying the inventory; the commit binary in the payload has none.
 #
-# The upgrade path needs a running client to hand over. A logged-out user has
+# The upgrade branch needs a running client to hand over. A logged-out user has
 # none, so the coordinator refuses instead of guessing, the install fails, and
-# the old program stays in place. Upgrading therefore requires the user to be
-# logged in; there is no logged-out update path by design.
+# the old program stays in place. Upgrading therefore requires that user to be
+# logged in and the client running; there is no logged-out update path.
 set -eu
 PROGRAM='{program}'
 STAGE='{stage}'

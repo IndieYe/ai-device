@@ -805,6 +805,18 @@ def test_shipping_postinstall_names_the_outstanding_configuration(builder, tree,
     # the operator somewhere that refuses them.
     assert "Library/Application Support/ai-device-client/client.json" in postinstall
     assert "client_macos_register register" in postinstall
+    # The heredoc must be unquoted, or $PROGRAM prints literally and the
+    # operator is handed a command that cannot run.
+    assert "<<'OUTSTANDING'" not in postinstall
+    assert "cat >&2 <<OUTSTANDING" in postinstall
+    # The registrar reads these two keys literally and refuses any other path,
+    # so the notice has to name them; a bare "server_url and device_id" leaves
+    # the operator with a config that is rejected as "unexpected client paths".
+    assert '"state_dir"' in postinstall
+    assert '"token_file"' in postinstall
+    # An unquoted placeholder is parsed as a redirection by the shell.
+    assert "--user <that-user>" not in postinstall
+    assert "--user '<user>'" in postinstall
 
 
 def test_unregistered_branch_picks_a_primitive_that_matches_the_live_path(builder, tree, tmp_path):
