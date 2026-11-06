@@ -14,14 +14,29 @@ def test_upgrade_once_order(tmp_path, failure):
     native = Path(__file__).parents[1] / "native"
     build_id = "invalid" if failure == 13 else "sha256:" + "a" * 64
     bound = failure >= 14
+    # Call counts are indexed by the gate's call number, and `failure` IS that
+    # call number: the stand-in fails at call N, so the coordinator stops having
+    # made exactly N calls. Two exceptions, both because they fail before or
+    # outside the normal sequence:
+    #
+    #   0   nothing fails, so the count is the full walk (15).
+    #   13  the build id is rejected before any gated call runs (0).
+    #   14  the bound-identity path, which reaches 16 calls.
+    #   15/16 fail inside bound_once before upgrade_registered_once runs, so
+    #        they stop after its single gate call (1).
+    #
+    # `locate_bound_resources` is no longer among the calls: the installer hands
+    # the staged path in, so this coordinator never locates its own source.
+    # bound_once now reads the identity from that same supplied path, which is
+    # why the bound walk is one call shorter than it used to be (17 -> 16).
     expected_steps = (
-        18
+        16
         if failure == 14
-        else 2
+        else 1
         if bound
         else 0
         if failure == 13
-        else 16
+        else 15
         if failure == 0
         else failure
     )
@@ -33,9 +48,9 @@ def test_upgrade_once_order(tmp_path, failure):
         else "nil"
     )
     call = (
-        'upgrade_registered_bound_once("management",0,@{},&g,10,start,NULL)'
+        'upgrade_registered_bound_once("management",0,@{},&g,"fixed",10)'
         if bound
-        else f'upgrade_registered_once("management",0,@{{}},&g,@"1",@"{build_id}",10,start,NULL)'
+        else f'upgrade_registered_once("management",0,@{{}},&g,@"1",@"{build_id}",10,"fixed")'
     )
     harness = tmp_path / "upgrade.m"
     harness.write_text(
@@ -45,20 +60,19 @@ def test_upgrade_once_order(tmp_path, failure):
         "static int gate(void){return ++step!=failure;}\n"
         "static double lease_clock(void){return 0;}\n"
         "#define LEASE_ACCEPTED 1\n#define LEASE_BUSY 0\n"
+        "#define PROGRAM_COMMIT_OK 0\n#define PROGRAM_COMMIT_REFUSED 1\n#define PROGRAM_COMMIT_UNKNOWN 2\n"
         "static int registered_exit_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;return g->management==1 && g->start==2 && g->runtime==-1 && gate();}\n"
-        'static int locate_bound_resources(char *p,uid_t u){(void)u;strcpy(p,"fixed");return gate();}\n'
         "static int verify_resource_tree(const char *p){(void)p;return gate();}\n"
         "static int tree_owner_valid(const char *p,uid_t u,int d){(void)p;(void)u;(void)d;return gate();}\n"
         "static int exit_registered_original(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,double d){(void)m;(void)u;(void)p;(void)d;if(!gate())return 0;g->runtime=3;return 1;}\n"
         "static int registered_guards_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;return g->management==1 && g->start==2 && g->runtime==3 && gate();}\n"
-        "static int publish_registered_target(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,const char *s){(void)m;(void)u;(void)p;(void)g;(void)s;return gate()?0:70;}\n"
+        "static int commit_staged_program(const char *s,const char *p,uid_t o,int(*v)(const char*)){(void)s;(void)p;(void)o;(void)v;return gate()?PROGRAM_COMMIT_OK:PROGRAM_COMMIT_REFUSED;}\n"
         "static int registered_target_exact(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return gate();}\n"
-        "static int unload_registered_service_relay(const char *m,uid_t u,int fd,double d){(void)m;(void)u;(void)fd;(void)d;return gate();}\n"
-        "static int load_registered_service_relay(const char *m,uid_t u,int fd,double d){(void)m;(void)u;(void)fd;(void)d;return gate();}\n"
+        "static int unload_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;return gate();}\n"
+        "static int load_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;return gate();}\n"
         "static int registered_management_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;return g->management==1 && gate();}\n"
         "static int registered_management_confirmed(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}\n"
                 "static int handoff_registered_start(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;if(!gate())return 0;if(!registered_guards_current(m,u,p,g))return 0;g->start=-1;g->runtime=-1;return 1;}\n"
-        "static int start(void *p){(void)p;return gate();}\n"
         'static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d){(void)d;if(g->start>=0 || g->runtime>=0)return 0;if(!registered_management_current(m,u,p,g))return 0;if(bound && (![v isEqual:@"bound-2"] || ![b isEqual:@"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]))return 0;return gate();}\n'
         f'static NSDictionary *read_target_identity(const char *s,uid_t u){{if(strcmp(s,"fixed") || u!=0)return nil;return {identity_literal};}}\n'
         f'#include "{native / "client-macos-registered-upgrade.h"}"\n'
@@ -94,28 +108,29 @@ def test_upgrade_once_order(tmp_path, failure):
     assert steps == expected_steps
     # The stopping point decides the reported stage, and stages with an attempted
     # side effect must not be reported as a clean refusal.
+    #
+    # The mapping shifted when the coordinator stopped locating its own source:
+    # "bound resources unlocatable" is no longer a stop point, so every later
+    # gate call lands one step earlier. Each entry below was re-read from the
+    # harness rather than shifted by arithmetic.
     expected_code = {
         0: 0,   # OK
         14: 0,  # OK via the bound-identity path
         1: 1,   # REFUSED: exit-guard identity invalid
-        2: 1,   # REFUSED: bound resources unlocatable
-        3: 1,   # REFUSED: resource tree unverifiable
-        4: 1,   # REFUSED: tree ownership invalid
+        2: 1,   # REFUSED: resource tree unverifiable
+        3: 1,   # REFUSED: tree ownership invalid
+        4: 1,   # REFUSED: tree ownership invalid (second check)
         13: 1,  # REFUSED: invalid build id rejected before anything ran
         15: 1,  # REFUSED (bound): identity unreadable
         16: 1,  # REFUSED (bound): identity mismatch
-        5: 1,   # REFUSED: instance busy, exit never requested, nothing swapped
-        6: 2,   # EXIT_UNKNOWN: guards lost right after the lease
-        7: 3,   # UNLOAD_UNKNOWN: bootout failed, job state not proven
-        8: 4,   # AFTER_UNLOAD: unloaded, program still the old one
-        9: 5,   # PUBLISH_UNKNOWN: publication attempted and failed
-        10: 5,  # PUBLISH_UNKNOWN: published but not exact
-        # The handoff failed. The program IS published, but start/runtime were not
-        # released (both cases below leave start held). Reporting AFTER_HANDOFF
-        # here would tell recovery "locks are free, safe to bootstrap" and let it
-        # race a launcher blocked on start.lock.
-        11: 9,  # HANDOFF_UNKNOWN: release step failed
-        12: 9,  # HANDOFF_UNKNOWN: identity re-check after release failed
+        5: 2,   # EXIT_UNKNOWN: lease requested, outcome unconfirmed
+        6: 3,   # UNLOAD_UNKNOWN: bootout failed, job state not proven
+        7: 4,   # AFTER_UNLOAD: unloaded, program still the old one
+        8: 5,   # PUBLISH_UNKNOWN: publication attempted and failed
+        9: 5,   # PUBLISH_UNKNOWN: published but not exact
+        10: 9,  # HANDOFF_UNKNOWN: release step failed
+        11: 9,  # HANDOFF_UNKNOWN: identity re-check after release failed
+        12: 7,  # AFTER_LOAD: load attempted, outcome unknown
     }[failure]
     assert code == expected_code
 
@@ -134,26 +149,27 @@ static double lease_clock(void){return 0;}
 #define LEASE_BUSY 0
 #define LEASE_UNKNOWN -1
 static int registered_exit_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}
-static int locate_bound_resources(char *p,uid_t u){(void)u;strcpy(p,"fixed");return 1;}
+#define PROGRAM_COMMIT_OK 0
+#define PROGRAM_COMMIT_REFUSED 1
+#define PROGRAM_COMMIT_UNKNOWN 2
 static int verify_resource_tree(const char *p){(void)p;return 1;}
 static int tree_owner_valid(const char *p,uid_t u,int d){(void)p;(void)u;(void)d;return 1;}
 static int exit_registered_original(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,double d){(void)m;(void)u;(void)p;(void)g;(void)d;return LEASE_RESULT;}
 static int registered_guards_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}
-static int unload_registered_service_relay(const char *m,uid_t u,int fd,double d){(void)m;(void)u;(void)fd;(void)d;return 1;}
-static int publish_registered_target(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,const char *s){(void)m;(void)u;(void)p;(void)g;(void)s;return 1;}
+static int unload_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;return 1;}
+static int commit_staged_program(const char *s,const char *p,uid_t o,int(*v)(const char*)){(void)s;(void)p;(void)o;(void)v;return 0;}
 static int registered_target_exact(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}
 static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d){(void)m;(void)u;(void)p;(void)g;(void)v;(void)b;(void)d;return 1;}
 static int handoff_registered_start(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}
-static int load_registered_service_relay(const char *m,uid_t u,int fd,double d){(void)m;(void)u;(void)fd;(void)d;return 1;}
+static int load_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;return 1;}
 static int registered_management_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}
 static int registered_management_confirmed(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}
 static NSDictionary *read_target_identity(const char *s,uid_t u){(void)s;(void)u;return nil;}
-static int start(void *p){(void)p;return 1;}
 #include "NATIVE_HEADER"
 int main(void){@autoreleasepool {
     struct managed_guards g={1,2,-1};
     NSString *build=@"BUILD_ID";
-    int r=upgrade_registered_once("management",0,@{},&g,@"1",build,10,start,NULL);
+    int r=upgrade_registered_once("management",0,@{},&g,@"1",build,10,"fixed");
     printf("%d\\n",r);return 0;}}
 """
 
@@ -214,6 +230,7 @@ def test_real_upgrade_translation_unit_compiles(tmp_path):
         "client-macos-start-handoff.h",
         "client-macos-service-relay.h",
         "client-macos-target-identity.h",
+        "client-macos-program-commit.h",
         "client-macos-registered-upgrade.h",
     ]
     harness.write_text(
@@ -223,7 +240,12 @@ def test_real_upgrade_translation_unit_compiles(tmp_path):
         + "".join(f'#include "{native / name}"\n' for name in includes)
         + "int main(void) {(void)upgrade_registered_once;(void)upgrade_registered_bound_once;(void)upgrade_recover_after_stage;(void)prepare_registered;"
         "(void)handoff_registered_start;(void)request_bound_registered_start;"
-        "(void)unload_registered_service_relay;(void)load_registered_service_relay;return 0;}\n"
+        "(void)unload_registered_service_relay;(void)load_registered_service_relay;"
+        # The upgrade no longer publishes through publish_registered_target (it
+        # renames the staged payload instead), but the header stays in this unit
+        # because the repair entry uses it; reference it so -Wunused-function
+        # does not reject the translation unit.
+        + "(void)publish_registered_target;return 0;}\n"
     )
     subprocess.run(
         [
@@ -263,24 +285,23 @@ def test_upgrade_invalid_clock_stops_before_next_action(
         f"static double lease_clock(void){{return ++clocks=={failure_call} ? {invalid} : 0;}}\n"
         "#define LEASE_ACCEPTED 1\n#define LEASE_BUSY 0\n"
         "static int registered_exit_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}\n"
-        'static int locate_bound_resources(char *s,uid_t u){(void)u;strcpy(s,"fixed");return 1;}\n'
         "static int verify_resource_tree(const char *s){(void)s;return 1;}\n"
+        "#define PROGRAM_COMMIT_OK 0\n#define PROGRAM_COMMIT_REFUSED 1\n#define PROGRAM_COMMIT_UNKNOWN 2\n"
         "static int tree_owner_valid(const char *s,uid_t u,int d){(void)s;(void)u;(void)d;return 1;}\n"
         "static int exit_registered_original(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,double d){(void)m;(void)u;(void)p;(void)g;(void)d;actions++;return 1;}\n"
         "static int registered_guards_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}\n"
-        "static int publish_registered_target(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,const char *s){(void)m;(void)u;(void)p;(void)g;(void)s;actions++;return 0;}\n"
+        "static int commit_staged_program(const char *s,const char *p,uid_t o,int(*v)(const char*)){(void)s;(void)p;(void)o;(void)v;actions++;return 0;}\n"
         "static int registered_target_exact(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}\n"
         "static int registered_management_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}\n"
         "static int registered_management_confirmed(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}\n"
-        "static int unload_registered_service_relay(const char *m,uid_t u,int fd,double d){(void)m;(void)u;(void)fd;(void)d;actions++;return 1;}\n"
-        "static int load_registered_service_relay(const char *m,uid_t u,int fd,double d){(void)m;(void)u;(void)fd;(void)d;actions++;return 1;}\n"
-        "static int start(void *p){(void)p;return 1;}\n"
+        "static int unload_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;actions++;return 1;}\n"
+        "static int load_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;actions++;return 1;}\n"
         "static int handoff_registered_start(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;actions++;return 1;}\n"
         "static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d){(void)m;(void)u;(void)p;(void)g;(void)v;(void)b;(void)d;return 1;}\n"
         "static NSDictionary *read_target_identity(const char *s,uid_t u){(void)s;(void)u;return nil;}\n"
         f'#include "{native / "client-macos-registered-upgrade.h"}"\n'
         "int main(void){@autoreleasepool {(void)upgrade_registered_bound_once;(void)upgrade_recover_after_stage;struct managed_guards g={1,2,-1};"
-        'int r=upgrade_registered_once("unused",0,@{},&g,@"1",@"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",10,start,NULL);'
+        'int r=upgrade_registered_once("unused",0,@{},&g,@"1",@"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",10,"fixed");'
         # Any non-OK stage is a stop; OK(0) must never be reached here. The step
         # count is what proves nothing ran after the bad clock was observed.
         f"return r!=0 && actions=={expected_actions} && g.management==1 ? 0 : 1;}}}}\n"
@@ -322,23 +343,24 @@ static int confirmed_rc=1,guards_rc=1,handoff_rc=1,load_rc=1;
 static int handoff_calls=0,load_calls=0;
 static void unused_leaves(void);
 static int registered_exit_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 0;}
-static int locate_bound_resources(char *p,uid_t u){(void)u;strcpy(p,"fixed");return 0;}
+#define PROGRAM_COMMIT_OK 0
+#define PROGRAM_COMMIT_REFUSED 1
+#define PROGRAM_COMMIT_UNKNOWN 2
 static int verify_resource_tree(const char *p){(void)p;return 0;}
 static int tree_owner_valid(const char *p,uid_t u,int d){(void)p;(void)u;(void)d;return 0;}
 static int exit_registered_original(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,double d){(void)m;(void)u;(void)p;(void)g;(void)d;return 0;}
-static int publish_registered_target(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,const char *s){(void)m;(void)u;(void)p;(void)g;(void)s;return 0;}
+static int commit_staged_program(const char *s,const char *p,uid_t o,int(*v)(const char*)){(void)s;(void)p;(void)o;(void)v;return 0;}
 static int registered_target_exact(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 0;}
-static int unload_registered_service_relay(const char *m,uid_t u,int fd,double d){(void)m;(void)u;(void)fd;(void)d;return 0;}
-static int start(void *p){(void)p;return 1;}
+static int unload_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;return 0;}
 static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d){(void)m;(void)u;(void)p;(void)g;(void)v;(void)b;(void)d;return 0;}
 static NSDictionary *read_target_identity(const char *s,uid_t u){(void)s;(void)u;return nil;}
 static int registered_management_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 0;}
 static int registered_management_confirmed(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return confirmed_rc;}
 static int registered_guards_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return guards_rc;}
 static int handoff_registered_start(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;handoff_calls++;if(!handoff_rc)return 0;g->start=-1;g->runtime=-1;return 1;}
-static int load_registered_service_relay(const char *m,uid_t u,int fd,double d){(void)m;(void)u;(void)fd;(void)d;load_calls++;return load_rc;}
+static int load_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;load_calls++;return load_rc;}
 static double lease_clock(void){return 0;}
-static void unused_leaves(void){(void)registered_exit_current;(void)locate_bound_resources;(void)verify_resource_tree;(void)tree_owner_valid;(void)exit_registered_original;(void)publish_registered_target;(void)registered_target_exact;(void)unload_registered_service_relay;(void)start;(void)query_registered_ready;(void)read_target_identity;(void)registered_management_current;}
+static void unused_leaves(void){(void)registered_exit_current;(void)verify_resource_tree;(void)tree_owner_valid;(void)exit_registered_original;(void)commit_staged_program;(void)registered_target_exact;(void)unload_registered_service_relay;(void)query_registered_ready;(void)read_target_identity;(void)registered_management_current;}
 """
 
 

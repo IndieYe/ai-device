@@ -34,16 +34,19 @@ static int start_child_stop_child(pid_t child,int *status) {
     return start_child_reap(child,status,start_child_clock()+0.5);
 }
 static int request_bound_registered_start(const char *management,uid_t owner,int management_fd,
-                                     double timeout) {
-    if (!isfinite(timeout) || timeout<=0 || timeout>10 ||
+                                     const char *tree,double timeout) {
+    if (!isfinite(timeout) || timeout<=0 || timeout>10 || !tree || !*tree ||
         !private_lock_matches(management_fd,management,"management.lock",owner)) return 0;
     double start=start_child_clock();
     if (start<0) return 0;
     double deadline=start+timeout;
-    char source[PATH_MAX],python[PATH_MAX];
-    if (!locate_bound_resources(source,owner) || !verify_resource_tree(source) ||
-        !tree_owner_valid(source,owner,0) ||
-        snprintf(python,sizeof(python),"%s/runtime/bin/python3",source)>=(int)sizeof(python) ||
+    char python[PATH_MAX];
+    /* The interpreter comes from the caller's verified tree rather than being
+     * self-located beside this executable: a shipping package carries one tree
+     * and nothing beside the entry to find. */
+    if (!verify_resource_tree(tree) ||
+        !tree_owner_valid(tree,owner,0) ||
+        snprintf(python,sizeof(python),"%s/runtime/bin/python3",tree)>=(int)sizeof(python) ||
         !private_lock_matches(management_fd,management,"management.lock",owner) ||
         start_child_clock()>=deadline) return 0;
     /* Duplicate above fd4 and stdio so dup2 ordering cannot clobber the

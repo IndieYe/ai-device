@@ -40,7 +40,9 @@ static int tree_owner_valid(const char *path, uid_t owner, int depth) {
 }
 #include "client-macos-program-commit.h"
 static int commit_calls = 0;
-static int substitute_commit(const char *stage, const char *program, uid_t owner) {
+static int substitute_commit(const char *stage, const char *program, uid_t owner,
+                             int (*verify)(const char *root)) {
+    (void)verify;
     (void)stage;(void)program;(void)owner;commit_calls++;return PROGRAM_COMMIT_OK;
 }
 /* The entry is a thin wrapper; count its single call without redefining the
@@ -56,7 +58,7 @@ int main(int argc, char **argv) {
         printf("rc=%d calls=%d\n", rc, commit_calls);
         return 0;
     }
-    int result = commit_staged_program(argv[1], argv[2], (uid_t)atoi(argv[3]));
+    int result = commit_staged_program(argv[1], argv[2], (uid_t)atoi(argv[3]), NULL);
     printf("%d\n", result);
     return 0;
 }

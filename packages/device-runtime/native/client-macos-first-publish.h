@@ -21,15 +21,20 @@ static int first_publication_current(void *opaque) {
         registration_state(context->management,context->owner,context->management_fd)==0;
 }
 static int publish_first_program(const char *management,uid_t owner,int management_fd,
-                                 const char *target,int (*conflicts_clear)(void *),void *opaque) {
+                                 const char *target,const char *source,
+                                 int (*conflicts_clear)(void *),void *opaque) {
     struct first_publication_context context={management,owner,management_fd,target,conflicts_clear,opaque};
-    if (!target || !first_publication_current(&context)) return fail("first installation preflight refused");
+    if (!target || !source || !first_publication_current(&context)) return fail("first installation preflight refused");
     NSString *program=[NSString stringWithUTF8String:target];
     NSString *parent=[program stringByDeletingLastPathComponent];
     if (!bound_directory([parent fileSystemRepresentation],owner))
         return fail("first installation parent invalid");
-    char source[PATH_MAX];
-    if (!locate_bound_resources(source,owner)) return fail("fixed resources unavailable");
+    /* `source` is the tree this package staged, passed in by the caller.
+     *
+     * It used to be self-located beside this executable, which only worked while
+     * a package shipped a second copy of the program tree next to the entry. A
+     * shipping package now carries exactly one tree, so the publisher is told
+     * which verified tree to publish instead of guessing. */
     NSString *stage=[parent stringByAppendingPathComponent:
         [NSString stringWithFormat:@".ai-device-client-stage-%ld",(long)getpid()]];
     return publish_guarded_target_checked(source,target,[stage fileSystemRepresentation],&owner,1,
@@ -41,17 +46,17 @@ static int publish_first_program(const char *management,uid_t owner,int manageme
  * create-only publisher; caller must explicitly choose observation.
  */
 static inline int observe_unregistered_program(const char *management,uid_t owner,int management_fd,
-                                               const char *target,int (*conflicts_clear)(void *),void *opaque) {
-    if (!target || !conflicts_clear || registration_state(management,owner,management_fd)!=0)
+                                               const char *target,const char *source,
+                                               int (*conflicts_clear)(void *),void *opaque) {
+    if (!target || !source || !conflicts_clear || registration_state(management,owner,management_fd)!=0)
         return fail("unregistered observation refused");
     struct stat before,after;
     if (lstat(target,&before) || !S_ISDIR(before.st_mode))
         return fail("unregistered target is unknown");
     NSString *program=[NSString stringWithUTF8String:target];
     NSString *parent=[program stringByDeletingLastPathComponent];
-    char source[PATH_MAX];
     if (!bound_directory([parent fileSystemRepresentation],owner) ||
-        !locate_bound_resources(source,owner) || !verify_resource_tree(source) ||
+        !verify_resource_tree(source) ||
         !tree_owner_valid(source,owner,0) || !conflicts_clear(opaque) ||
         registration_state(management,owner,management_fd)!=0 ||
         !verify_resource_tree(target) || !tree_owner_valid(target,owner,0) ||

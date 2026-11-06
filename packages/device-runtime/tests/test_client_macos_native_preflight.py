@@ -841,6 +841,7 @@ def test_registered_native_exit_acquires_runtime_without_python_coordinator(
     harness = tmp_path / "registered-exit.m"
     harness.write_text(
         "#define main offline_writer_main\n#define EMBEDDED_RESOURCE_CHECK\n"
+        f'#define STAGE_SOURCE "{source}"\n'
         f'#include "{native / "client-macos-writer-probe.c"}"\n'
         "#undef main\n#define getpwnam test_getpwnam\n#define INSTALL_PREFLIGHT_LIBRARY\n"
         "#define acquire_registered_runtime productionAcquireRuntime\n"
@@ -866,15 +867,16 @@ def test_registered_native_exit_acquires_runtime_without_python_coordinator(
         f'#include "{native / "client-macos-recovery-observe.h"}"\n'
         # No launchctl here: the relay header is skipped and the two fixed
         # functions it declares are supplied locally with test behaviour.
-        "static int unload_registered_service_relay(const char *m,uid_t u,int fd,double d) {\n"
-        ' (void)m;(void)u;(void)fd;(void)d;puts("SERVICE_UNLOADED");fflush(stdout);return 1;}\n'
-        "static int load_registered_service_relay(const char *m,uid_t u,int fd,double d) {\n"
-        ' (void)m;(void)u;(void)fd;(void)d;puts("SERVICE_LOADED");fflush(stdout);return 1;}\n'
+        "static int unload_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d) {\n"
+        ' (void)m;(void)u;(void)fd;(void)d;if(!t||!*t)return 0;puts("SERVICE_UNLOADED");fflush(stdout);return 1;}\n'
+        "static int load_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d) {\n"
+        ' (void)m;(void)u;(void)fd;(void)d;if(!t||!*t)return 0;puts("SERVICE_LOADED");fflush(stdout);return 1;}\n'
+        f'#include "{native / "client-macos-program-commit.h"}"\n'
         f'#include "{native / "client-macos-registered-upgrade.h"}"\n'
         f'#include "{native / "client-macos-start-child.h"}"\n'
-        "static int test_start_child(const char *m,uid_t u,int fd,double timeout) {\n"
-        ' (void)request_bound_registered_start;if(timeout<=0 || timeout>10 || !private_lock_matches(fd,m,"management.lock",u))return 0;\n'
-        ' if(getenv("REAL_HELPER"))return request_bound_registered_start(m,u,fd,timeout);\n'
+        "static int test_start_child(const char *m,uid_t u,int fd,const char *tree,double timeout) {\n"
+        ' (void)request_bound_registered_start;if(!tree || timeout<=0 || timeout>10 || !private_lock_matches(fd,m,"management.lock",u))return 0;\n'
+        ' if(getenv("REAL_HELPER"))return request_bound_registered_start(m,u,fd,STAGE_SOURCE,timeout);\n'
         ' puts("PUBLISHED_START");fflush(stdout);\n'
         " struct pollfd input={0,POLLIN,0};char c;return poll(&input,1,5000)>0 && read(0,&c,1)==1;}\n"
         "#define request_bound_registered_start test_start_child\n"
@@ -889,8 +891,12 @@ def test_registered_native_exit_acquires_runtime_without_python_coordinator(
         " NSDictionary *paths=prepare_start_barrier(argv[1],getuid(),&g);if(!paths)return 70;\n"
         " paths=managedPaths(g.identity);\n"
         ' if(getenv("BOUND_READY")) {\n'
-        " double deadline=lease_clock()+30;struct registered_start_context start={argv[1],getuid(),paths,&g,deadline,0};\n"
-        " if(upgrade_registered_bound_once(argv[1],getuid(),paths,&g,deadline,request_registered_start_once,&start)!=UPGRADE_STAGE_OK)return 84;\n"
+        " double deadline=lease_clock()+30;struct registered_start_context start={argv[1],getuid(),paths,&g,STAGE_SOURCE,deadline,0};\n"
+        # The coordinator no longer takes a start callback at all, so this helper
+        # is referenced only to keep the translation unit free of an unused
+        # function under -Werror. It must never be invoked.
+        " (void)request_registered_start_once;\n"
+        " if(upgrade_registered_bound_once(argv[1],getuid(),paths,&g,STAGE_SOURCE,deadline)!=UPGRADE_STAGE_OK)return 84;\n"
         # The coordinator reloads via the relay, never via this kickstart
         # callback, so the context must remain completely untouched.
         " if(start.attempted)return 87;\n"
@@ -1147,7 +1153,15 @@ def test_registered_native_exit_acquires_runtime_without_python_coordinator(
             else "A"
         )
         stages = list(tmp_path.glob(".ai-device-client-stage-*"))
-        if case in ("publish", "publish-ready", "bound-ready", "bound-launcher", "bound-helper"):
+        if case in ("bound-ready", "bound-launcher", "bound-helper"):
+            # The registered upgrade publishes with one RENAME_SWAP, not a copy
+            # through a pid-named stage directory. That is why no
+            # `.ai-device-client-stage-*` exists here: the previous tree ends up
+            # at the source it was swapped from, which is the only place it can
+            # be inspected afterwards.
+            assert not stages
+            assert (source / "version").read_text() == "A"
+        elif case in ("publish", "publish-ready"):
             assert len(stages) == 1
             assert (stages[0] / "version").read_text() == "A"
         else:
@@ -1525,9 +1539,9 @@ def test_first_program_publication_requires_explicit_absence_and_conflict_gate(t
         ' const char *v=!strcmp(p->mode,"observe-late-content")?"C":"B";if(write(f,v,1)!=1){close(f);return 0;}close(f);}\n'
         " return 1;}\n"
         "int main(int argc,char **argv) {@autoreleasepool {\n"
-        " (void)managedPaths;if(argc!=4)return 64;int fd=acquireManagement(argv[1],getuid());if(fd<0)return 70;\n"
+        " (void)managedPaths;if(argc!=5)return 64;int fd=acquireManagement(argv[1],getuid());if(fd<0)return 70;\n"
         " struct probe probe={argv[1],argv[3],0};\n"
-        ' int result=(!strncmp(argv[3],"observe-",8)?observe_unregistered_program:publish_first_program)(argv[1],getuid(),fd,argv[2],\n'
+        ' int result=(!strncmp(argv[3],"observe-",8)?observe_unregistered_program:publish_first_program)(argv[1],getuid(),fd,argv[2],argv[4],\n'
         ' !strcmp(argv[3],"no-adapter")?NULL:conflicts,&probe);\n'
         " if(acquireManagement(argv[1],getuid())!=-2)return 71;\n"
         ' close(fd);printf("%d\\n",result);return 0;}}\n'
@@ -1553,7 +1567,7 @@ def test_first_program_publication_requires_explicit_absence_and_conflict_gate(t
         capture_output=True,
     )
     result = subprocess.run(
-        [str(binary), str(management), str(target), case],
+        [str(binary), str(management), str(target), case, str(source)],
         capture_output=True,
         text=True,
         check=True,

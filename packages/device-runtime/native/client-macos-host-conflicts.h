@@ -36,16 +36,19 @@ static int conflict_stop_child(pid_t child,int *status) {
     return conflict_reap(child,status,conflict_clock()+0.5);
 }
 static int check_bound_host_conflicts(const char *management,uid_t owner,int management_fd,
-                                     int confirmed,double timeout) {
-    if (confirmed!=1 || !isfinite(timeout) || timeout<=0 || timeout>10 ||
+                                     const char *tree,int confirmed,double timeout) {
+    if (confirmed!=1 || !tree || !*tree || !isfinite(timeout) || timeout<=0 || timeout>10 ||
         !private_lock_matches(management_fd,management,"management.lock",owner)) return 0;
     double start=conflict_clock();
     if (!isfinite(start) || start<0) return 0;
     double deadline=start+timeout;
-    char source[PATH_MAX],python[PATH_MAX];
-    if (!locate_bound_resources(source,owner) || !verify_resource_tree(source) ||
-        !tree_owner_valid(source,owner,0) ||
-        snprintf(python,sizeof(python),"%s/runtime/bin/python3",source)>=(int)sizeof(python) ||
+    char python[PATH_MAX];
+    /* The interpreter comes from the caller's verified tree instead of being
+     * self-located beside this executable. A shipping package carries one tree,
+     * so there is nothing beside the entry to find. */
+    if (!verify_resource_tree(tree) ||
+        !tree_owner_valid(tree,owner,0) ||
+        snprintf(python,sizeof(python),"%s/runtime/bin/python3",tree)>=(int)sizeof(python) ||
         !private_lock_matches(management_fd,management,"management.lock",owner) ||
         !conflict_time_remaining(deadline)) return 0;
     int output[2];

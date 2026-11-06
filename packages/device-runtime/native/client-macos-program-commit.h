@@ -41,8 +41,18 @@
  * Returns UNKNOWN when the rename itself failed: renamex_np is atomic, but a
  * failure after the kernel accepted the request cannot be distinguished from a
  * failure before it by exit status alone, so the caller must verify rather than
- * retry. */
-static inline int commit_staged_program(const char *stage, const char *program, uid_t owner) {
+ * retry.
+ *
+ * `verify` is optional. The plain commit exists to publish a tree that the
+ * Installer just wrote, and its caller has no inventory to compare against, so
+ * it passes NULL and keeps the original owner/structure checks. The registered
+ * upgrade path passes `verify_resource_tree` because it publishes a tree it did
+ * not write itself; without that callback the only remaining check would be
+ * ownership, which is weaker than what the upgrade used to get from shipping a
+ * second copy of the tree. Called after the path and ownership checks and
+ * immediately before the swap, so a refusal here has still performed no rename. */
+static inline int commit_staged_program(const char *stage, const char *program, uid_t owner,
+                                        int (*verify)(const char *root)) {
     if (!stage || !program || !*stage || !*program) return PROGRAM_COMMIT_REFUSED;
     /* Refuse identical paths: committing a stage onto itself would be a no-op
      * reported as success, which is the worst possible answer here. */
@@ -85,6 +95,10 @@ static inline int commit_staged_program(const char *stage, const char *program, 
         parent_info.st_uid != owner || (parent_info.st_mode & 0022) ||
         !bound_directory(parent, owner))
         return PROGRAM_COMMIT_REFUSED;
+    /* The caller's optional inventory check runs last among the pre-swap
+     * checks: it is the most expensive, and reaching it means the cheaper path
+     * and ownership checks already passed. Refusal here performs no rename. */
+    if (verify && !verify(stage)) return PROGRAM_COMMIT_REFUSED;
     if (renamex_np(stage, program, flags)) return PROGRAM_COMMIT_UNKNOWN;
     return PROGRAM_COMMIT_OK;
 }

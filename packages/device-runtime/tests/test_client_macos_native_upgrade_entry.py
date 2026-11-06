@@ -14,8 +14,10 @@ pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="Darwin compile
     [
         ("missing-confirm", ["upgrade-registered-program"], 64),
         ("wrong-confirm", ["upgrade-registered-program", "--force"], 64),
-        ("extra-arg", ["upgrade-registered-program", "--confirm-idle-instance-exits", "x"], 64),
-        ("ordinary-user", ["upgrade-registered-program", "--confirm-idle-instance-exits"], 70),
+        ("no-source", ["upgrade-registered-program", "--confirm-idle-instance-exits"], 64),
+        ("relative-source", ["upgrade-registered-program", "--confirm-idle-instance-exits", "stage"], 70),
+        ("extra-arg", ["upgrade-registered-program", "--confirm-idle-instance-exits", "/s", "x"], 64),
+        ("ordinary-user", ["upgrade-registered-program", "--confirm-idle-instance-exits", "/s"], 70),
     ],
 )
 def test_upgrade_entry_refuses_without_effect(tmp_path, case, args, expected):
@@ -35,10 +37,11 @@ def test_upgrade_entry_refuses_without_effect(tmp_path, case, args, expected):
         "static double lease_clock(void){return -1;}\n"
         "static int coordinator_calls=0;\n"
         "static int coordinator_stage=UPGRADE_STAGE_OK;\n"
+        "static const char *last_source=NULL;\n"
         "static int recovery_calls=0;\n"
-        "static int upgrade_registered_bound_once(const char *m,uid_t u,NSDictionary *p,"
-        "struct managed_guards *g,double d,int (*s)(void *),void *c){"
-        "(void)m;(void)u;(void)p;(void)g;(void)d;(void)s;(void)c;coordinator_calls++;"
+        "static int upgrade_registered_staged_once(const char *m,uid_t u,NSDictionary *p,"
+        "struct managed_guards *g,const char *source,double d){"
+        "(void)m;(void)u;(void)p;(void)g;(void)d;last_source=source;coordinator_calls++;"
         "return coordinator_stage;}\n"
         "static int recovery_rc=0;\n"
         "static int upgrade_recover_after_stage(const char *m,uid_t u,NSDictionary *p,"
@@ -91,9 +94,9 @@ def test_upgrade_entry_reports_unknown_without_claiming_ready(tmp_path):
         "struct managed_guards *g){(void)m;(void)u;(void)g;return @{};}\n"
         "static double lease_clock(void){return 1;}\n"
         "static int recovery_calls=0;\n"
-        "static int upgrade_registered_bound_once(const char *m,uid_t u,NSDictionary *p,"
-        "struct managed_guards *g,double d,int (*s)(void *),void *c){"
-        "(void)m;(void)u;(void)p;(void)g;(void)d;(void)s;(void)c;"
+        "static int upgrade_registered_staged_once(const char *m,uid_t u,NSDictionary *p,"
+        "struct managed_guards *g,const char *source,double d){"
+        "(void)m;(void)u;(void)p;(void)g;(void)source;(void)d;"
         "return UPGRADE_STAGE_REFUSED;}\n"
         "static int upgrade_recover_after_stage(const char *m,uid_t u,NSDictionary *p,"
         "struct managed_guards *g,int stage,double d){"
@@ -122,7 +125,7 @@ def test_upgrade_entry_reports_unknown_without_claiming_ready(tmp_path):
         capture_output=True,
     )
     result = subprocess.run(
-        [str(binary), "upgrade-registered-program", "--confirm-idle-instance-exits"],
+        [str(binary), "upgrade-registered-program", "--confirm-idle-instance-exits", "/staged"],
         check=False,
         capture_output=True,
         text=True,

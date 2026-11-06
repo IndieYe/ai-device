@@ -19,7 +19,6 @@ pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="Foundation")
         "guard-after",
         "source-bad",
         "target-bad",
-        "identity",
         "start-held",
         "runtime-held",
         "query-expired",
@@ -40,12 +39,10 @@ def test_recovery_observation_no_replay(tmp_path, case):
         "(void)m;(void)u;(void)p;(void)g;checks++;"
         f"if(checks==3 && {int(case == 'guard-expired')})clock_now=2;"
         f"return {'0' if case == 'guard-before' else 'checks<3' if case == 'guard-after' else '1'};}}\n"
-        'static int locate_bound_resources(char *out,uid_t u) {(void)u;strcpy(out,"source");return 1;}\n'
         "static int reads=0;static NSDictionary *read_target_identity(const char *p,uid_t u) {(void)u;reads++;"
-        f"if(reads==3 && {int(case == 'tree-expired')})clock_now=2;"
-        f'if(!strcmp(p,"source") && {int(case == "source-bad")})return nil;'
+        f"if(reads==2 && {int(case == 'tree-expired')})clock_now=2;"
+        f'if(!strcmp(p,"target") && {int(case == "source-bad")})return nil;'
         f'if(!strcmp(p,"target") && {int(case == "target-bad")})return nil;'
-        f'if(!strcmp(p,"target") && {int(case == "identity")})return @{{@"version":@"other"}};'
         'return @{@"version":@"1",@"build_id":@"build"};}\n'
         "static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d) {"
         "(void)m;(void)u;(void)p;(void)g;(void)v;(void)b;(void)d;queries++;"
@@ -81,7 +78,12 @@ def test_recovery_observation_no_replay(tmp_path, case):
     subprocess.run([str(binary)], check=True, capture_output=True, timeout=3)
 
 
-@pytest.mark.parametrize("failure_call", [1, 2, 3, 4])
+# The observer reads the clock at four points: the entry deadline check, the
+# post-identity check, the post-query check, and the final stability check.
+# Reading the live tree once (instead of twice, source and target) removed one
+# of them, so the parametrisation covers exactly the readings that still exist.
+# Covering a fifth would assert on a call that is no longer made.
+@pytest.mark.parametrize("failure_call", [1, 2, 3])
 @pytest.mark.parametrize("invalid", ["-1", "NAN", "INFINITY"])
 def test_recovery_invalid_clock_never_reports_exact(tmp_path, failure_call, invalid):
     header = Path(__file__).parents[1] / "native/client-macos-recovery-observe.h"
@@ -92,7 +94,6 @@ def test_recovery_invalid_clock_never_reports_exact(tmp_path, failure_call, inva
         "static int calls=0;\n"
         f"static double lease_clock(void){{return ++calls=={failure_call} ? {invalid} : 0;}}\n"
         "static int registered_management_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}\n"
-        'static int locate_bound_resources(char *s,uid_t u){(void)u;strcpy(s,"source");return 1;}\n'
         "static NSDictionary *read_target_identity(const char *s,uid_t u){(void)s;(void)u;return @{};}\n"
         "static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d){(void)m;(void)u;(void)p;(void)g;(void)v;(void)b;(void)d;return 1;}\n"
         f'#include "{header}"\n'

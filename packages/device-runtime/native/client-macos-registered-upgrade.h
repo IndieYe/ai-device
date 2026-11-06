@@ -53,25 +53,34 @@ static int upgrade_wait_ready(const char *management,uid_t manager,NSDictionary 
  * purpose: the leaf observables are supplied by the enclosing translation unit
  * so tests can substitute them without pulling in lock or launchd code. */
 #include "client-macos-upgrade-stages.h"
+/* The commit primitive and its result codes are supplied by the enclosing
+ * translation unit (client-macos-installer.m includes it before this header).
+ * Kept out of here on purpose: tests substitute the commit with a recording
+ * stand-in, and including the real definition would collide with it. */
 
 static inline int upgrade_registered_once(const char *management,uid_t manager,
                                    NSDictionary *paths,struct managed_guards *guards,
                                    NSString *version,NSString *build,double deadline,
-                                   int (*request_start)(void *),void *start_context) {
-    (void)request_start;
-    (void)start_context;
+                                   const char *source_path) {
     if (![version isKindOfClass:[NSString class]] || !version.length ||
         ![build isKindOfClass:[NSString class]] || build.length!=71 ||
         ![build hasPrefix:@"sha256:"] ||
         [[build substringFromIndex:7] rangeOfCharacterFromSet:
             [[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"] invertedSet]].location!=NSNotFound ||
         !isfinite(deadline) || !upgrade_time_remaining(deadline) ||
+        !source_path || !*source_path ||
         !registered_exit_current(management,manager,paths,guards)) return UPGRADE_STAGE_REFUSED;
-    /* Validate immutable input BEFORE irreversibly requesting the old exit. */
-    char source[PATH_MAX];
-    if (!locate_bound_resources(source,manager) || !verify_resource_tree(source) ||
-        !tree_owner_valid(source,manager,0) || !upgrade_time_remaining(deadline))
-        return UPGRADE_STAGE_REFUSED;
+    /* Validate immutable input BEFORE irreversibly requesting the old exit.
+     *
+     * The source is a parameter rather than a self-located bound tree: the
+     * shipping package carries exactly one tree (the payload it staged at
+     * `source_path`) instead of also embedding a copy beside this executable.
+     * The embedded inventory is still what `verify_resource_tree` compares
+     * against, so a source that does not match this build is refused here, and
+     * ownership is still checked against root. */
+    if (!verify_resource_tree(source_path) ||
+        !tree_owner_valid(source_path,manager,0) ||
+        !upgrade_time_remaining(deadline)) return UPGRADE_STAGE_REFUSED;
     /* A busy instance never accepted the exit request, so nothing was
      * requested and nothing was swapped: that is a clean refusal, and it is the
      * answer the requirement calls for ("busy refuses the upgrade, keeps normal
@@ -86,15 +95,35 @@ static inline int upgrade_registered_once(const char *management,uid_t manager,
         !upgrade_time_remaining(deadline)) return UPGRADE_STAGE_EXIT_UNKNOWN;
     /* No restart source may survive the swap: unload before publishing. A
      * failed unload does NOT prove the job is still loaded, so its state is
-     * unknown. Loading the definition here could start a second instance. */
-    if (!unload_registered_service_relay(management,manager,guards->management,deadline))
+     * unknown. Loading the definition here could start a second instance.
+     *
+     * The relay runs the staged source: it is the tree this package wrote, and
+     * it is the only one verified to match this build before the exit request.
+     * Nothing lives beside the upgrade entry any more, so it cannot self-locate
+     * an interpreter to boot the job out with. */
+    if (!unload_registered_service_relay(management,manager,guards->management,
+            source_path,deadline))
         return UPGRADE_STAGE_UNLOAD_UNKNOWN;
     if (!registered_guards_current(management,manager,paths,guards) ||
         !upgrade_time_remaining(deadline)) return UPGRADE_STAGE_AFTER_UNLOAD;
     /* Publication is the point of no return for the program tree: it may have
      * replaced the tree and then failed verification, so the on-disk version is
-     * no longer certain and must not be loaded blindly. */
-    if (publish_registered_target(management,manager,paths,guards,source) ||
+     * no longer certain and must not be loaded blindly.
+     *
+     * This is a single RENAME_SWAP of the staged payload, not a copy. The
+     * Installer already wrote that tree at the stage path, so copying it again
+     * would burn another full tree of I/O and leave a second one behind on every
+     * upgrade. `commit_staged_program` takes the inventory check as a callback
+     * so the rename is still refused unless the staged content matches this
+     * build.
+     *
+     * After the swap the PREVIOUS tree sits at the stage path, so `source_path`
+     * no longer addresses what was just published. Everything below reads the
+     * live path through `registered_target_exact`, never the source again. */
+    int committed=commit_staged_program(source_path,
+        [paths[@"program"] fileSystemRepresentation],
+        [paths[@"management_owner"] unsignedIntValue],verify_resource_tree);
+    if (committed!=PROGRAM_COMMIT_OK ||
         !registered_target_exact(management,manager,paths,guards) ||
         !upgrade_time_remaining(deadline)) return UPGRADE_STAGE_PUBLISH_UNKNOWN;
     /* Release start/runtime BEFORE loading the job, otherwise the launcher
@@ -111,8 +140,12 @@ static inline int upgrade_registered_once(const char *management,uid_t manager,
      * avoid. Report the unknown stage instead and let recovery refuse. */
     if (!handoff_registered_start(management,manager,paths,guards)) return UPGRADE_STAGE_HANDOFF_UNKNOWN;
     /* Reload starts exactly once: bootstrap loads the definition and honours
-     * RunAtLoad. It must not be replayed on an unknown outcome. */
-    if (!load_registered_service_relay(management,manager,guards->management,deadline))
+     * RunAtLoad. It must not be replayed on an unknown outcome.
+     *
+     * The relay runs the live program path, which is the tree just published
+     * and verified by `registered_target_exact` above. */
+    if (!load_registered_service_relay(management,manager,guards->management,
+            [paths[@"program"] fileSystemRepresentation],deadline))
         return UPGRADE_STAGE_AFTER_LOAD;
     if (!registered_management_current(management,manager,paths,guards) ||
         !upgrade_time_remaining(deadline)) return UPGRADE_STAGE_AFTER_LOAD;
@@ -186,22 +219,60 @@ static inline int upgrade_recover_after_stage(const char *management,uid_t manag
     if (!registered_management_confirmed(management,manager,paths,guards)) return 0;
     if (!upgrade_time_remaining(deadline)) return 0;
     /* Exactly one bootstrap of the same definition; never retried here, and the
-     * result is a load receipt only, never a readiness claim. */
-    return load_registered_service_relay(management,manager,guards->management,deadline);
+     * result is a load receipt only, never a readiness claim.
+     *
+     * The relay runs the live program path. For AFTER_HANDOFF that is the newly
+     * published tree; for AFTER_UNLOAD publication never started, so it is still
+     * the previous tree that is about to be restarted. In both cases it is the
+     * tree the definition actually points at, which is what the helper must use.
+     */
+    return load_registered_service_relay(management,manager,guards->management,
+        [paths[@"program"] fileSystemRepresentation],deadline);
 }
 
-/* Preferred caller interface: identity comes from the inventoried bound tree.
+/* Caller interface where the identity is read from the caller's tree.
  * Assumes immutable trusted installer resources throughout this one attempt.
+ *
+ * The tree is a parameter, like the staged variant: a shipping package carries
+ * one tree and nothing beside this executable, so `locate_bound_resources`
+ * could not supply it. `read_target_identity` still verifies the whole tree
+ * against the inventory compiled into this binary before the identity is used.
  */
 static inline int upgrade_registered_bound_once(const char *management,uid_t manager,
                                          NSDictionary *paths,struct managed_guards *guards,
-                                         double deadline,int (*request_start)(void *),void *context) {
-    if (!isfinite(deadline) || !upgrade_time_remaining(deadline) ||
+                                         const char *source,double deadline) {
+    if (!isfinite(deadline) || !upgrade_time_remaining(deadline) || !source || !*source ||
         !registered_exit_current(management,manager,paths,guards)) return UPGRADE_STAGE_REFUSED;
-    char source[PATH_MAX];
-    if (!locate_bound_resources(source,manager)) return UPGRADE_STAGE_REFUSED;
     NSDictionary *identity=read_target_identity(source,manager);
     if (!identity || !upgrade_time_remaining(deadline)) return UPGRADE_STAGE_REFUSED;
     return upgrade_registered_once(management,manager,paths,guards,
-        identity[@"version"],identity[@"build_id"],deadline,request_start,context);
+        identity[@"version"],identity[@"build_id"],deadline,source);
+}
+
+/* Installer-driven variant: the source is the payload this very package staged.
+ *
+ * The upgrade layer deliberately does NOT ship a second copy of the program
+ * tree. `resources/client-tree` inside the entry therefore does not exist, and
+ * `locate_bound_resources` cannot supply the source. Instead the caller passes
+ * the stage path the Installer just populated. That keeps the package at one
+ * tree (the entry's embedded inventory is ~300 KB versus ~88 MB for the tree
+ * itself) and removes the possibility of the two copies disagreeing.
+ *
+ * The trust boundary is unchanged in substance but moves: the source is no
+ * longer "whatever sits next to my executable" but "the path root passed on
+ * argv". It is still verified before any irreversible step by exactly the same
+ * checks -- embedded inventory match, root ownership, no group/other write --
+ * and the path is supplied by the Installer's own postinstall, not by an
+ * environment variable or an unprivileged caller. A caller that lies about the
+ * stage path can only point at a tree that fails those checks.
+ */
+static inline int upgrade_registered_staged_once(const char *management,uid_t manager,
+                                          NSDictionary *paths,struct managed_guards *guards,
+                                          const char *source,double deadline) {
+    if (!isfinite(deadline) || !upgrade_time_remaining(deadline) || !source || !*source ||
+        !registered_exit_current(management,manager,paths,guards)) return UPGRADE_STAGE_REFUSED;
+    NSDictionary *identity=read_target_identity(source,manager);
+    if (!identity || !upgrade_time_remaining(deadline)) return UPGRADE_STAGE_REFUSED;
+    return upgrade_registered_once(management,manager,paths,guards,
+        identity[@"version"],identity[@"build_id"],deadline,source);
 }

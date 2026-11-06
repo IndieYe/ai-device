@@ -393,13 +393,13 @@ def test_status_dir_mode_matches_the_registration_contract(builder, tree, tmp_pa
     assert 'mkdir -p -m 0700 "$STATUS_DIR"' in postinstall
 
 
-def test_upgrade_payload_keeps_the_tree_beside_the_entry(builder, tree, tmp_path):
-    """The entry resolves resources relative to itself, at a version-free path.
+def test_upgrade_payload_ships_the_entry_without_a_copy_of_the_tree(builder, tree, tmp_path):
+    """One install carries exactly one tree.
 
-    `locate_bound_resources` uses `<exe dir>/resources/client-tree`, and the
-    entry cannot live inside the program tree it replaces. Emitting it without
-    that sibling tree would produce a binary that is present but refuses every
-    call, so the layout is asserted rather than assumed.
+    The entry embeds the inventory of the tree it will publish and is handed the
+    staged payload path on argv, so it does not need -- and must not ship -- a
+    second copy of that tree beside itself. A copy would double an 88 MB payload
+    and become a second source that could disagree with the staged one.
     """
 
     calls = []
@@ -416,7 +416,7 @@ def test_upgrade_payload_keeps_the_tree_beside_the_entry(builder, tree, tmp_path
             return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
         if argv[0].endswith("pkgutil"):
             payload = Path(argv[-1]) / "Payload" / builder.UPGRADE_ROOT.lstrip("/")
-            (payload / "resources" / "client-tree").mkdir(parents=True, exist_ok=True)
+            payload.mkdir(parents=True, exist_ok=True)
             (payload / builder.UPGRADE_ENTRY).write_bytes(b"binary")
             return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
         if argv[0].endswith("lsbom"):
@@ -427,7 +427,11 @@ def test_upgrade_payload_keeps_the_tree_beside_the_entry(builder, tree, tmp_path
     builder.build_upgrade_payload(tree, output, run=run)
     root = output / "root" / builder.UPGRADE_ROOT.lstrip("/")
     assert (root / builder.UPGRADE_ENTRY).exists()
-    assert (root / "resources" / "client-tree" / "bin/ai-device-client-launcher").is_file()
+    # The inventory is embedded in the binary, not shipped as a sibling tree.
+    assert not (root / "resources").exists()
+    build_dir = output / "build"
+    assert (build_dir / "resource-table.h").is_file()
+    assert "resources[]" in (build_dir / "resource-table.h").read_text()
     # The entry is compiled for the architecture the package claims.
     assert any("client-macos-installer.m" in part for call in calls for part in call)
     assert any(call[0].endswith("lipo") for call in calls)
@@ -436,9 +440,9 @@ def test_upgrade_payload_keeps_the_tree_beside_the_entry(builder, tree, tmp_path
 def test_upgrade_payload_never_installs_over_the_program(builder, tree, tmp_path):
     """The upgrade layer must not ship a replacement program tree.
 
-    It carries the coordinator and the tree it validates against; publishing
-    the program stays the coordinator's job at run time. A second program tree
-    in this payload would be a competing writer with no commit discipline.
+    It carries the coordinator only; publishing the program stays the
+    coordinator's job at run time. A program tree in this payload would be a
+    competing writer with no commit discipline.
     """
 
     def run(argv, **kwargs):
@@ -448,7 +452,7 @@ def test_upgrade_payload_never_installs_over_the_program(builder, tree, tmp_path
             Path(argv[-1]).write_bytes(b"pkg")
         if argv[0].endswith("pkgutil"):
             payload = Path(argv[-1]) / "Payload" / builder.UPGRADE_ROOT.lstrip("/")
-            (payload / "resources" / "client-tree").mkdir(parents=True, exist_ok=True)
+            payload.mkdir(parents=True, exist_ok=True)
             (payload / builder.UPGRADE_ENTRY).write_bytes(b"binary")
         if argv[0].endswith("lsbom"):
             return subprocess.CompletedProcess(argv, 0, stdout=".\t40755\t0/0\n", stderr="")
@@ -459,6 +463,7 @@ def test_upgrade_payload_never_installs_over_the_program(builder, tree, tmp_path
     installed = {p.relative_to(output / "root").as_posix() for p in (output / "root").rglob("*")}
     assert not any(path.startswith("opt/ai-device-client/") for path in installed)
     assert not any("ai-device-client-stage" in path for path in installed)
+    assert not any("client-tree" in path for path in installed)
 
 
 def test_upgrade_payload_rejects_a_missing_client_tree(builder, tmp_path):
@@ -603,6 +608,11 @@ def test_verification_build_writes_installable_preinstall_and_name(builder, tree
 
     def run(argv, **kwargs):
         calls.append(argv)
+        # The payload also carries the upgrade entry, whose compile step must
+        # actually produce a file: the builder refuses to package an entry that
+        # does not exist.
+        if "clang" in argv:
+            Path(argv[argv.index("-o") + 1]).write_bytes(b"binary")
         return subprocess.CompletedProcess(argv, 0, stdout=".\t40755\t0/0\n")
 
     output = tmp_path / "verify"
@@ -615,7 +625,10 @@ def test_verification_build_writes_installable_preinstall_and_name(builder, tree
         stage="/opt/ai-device-client-stage-0.3.4.1-aaaaaaaaaaaa"
     )
     assert builder.COMMIT_TOKENS  # module still exposes the native outcome map
-    assert calls[0][calls[0].index("--identifier") + 1] == builder.VERIFICATION_IDENTIFIER
+    # The program package now also compiles the upgrade entry, so the component
+    # build is no longer the first call; find it rather than assuming it is.
+    component = next(call for call in calls if call[0].endswith("pkgbuild"))
+    assert component[component.index("--identifier") + 1] == builder.VERIFICATION_IDENTIFIER
 
 
 def test_inspection_build_still_names_itself_inspection(builder, tree, tmp_path):
@@ -639,6 +652,8 @@ def test_stage_only_postinstall_does_not_publish(builder, tree, tmp_path):
     invocation here would defeat its only purpose.
     """
     def run(argv, **kwargs):
+        if "clang" in argv:
+            Path(argv[argv.index("-o") + 1]).write_bytes(b"binary")
         return subprocess.CompletedProcess(argv, 0, stdout=".\t40755\t0/0\n")
 
     output = tmp_path / "stageonly"
@@ -656,6 +671,8 @@ def test_stage_only_postinstall_does_not_publish(builder, tree, tmp_path):
 def test_stage_only_still_has_the_residue_preinstall(builder, tree, tmp_path):
     """Stage-only is still an install, so it inherits the same preinstall gate."""
     def run(argv, **kwargs):
+        if "clang" in argv:
+            Path(argv[argv.index("-o") + 1]).write_bytes(b"binary")
         return subprocess.CompletedProcess(argv, 0, stdout=".\t40755\t0/0\n")
 
     output = tmp_path / "stageonly-pre"

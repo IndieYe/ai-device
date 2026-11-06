@@ -22,9 +22,10 @@ def test_fixed_first_entry(tmp_path, case):
         f"static uid_t test_euid(void) {{return {501 if case == 'effective-user' else 0};}}\n"
         "#define getuid test_uid\n#define geteuid test_euid\n"
         "static int called=0;\n"
-        "static int prepare_and_publish_first_program(const char *directory,uid_t owner,const char *target,int confirm,double timeout,int *fd) {\n"
+        "static int prepare_and_publish_first_program(const char *directory,uid_t owner,const char *target,const char *source,int confirm,double timeout,int *fd) {\n"
         'called++;if(strcmp(directory,"/Library/Application Support/ai-device-client-management") || owner ||\n'
-        'strcmp(target,"/opt/ai-device-client") || confirm!=1 || timeout!=10 || *fd!=-1)return 99;\n'
+        'strcmp(target,"/opt/ai-device-client") || strcmp(source,"/stage/tree") ||\n'
+        'confirm!=1 || timeout!=10 || *fd!=-1)return 99;\n'
         + f"return {70 if case == 'failed' else 0};}}\n"
         f'#include "{native / "client-macos-first-entry.h"}"\n'
         "int main(int argc,char **argv) {int result=first_install_entry(argc,argv);\n"
@@ -36,7 +37,7 @@ def test_fixed_first_entry(tmp_path, case):
         check=True,
         capture_output=True,
     )
-    args = ["first-program", "--confirm-legacy-clients-disabled"]
+    args = ["first-program", "--confirm-legacy-clients-disabled", "/stage/tree"]
     if case == "missing":
         args.pop()
     elif case == "extra":

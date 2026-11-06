@@ -16,9 +16,15 @@
  */
 #include "client-macos-upgrade-stages.h"
 static int upgrade_registered_entry(int argc,char **argv) {
-    if (argc!=3 || strcmp(argv[1],"upgrade-registered-program") ||
+    if (argc!=4 || strcmp(argv[1],"upgrade-registered-program") ||
         strcmp(argv[2],"--confirm-idle-instance-exits")) return 64;
     if (getuid()!=0 || geteuid()!=0) return 70;
+    /* The staged payload this package just wrote. Passing it in, instead of
+     * carrying a second copy of the tree beside this executable, is what keeps
+     * one install to one tree: the embedded inventory (~300 KB) verifies a
+     * source it does not itself contain. */
+    const char *source=argv[3];
+    if (!source[0] || source[0]!='/') return 64;
     const char *management="/Library/Application Support/ai-device-client-management";
     struct managed_guards guards={.management=-1,.start=-1,.runtime=-1,.identity=nil};
     double now=lease_clock();
@@ -29,7 +35,7 @@ static int upgrade_registered_entry(int argc,char **argv) {
     /* start is held; exit_registered_original takes runtime only after the
      * idle instance has confirmed its own exit. A busy instance returns
      * LEASE_UNKNOWN and this entry stops without replacement or retry. */
-    int stage=upgrade_registered_bound_once(management,0,paths,&guards,deadline,NULL,NULL);
+    int stage=upgrade_registered_staged_once(management,0,paths,&guards,source,deadline);
     if (stage==UPGRADE_STAGE_OK) {
         release_guards(&guards);
         puts("AI_DEVICE_UPGRADE_READY_EXACT_V1");

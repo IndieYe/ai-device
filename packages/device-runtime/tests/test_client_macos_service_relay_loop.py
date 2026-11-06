@@ -94,8 +94,6 @@ def build(tmp_path, name, run_cases):
         + f'static const char *TEST_ROOT = "{root}";\n'
         + textwrap.dedent(
             """\
-            static int locate_bound_resources(char *p,uid_t o){(void)o;
-                strcpy(p,TEST_ROOT);return 1;}
             static int verify_resource_tree(const char *p){(void)p;return 1;}
             static int tree_owner_valid(const char *p,uid_t o,int d){
                 (void)p;(void)o;(void)d;return 1;}
@@ -164,24 +162,24 @@ def test_bounds_are_enforced_with_a_real_child(tmp_path):
             /* Silent helper: only the deadline can end this, and the child
              * sleeps 30s, so a blocking read would take 30s to give up. */
             reset_clock();
-            rc=service_relay_relay("{mgmt}",me,mgmt,"mod_silent","TOKEN_OK",100.25);
+            rc=service_relay_relay("{mgmt}",me,mgmt,TEST_ROOT,"mod_silent","TOKEN_OK",100.25);
             printf("silent\\t%d\\t%d\\n",rc,
                    private_lock_held(mgmt,"{mgmt}","management.lock",me));
 
             reset_clock();
-            rc=service_relay_relay("{mgmt}",me,mgmt,"mod_token","TOKEN_OK",110.0);
+            rc=service_relay_relay("{mgmt}",me,mgmt,TEST_ROOT,"mod_token","TOKEN_OK",110.0);
             printf("token\\t%d\\n",rc);
 
             reset_clock();
-            rc=service_relay_relay("{mgmt}",me,mgmt,"mod_noise","TOKEN_OK",110.0);
+            rc=service_relay_relay("{mgmt}",me,mgmt,TEST_ROOT,"mod_noise","TOKEN_OK",110.0);
             printf("noise\\t%d\\n",rc);
 
             reset_clock();
-            rc=service_relay_relay("{mgmt}",me,mgmt,"mod_fail","TOKEN_OK",110.0);
+            rc=service_relay_relay("{mgmt}",me,mgmt,TEST_ROOT,"mod_fail","TOKEN_OK",110.0);
             printf("fail\\t%d\\n",rc);
 
             reset_clock();
-            rc=service_relay_relay("{mgmt}",me,mgmt,"mod_eofonly","TOKEN_OK",110.0);
+            rc=service_relay_relay("{mgmt}",me,mgmt,TEST_ROOT,"mod_eofonly","TOKEN_OK",110.0);
             printf("eofonly\\t%d\\n",rc);
             return 0;
         }}
@@ -223,7 +221,7 @@ def test_timeout_reaps_the_child(tmp_path):
             reset_clock();
             /* Deadline big enough that the helper definitely starts and writes
              * its pidfile; the point of this case is reaping, not tightness. */
-            int rc=service_relay_relay("{mgmt}",me,mgmt,"mod_silent","TOKEN_OK",100.6);
+            int rc=service_relay_relay("{mgmt}",me,mgmt,TEST_ROOT,"mod_silent","TOKEN_OK",100.6);
             printf("silent\\t%d\\t%d\\n",rc,
                    private_lock_held(mgmt,"{mgmt}","management.lock",me));
             return 0;
@@ -283,7 +281,7 @@ def test_management_fd_survives_low_descriptor_layout(tmp_path):
             fclose(stdin);fclose(stdout);fclose(stderr);
             (void)keep;
             reset_clock();
-            int rc=service_relay_relay("{mgmt}",me,mgmt,"mod_fdcheck","TOKEN_OK",110.0);
+            int rc=service_relay_relay("{mgmt}",me,mgmt,TEST_ROOT,"mod_fdcheck","TOKEN_OK",110.0);
             fprintf(out,"fdcheck\\t%d\\n",rc);
             fflush(out);
             return 0;
@@ -316,7 +314,7 @@ def test_nan_clock_refuses_before_spawn(tmp_path):
             if(mgmt<0){{printf("LOCKFAIL\\n");return 2;}}
             fake_now=NAN;
             int before=clock_calls;
-            int rc=service_relay_relay("{mgmt}",me,mgmt,"mod_token","TOKEN_OK",110.0);
+            int rc=service_relay_relay("{mgmt}",me,mgmt,TEST_ROOT,"mod_token","TOKEN_OK",110.0);
             printf("nan\\t%d\\t%d\\n",rc,clock_calls-before);
             return 0;
         }}
@@ -347,7 +345,7 @@ def test_released_lock_refuses_before_any_spawn(tmp_path):
             printf("held\\t%d\\n",
                    private_lock_held(mgmt,"{mgmt}","management.lock",me));
             reset_clock();
-            int rc=service_relay_relay("{mgmt}",me,mgmt,"mod_token","TOKEN_OK",110.0);
+            int rc=service_relay_relay("{mgmt}",me,mgmt,TEST_ROOT,"mod_token","TOKEN_OK",110.0);
             printf("relay\\t%d\\n",rc);
             close(mgmt);
             return 0;

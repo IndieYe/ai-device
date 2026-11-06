@@ -25,8 +25,8 @@ def test_unregistered_observation_entry(tmp_path, case):
         "#define getuid test_uid\n#define geteuid test_euid\n"
         'static int acquireManagement(const char *p,uid_t u){acquired++;if(u || strcmp(p,"/Library/Application Support/ai-device-client-management"))abort();'
         f"return {-1 if case == 'lock' else 7};}}\n"
-        "static int observe_unregistered_program_with_host_check(const char *m,uid_t u,int f,const char *t,int c,double d){observed++;"
-        'if(strcmp(m,"/Library/Application Support/ai-device-client-management") || u || f!=7 || strcmp(t,"/opt/ai-device-client") || c!=1 || d!=10)abort();'
+        "static int observe_unregistered_program_with_host_check(const char *m,uid_t u,int f,const char *t,const char *s,int c,double d){observed++;"
+        'if(strcmp(m,"/Library/Application Support/ai-device-client-management") || u || f!=7 || strcmp(t,"/opt/ai-device-client") || strcmp(s,"/stage/tree") || c!=1 || d!=10)abort();'
         f"return {70 if case == 'failed' else 0};}}\n"
         "static int test_close(int f){if(f!=7)abort();closed++;return 0;}\n#define close test_close\n"
         f'#include "{header}"\n'
@@ -39,7 +39,7 @@ def test_unregistered_observation_entry(tmp_path, case):
         check=True,
         capture_output=True,
     )
-    args = ["observe-unregistered-program", "--confirm-legacy-clients-disabled"]
+    args = ["observe-unregistered-program", "--confirm-legacy-clients-disabled", "/stage/tree"]
     if case == "missing":
         args = args[:1]
     if case == "confirmation":

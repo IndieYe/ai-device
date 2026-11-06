@@ -30,6 +30,9 @@
 #include "client-macos-ready-request.h"
 #include "client-macos-recovery-check.h"
 #include "client-macos-registered-exit.h"
+/* The registered upgrade publishes by renaming the staged payload rather than
+ * copying it, so it needs the commit primitive here as well. */
+#include "client-macos-program-commit.h"
 #include "client-macos-start-handoff.h"
 #include "client-macos-target-identity.h"
 #include "client-macos-registered-publish.h"

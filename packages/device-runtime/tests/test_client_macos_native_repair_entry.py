@@ -23,7 +23,7 @@ import pytest
 
 pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="Darwin compiler")
 
-ARGS = ["repair-registered-program", "--confirm-service-not-running"]
+ARGS = ["repair-registered-program", "--confirm-service-not-running", "/bound"]
 
 COMMON = (
     "#import <Foundation/Foundation.h>\n"
@@ -68,7 +68,6 @@ static double lease_clock(void){
     clock_step++;
     if ($expire_after >= 0 && clock_step > $expire_after) return 1000.0;
     return 1;}
-static int locate_bound_resources(char *p,uid_t u){(void)u;strcpy(p,"/bound");return 1;}
 static int verify_resource_tree(const char *p){(void)p;return 1;}
 static int tree_owner_valid(const char *p,uid_t u,int d){(void)p;(void)u;(void)d;return 1;}
 static NSDictionary *read_target_identity(const char *p,uid_t u){

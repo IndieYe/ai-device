@@ -4,12 +4,12 @@
  * release and must not interpret a retained lock or stage as successful install.
  */
 static int prepare_and_publish_first_program(const char *management,uid_t owner,
-                                             const char *target,int confirmed,
+                                             const char *target,const char *source,int confirmed,
                                              double timeout,int *management_fd) {
-    if (!management_fd || *management_fd!=-1 || confirmed!=1 || !isfinite(timeout) ||
-        timeout<=0 || timeout>10) return 70;
+    if (!management_fd || *management_fd!=-1 || !target || !source || confirmed!=1 ||
+        !isfinite(timeout) || timeout<=0 || timeout>10) return 70;
     int fd=provision_management_lock(management,owner);
     if (fd<0) return 70;
     *management_fd=fd;
-    return publish_first_program_with_host_check(management,owner,fd,target,confirmed,timeout);
+    return publish_first_program_with_host_check(management,owner,fd,target,source,confirmed,timeout);
 }

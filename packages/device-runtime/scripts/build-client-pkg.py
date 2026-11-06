@@ -74,6 +74,10 @@ COMMIT_STATUS_FILE = f"{COMMIT_STATUS_DIR}/install-status"
 UPGRADE_ROOT = "/opt/ai-device-client-upgrade"
 UPGRADE_ENTRY = "installer-inspection"
 UPGRADE_IDENTIFIER = "local.ai-device.client.upgrade-entry"
+# Written by `register` once a client identity exists. Its presence is what makes
+# postinstall take the upgrade path, so `installer -pkg` stays the one correct
+# command and the caller never has to say which operation it wants.
+REGISTRATION_FILE = f"{COMMIT_STATUS_DIR}/registration.json"
 
 
 def stage_for(version: str, identity_build_id: str) -> str:
@@ -184,8 +188,20 @@ COMMIT_TOKENS = {
 }
 
 POSTINSTALL = """#!/bin/sh
-# Runs as root inside the installer's own transaction. Its only job is the one
-# atomic rename that publishes the staged tree onto the live path.
+# Runs as root inside the installer's own transaction. The staged tree is never
+# written to the live path: it is published by one atomic rename either way.
+#
+# One package, two paths, chosen by state rather than by the caller:
+#
+#   registered   -> the upgrade coordinator, which asks the running instance
+#                   to exit, boots the job out, renames this payload over the
+#                   live tree, bootstraps once and observes readiness.
+#   unregistered -> first-program publication, unchanged.
+#
+# The upgrade path needs a running client to hand over. A logged-out user has
+# none, so the coordinator refuses instead of guessing, the install fails, and
+# the old program stays in place. Upgrading therefore requires the user to be
+# logged in; there is no logged-out update path by design.
 set -eu
 PROGRAM='{program}'
 STAGE='{stage}'
@@ -193,6 +209,8 @@ ENTRY='{entry}'
 VERB='{verb}'
 STATUS_DIR='{status_dir}'
 STATUS_FILE='{status_file}'
+UPGRADE_ENTRY='{upgrade_entry}'
+REGISTRATION='{registration}'
 if [ ! -d "$STAGE" ]; then
     # Nothing was staged: refuse rather than touch the live program.
     echo 'PROGRAM_COMMIT_REFUSED_V1' >&2
@@ -202,12 +220,26 @@ if [ ! -x "$ENTRY" ]; then
     echo 'PROGRAM_COMMIT_REFUSED_V1: commit entry missing' >&2
     exit 1
 fi
-# Exactly one attempt. The exit status cannot distinguish "nothing happened"
-# from "happened but unverified", so it is recorded verbatim and never retried.
-set +e
-result=$("$ENTRY" "$VERB" "$STAGE" "$PROGRAM" 2>&1)
-status=$?
-set -e
+# Exactly one attempt either way. The exit status cannot distinguish "nothing
+# happened" from "happened but unverified", so it is recorded verbatim and
+# never retried.
+if [ -f "$REGISTRATION" ]; then
+    if [ ! -x "$UPGRADE_ENTRY" ]; then
+        echo 'PROGRAM_COMMIT_REFUSED_V1: registered client but no upgrade entry in payload' >&2
+        exit 1
+    fi
+    # The stage path is this package's own payload. The entry verifies it
+    # against its embedded inventory before renaming anything.
+    set +e
+    result=$("$UPGRADE_ENTRY" upgrade-registered-program --confirm-idle-instance-exits "$STAGE" 2>&1)
+    status=$?
+    set -e
+else
+    set +e
+    result=$("$ENTRY" "$VERB" "$STAGE" "$PROGRAM" 2>&1)
+    status=$?
+    set -e
+fi
 if [ -n "$result" ]; then
     echo "$result" >&2
 fi
@@ -347,51 +379,29 @@ def validate_bom(text):
             raise ValueError("package payload ownership is not root:wheel")
 
 
-def build_upgrade_payload(tree, output, *, run=None):
-    """Build the registered-upgrade entry and its bound resource tree.
+def stage_upgrade_entry(tree, root, build_directory, *, run=None):
+    """Compile the upgrade entry, embedding the inventory of `tree`.
 
-    `upgrade-registered-program` resolves its resources relative to its own
-    executable (`<exe dir>/resources/client-tree`), and `tree_owner_valid`
-    requires that tree to be root-owned with no group/other write bit. The
-    entry therefore cannot live inside the program tree it is upgrading: that
-    tree is replaced by this very operation, and its stage path changes per
-    build. It is emitted as a separate installable layer at a version-free
-    path instead.
+    The entry does NOT ship a copy of the tree. It embeds the inventory
+    (~300 KB of hashes) and is given the staged payload path on argv, so one
+    install carries exactly one tree. Shipping a second copy would double an
+    88 MB payload and introduce a second source that could disagree with the
+    first; the embedded inventory already pins the content it will publish.
 
-    This deliberately does NOT emit a refusal-gated product. The caller decides
-    when the window may run; the binary itself still demands
-    `--confirm-idle-instance-exits` and refuses a busy instance.
+    The layer still lives outside the program tree: that tree is the object
+    being replaced, and its stage path changes per build, so an entry inside it
+    could not survive the swap it performs.
     """
-    if (platform.system(), platform.machine()) != ("Darwin", "arm64"):
-        raise ValueError("native macOS arm64 builder required")
-    tree, output = Path(tree).resolve(), Path(output).absolute()
-    if output.is_relative_to(tree) or tree.is_relative_to(output):
-        raise ValueError("output must be separate from the input tree")
-    manifest = json.loads((tree / "build-manifest.json").read_text())
-    if manifest.get("schema_version") != 1 or manifest.get("platform") != "darwin-arm64":
-        raise ValueError("upgrade payload requires a darwin-arm64 client tree")
-    for name in ("runtime/bin/python3", "bin/ai-device-client-launcher",
-                 "third-party-inventory.json"):
-        if not (tree / name).is_file():
-            raise ValueError("client tree is incomplete")
-    output.mkdir(parents=True, exist_ok=False)
-    payload = output / "root" / UPGRADE_ROOT.lstrip("/")
-    resources = payload / "resources"
-    resources.mkdir(parents=True)
-    # Same exclusion as the other builders: bytecode belongs to the machine
-    # that produced it and would make the inventory differ between runs.
-    shutil.copytree(
-        tree, resources / "client-tree", symlinks=True,
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-    )
+    tree, root = Path(tree), Path(root)
+    payload = root / UPGRADE_ROOT.lstrip("/")
+    payload.mkdir(parents=True, exist_ok=True)
     native = Path(__file__).resolve().parents[1] / "native"
-    build_directory = output / "build"
-    build_directory.mkdir()
+    build_directory = Path(build_directory)
+    build_directory.mkdir(parents=True, exist_ok=True)
     # `client-macos-installer.m` reaches resource-check.c through writer-probe.c,
-    # which includes a generated resource-table.h. It is built from the tree this
-    # payload actually ships, so the embedded inventory and the sibling
-    # resources/client-tree cannot disagree.
-    manifest = INVENTORY.inventory(resources / "client-tree")
+    # which includes a generated resource-table.h. It is built from the tree the
+    # package stages, so the embedded inventory and that payload cannot disagree.
+    manifest = INVENTORY.inventory(tree)
     records = []
     for item in manifest["entries"]:
         kind = {"file": 0, "directory": 1, "symlink": 2}[item["kind"]]
@@ -420,8 +430,37 @@ def build_upgrade_payload(tree, output, *, run=None):
         ],
         check=True,
     )
+    if not entry.is_file():
+        raise ValueError(f"upgrade entry {UPGRADE_ENTRY} was not produced")
     entry.chmod(0o755)
     execute(["/usr/bin/lipo", "-verify_arch", "arm64", str(entry)], check=True)
+    return entry
+
+
+def build_upgrade_payload(tree, output, *, run=None):
+    """Build the registered-upgrade entry as its own standalone product.
+
+    This emits only the entry. The shipping PKG stages the same entry through
+    `stage_upgrade_entry`, so one install carries both the program and the means
+    to replace it; this separate product stays for focused experiments.
+    """
+    if (platform.system(), platform.machine()) != ("Darwin", "arm64"):
+        raise ValueError("native macOS arm64 builder required")
+    tree, output = Path(tree).resolve(), Path(output).absolute()
+    if output.is_relative_to(tree) or tree.is_relative_to(output):
+        raise ValueError("output must be separate from the input tree")
+    manifest = json.loads((tree / "build-manifest.json").read_text())
+    if manifest.get("schema_version") != 1 or manifest.get("platform") != "darwin-arm64":
+        raise ValueError("upgrade payload requires a darwin-arm64 client tree")
+    for name in ("runtime/bin/python3", "bin/ai-device-client-launcher",
+                 "third-party-inventory.json"):
+        if not (tree / name).is_file():
+            raise ValueError("client tree is incomplete")
+    output.mkdir(parents=True, exist_ok=False)
+    # Only the entry is staged: it embeds the inventory of `tree`, and is given
+    # the staged payload path when the Installer runs it.
+    stage_upgrade_entry(tree, output / "root", output / "build", run=run)
+    execute = run or subprocess.run
     # The entry validates the tree against the owner of the running user (0 for
     # the administrator entry); the package itself is audited by validate_bom.
     package = output / f"ai-device-client-upgrade-{UPGRADE_ENTRY}.pkg"
@@ -454,10 +493,12 @@ def build_upgrade_payload(tree, output, *, run=None):
     # Payload/<install-location>/..., so the audit path drops the leading slash
     # exactly as pkgbuild does when it lays the root down.
     audited = expanded / "Payload" / UPGRADE_ROOT.lstrip("/")
-    if not (audited / "resources" / "client-tree").is_dir():
-        raise ValueError("upgrade payload has no bound resource tree beside the entry")
     if not (audited / UPGRADE_ENTRY).is_file():
         raise ValueError("upgrade payload has no entry executable")
+    # This layer must never carry a program tree: the shipping package already
+    # stages exactly one, and a second copy here would be a competing source.
+    if (audited / "resources").exists():
+        raise ValueError("upgrade payload must not ship a resource tree")
     return package
 
 
@@ -511,6 +552,15 @@ def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
     # target, so wiring it here would silently do the wrong thing.
     if not os.access(entry, os.X_OK):
         raise ValueError(f"staged {COMMIT_ENTRY} is not executable")
+    # The shipping package also carries the entry that will replace this tree on
+    # the next install. Without it the first upgrade would have nothing to run,
+    # and splitting it into a second product would mean two commands for what
+    # the requirement calls one ("install and upgrade share one path").
+    #
+    # Only the entry is added, not a second tree: it embeds the inventory of the
+    # very tree staged above and is handed that stage path at install time.
+    if mode != "inspection":
+        stage_upgrade_entry(tree, output / "root", output / "upgrade-build", run=run)
     scripts = output / "scripts"
     scripts.mkdir()
     preinstall = scripts / "preinstall"
@@ -532,6 +582,8 @@ def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
                 verb=verb_from_header("PROGRAM_VERB_COMMIT"),
                 status_dir=COMMIT_STATUS_DIR,
                 status_file=COMMIT_STATUS_FILE,
+                upgrade_entry=f"{UPGRADE_ROOT}/{UPGRADE_ENTRY}",
+                registration=REGISTRATION_FILE,
             )
         )
     postinstall.chmod(0o755)

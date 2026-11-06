@@ -8,6 +8,7 @@ struct registered_start_context {
     uid_t manager;
     NSDictionary *paths;
     struct managed_guards *guards;
+    const char *source;
     double deadline;
     int attempted;
 };
@@ -26,7 +27,7 @@ static int request_registered_start_once(void *opaque) {
     if (remaining<=0) return 0;
     if (remaining>10) remaining=10;
     int requested=request_bound_registered_start(context->management,context->manager,
-                                                 guards->management,remaining);
+                                                 guards->management,context->source,remaining);
     return requested && start_child_clock()<context->deadline &&
         guards->start<0 && guards->runtime<0 &&
         registered_management_current(context->management,context->manager,context->paths,guards);

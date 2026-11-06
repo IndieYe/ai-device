@@ -22,13 +22,13 @@ def test_registered_start_callback_once(tmp_path, case):
         "static int registered_management_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g) {"
         "(void)m;(void)u;(void)p;(void)g;checks++;"
         f"return {'0' if case == 'before' else 'checks<2' if case == 'after' else '1'};}}\n"
-        "static int request_bound_registered_start(const char *m,uid_t u,int fd,double timeout) {"
-        "(void)m;(void)u;if(fd!=7 || timeout<=0 || timeout>10)return 0;calls++;"
+        "static int request_bound_registered_start(const char *m,uid_t u,int fd,const char *t,double timeout) {"
+        "(void)m;(void)u;if(fd!=7 || !t || !*t || timeout<=0 || timeout>10)return 0;calls++;"
         f"return {0 if case == 'unknown' else 1};}}\n"
         f'#include "{header}"\n'
         "int main(void) {@autoreleasepool {struct managed_guards g={"
         f"{8 if case == 'start-held' else -1},{9 if case == 'runtime-held' else -1},7}};"
-        'struct registered_start_context c={"unused",0,@{},&g,'
+        'struct registered_start_context c={"unused",0,@{},&g,"/tree",'
         f"{0 if case == 'expired' else 30},0}};"
         "int result=request_registered_start_once(&c);"
         f"if(result!={1 if case == 'clear' else 0})return 1;"

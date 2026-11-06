@@ -132,13 +132,13 @@ def test_bound_conflict_child(tmp_path, case):
             else ""
         )
         + (
-            f'int result=observe_unregistered_program_with_host_check(argv[1],getuid(),fd,"{tmp_path / "program"}",1,2);(void)managedPaths;(void)acquireManagement;(void)publish_first_program_with_host_check;(void)prepare_and_publish_first_program;\n'
+            f'int result=observe_unregistered_program_with_host_check(argv[1],getuid(),fd,"{tmp_path / "program"}","{tmp_path / "resources/client-tree"}",1,2);(void)managedPaths;(void)acquireManagement;(void)publish_first_program_with_host_check;(void)prepare_and_publish_first_program;\n'
             if observing
-            else f'int result=publish_first_program_with_host_check(argv[1],getuid(),fd,"{tmp_path / "program"}",1,2);(void)managedPaths;(void)acquireManagement;(void)prepare_and_publish_first_program;\n'
+            else f'int result=publish_first_program_with_host_check(argv[1],getuid(),fd,"{tmp_path / "program"}","{tmp_path / "resources/client-tree"}",1,2);(void)managedPaths;(void)acquireManagement;(void)prepare_and_publish_first_program;\n'
             if combined and not preparing
-            else f'int result=prepare_and_publish_first_program(argv[1],getuid(),"{tmp_path / "program"}",1,2,&fd);(void)managedPaths;(void)acquireManagement;\n'
+            else f'int result=prepare_and_publish_first_program(argv[1],getuid(),"{tmp_path / "program"}","{tmp_path / "resources/client-tree"}",1,2,&fd);(void)managedPaths;(void)acquireManagement;\n'
             if preparing
-            else f"int result=check_bound_host_conflicts(argv[1],getuid(),fd,{0 if case == 'unconfirmed' else 1},{0.2 if case == 'timeout' else 2.0});\n"
+            else f'int result=check_bound_host_conflicts(argv[1],getuid(),fd,"{tmp_path / "resources/client-tree"}",{0 if case == 'unconfirmed' else 1},{0.2 if case == 'timeout' else 2.0});\n'
         )
         + "int status; if(waitpid(-1,&status,WNOHANG)!=-1 || errno!=ECHILD)return 4;\n"
         'close(fd);printf("%d\\n",result);return 0;}\n'

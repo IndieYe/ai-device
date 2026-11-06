@@ -65,13 +65,12 @@ int main(int argc,char **argv) {
     harness.write_text(
         "#include <string.h>\n"
         f'#include "{native / "client-macos-private-lock.h"}"\n'
-        "static int locate_bound_resources(char *out,uid_t owner) {(void)owner;"
-        f' strcpy(out,"{source}");return 1;}}\n'
+        f'#define TEST_TREE "{source}"\n'
         f"static int verify_resource_tree(const char *p) {{(void)p;return {0 if case == 'bad-resource' else 1};}}\n"
         f"static int tree_owner_valid(const char *p,uid_t u,int d) {{(void)p;(void)u;(void)d;return {0 if case == 'bad-owner' else 1};}}\n"
         f'#include "{native / "client-macos-start-child.h"}"\n'
         'int main(int argc,char **argv) {(void)argc;int fd=acquire_private_lock(argv[1],"management.lock",getuid());'
-        "if(fd<0)return 1;int result=request_bound_registered_start(argv[1],getuid(),fd,"
+        "if(fd<0)return 1;int result=request_bound_registered_start(argv[1],getuid(),fd,TEST_TREE,"
         + ("0.2" if case == "timeout" else "2")
         + ");\n"
         "int status;if(waitpid(-1,&status,WNOHANG)!=-1 || errno!=ECHILD)return 2;\n"
@@ -171,9 +170,10 @@ start.run_kickstart=action
         "#define RESOURCE_CHECK_LIBRARY\n"
         f'#include "{native / "client-macos-resource-check.c"}"\n'
         f'#include "{native / "client-macos-tree-owner.h"}"\n'
+        f'#define TEST_TREE "{source}"\n'
         f'#include "{native / "client-macos-start-child.h"}"\n'
         'int main(int argc,char **argv) {(void)argc;int fd=acquire_private_lock(argv[1],"management.lock",getuid());'
-        "if(fd<0)return 1;int result=request_bound_registered_start(argv[1],getuid(),fd,5);"
+        "if(fd<0)return 1;int result=request_bound_registered_start(argv[1],getuid(),fd,TEST_TREE,5);"
         "int status;if(waitpid(-1,&status,WNOHANG)!=-1 || errno!=ECHILD)return 2;"
         'char retained[PATH_MAX];snprintf(retained,sizeof(retained),"%s/%s",argv[1],'
         + ('"retained.lock"' if case == "changed" else '"management.lock"')

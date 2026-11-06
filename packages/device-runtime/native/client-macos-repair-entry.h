@@ -45,9 +45,13 @@
  */
 #include <sys/stat.h>
 static int repair_registered_entry(int argc,char **argv) {
-    if (argc!=3 || strcmp(argv[1],"repair-registered-program") ||
+    if (argc!=4 || strcmp(argv[1],"repair-registered-program") ||
         strcmp(argv[2],"--confirm-service-not-running")) return 64;
     if (getuid()!=0 || geteuid()!=0) return 70;
+    /* The replacement tree is the payload this package staged, supplied by the
+     * caller. Nothing sits beside this executable to locate. */
+    const char *source=argv[3];
+    if (source[0]!='/') return 64;
     const char *management="/Library/Application Support/ai-device-client-management";
     struct managed_guards guards={.management=-1,.start=-1,.runtime=-1,.identity=nil};
     double now=lease_clock();
@@ -62,8 +66,7 @@ static int repair_registered_entry(int argc,char **argv) {
         puts("AI_DEVICE_REPAIR_REFUSED_NOT_REGISTERED_V1");
         return 70;
     }
-    char source[PATH_MAX];
-    if (!locate_bound_resources(source,0) || !verify_resource_tree(source) ||
+    if (!verify_resource_tree(source) ||
         !tree_owner_valid(source,0,0)) {
         release_guards(&guards);
         puts("AI_DEVICE_REPAIR_REFUSED_SOURCE_INVALID_V1");

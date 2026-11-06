@@ -35,18 +35,36 @@ static double service_relay_clock(void) {
 #endif
 
 static int service_relay_relay(const char *management,uid_t owner,int management_fd,
-                               const char *module,const char *token,double deadline) {
-    if (!module || !token || !isfinite(deadline) || !(deadline>0) ||
+                               const char *tree,const char *module,const char *token,
+                               double deadline) {
+    if (!tree || !*tree || !module || !token || !isfinite(deadline) || !(deadline>0) ||
         !private_lock_held(management_fd,management,"management.lock",owner)) return 0;
     /* Read the clock ONCE and validate that single reading. Comparing an
      * unvalidated result twice lets a NaN slip through both `<0` and
      * `>=deadline` (both false for NaN) and reach posix_spawn. */
     double entry_now=service_relay_clock();
     if (!isfinite(entry_now) || entry_now<0 || entry_now>=deadline) return 0;
-    char source[PATH_MAX],python[PATH_MAX];
-    if (!locate_bound_resources(source,owner) || !verify_resource_tree(source) ||
-        !tree_owner_valid(source,owner,0) ||
-        snprintf(python,sizeof python,"%s/runtime/bin/python3",source)>=(int)sizeof python)
+    /* The tree is an explicit argument, never self-located.
+     *
+     * This relay used to derive its interpreter from
+     * `<exe dir>/resources/client-tree`. That only held while the upgrade entry
+     * shipped a second copy of the program tree beside itself. A shipping
+     * package now carries exactly one tree, so there is nothing beside the
+     * entry to locate and the helper must be told which verified tree to run:
+     *
+     *   unload  - the staged source this package wrote, inventoried and owned
+     *             by the administrator before any side effect was requested.
+     *   load    - the live program path, which is the OLD tree when the job is
+     *             restored after a bounded recovery and the NEW tree after a
+     *             successful commit.
+     *
+     * Taking it as a parameter also fixes the direction of trust: the helper
+     * runs the tree the caller has just verified instead of whatever happens
+     * to sit next to this executable. The checks below still run, so a caller
+     * cannot pass an unverified or wrongly owned tree. */
+    char python[PATH_MAX];
+    if (!verify_resource_tree(tree) || !tree_owner_valid(tree,owner,0) ||
+        snprintf(python,sizeof python,"%s/runtime/bin/python3",tree)>=(int)sizeof python)
         return 0;
     int output[2];
     if (pipe(output)) return 0;
@@ -119,14 +137,16 @@ static int service_relay_relay(const char *management,uid_t owner,int management
 }
 
 static int load_registered_service_relay(const char *management,uid_t owner,
-                                         int management_fd,double deadline) {
-    return service_relay_relay(management,owner,management_fd,
+                                         int management_fd,const char *tree,
+                                         double deadline) {
+    return service_relay_relay(management,owner,management_fd,tree,
         SERVICE_RELAY_LOAD_MODULE,SERVICE_RELAY_LOAD_TOKEN,deadline);
 }
 
 static int unload_registered_service_relay(const char *management,uid_t owner,
-                                           int management_fd,double deadline) {
-    return service_relay_relay(management,owner,management_fd,
+                                           int management_fd,const char *tree,
+                                           double deadline) {
+    return service_relay_relay(management,owner,management_fd,tree,
         SERVICE_RELAY_UNLOAD_MODULE,SERVICE_RELAY_UNLOAD_TOKEN,deadline);
 }
 #endif

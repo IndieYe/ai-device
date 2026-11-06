@@ -75,7 +75,7 @@ int main(int argc, char **argv) {
         puts("STAGE_CLEANUP_DISABLED_V1");
         return 64;
     }
-    switch (commit_staged_program(argv[2], argv[3], 0)) {
+    switch (commit_staged_program(argv[2], argv[3], 0, NULL)) {
         case PROGRAM_COMMIT_OK:
             puts("PROGRAM_COMMITTED_V1");
             return 0;
