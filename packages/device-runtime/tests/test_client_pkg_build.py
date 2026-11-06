@@ -335,10 +335,32 @@ def test_postinstall_reports_unknown_without_retrying(builder, tree, tmp_path):
     postinstall = (tmp_path / "package/scripts/postinstall").read_text()
     # Count INVOCATIONS, not the word: the verb is a substring of the script's
     # own comments and status-file name, so a bare count proves nothing.
-    assert postinstall.count('"$ENTRY" "$VERB"') == 1
+    # Both publish primitives are exercised by the same entry, and exactly one
+    # of them runs: the branch is chosen by whether the live path exists.
+    invocations = [
+        line.strip()
+        for line in postinstall.splitlines()
+        if "result=$(" in line
+    ]
+    assert len(invocations) == 3, invocations
+    assert any("upgrade-registered-program" in line for line in invocations)
+    assert any("first-program" in line for line in invocations)
+    assert any('"$VERB" "$STAGE" "$PROGRAM"' in line for line in invocations)
+    assert postinstall.count('"$ENTRY" "$VERB"') == 0
     assert f"VERB='{builder.verb_from_header('PROGRAM_VERB_COMMIT')}'" in postinstall
-    # The entry is invoked once; there is no loop and no second attempt.
-    assert "while " not in postinstall and "retry" not in postinstall.lower()
+    # No loop and no second attempt. Checked on executable lines only: the
+    # script's own prose uses "while" and the word "retry" freely, and asserting
+    # over the whole file made this test fail on a comment edit.
+    code = [
+        line for line in postinstall.splitlines() if not line.lstrip().startswith("#")
+    ]
+    assert not any("while " in line for line in code)
+    assert not any("retry" in line.lower() for line in code)
+    # Each branch runs at most once: there is no loop, so one call site per
+    # branch is the strongest static guarantee available here.
+    body = "\n".join(code)
+    assert body.count("upgrade-registered-program") == 1
+    assert body.count("first-program") == 1
     assert "exit 1" in postinstall
 
 
@@ -755,7 +777,9 @@ def test_shipping_build_publishes_and_keeps_plain_artifact_name(builder, tree, t
     postinstall = (output / "scripts/postinstall").read_text()
     # Same activation path as every installable build: the commit is real.
     assert "upgrade-registered-program" in postinstall
-    assert '"$ENTRY" "$VERB"' in postinstall
+    # The unregistered branch publishes through the same entry, which is the
+    # only executable carrying the embedded inventory.
+    assert '"$ENTRY" "$VERB"' not in postinstall
 
 
 def test_shipping_postinstall_names_the_outstanding_configuration(builder, tree, tmp_path):
@@ -781,6 +805,72 @@ def test_shipping_postinstall_names_the_outstanding_configuration(builder, tree,
     # the operator somewhere that refuses them.
     assert "Library/Application Support/ai-device-client/client.json" in postinstall
     assert "client_macos_register register" in postinstall
+
+
+def test_unregistered_branch_picks_a_primitive_that_matches_the_live_path(builder, tree, tmp_path):
+    """First install must be gated, and a reinstall must still be possible.
+
+    These two requirements pull in opposite directions, which is why the branch
+    is split rather than unified:
+
+      absent  -> `first-program`, which is strictly create-only but carries the
+                 management lock, the embedded-inventory check and the host
+                 conflict probe this branch previously had none of.
+      present -> `commit`, a single atomic rename, because `first-program`
+                 refuses an existing target and would otherwise make the
+                 package impossible to reinstall.
+
+    Both must run through the upgrade entry, which is the executable holding
+    the inventory; the staged commit binary has none.
+    """
+    def run(argv, **kwargs):
+        if "clang" in argv:
+            Path(argv[argv.index("-o") + 1]).write_bytes(b"binary")
+        return subprocess.CompletedProcess(argv, 0, stdout=".\t40755\t0/0\n")
+
+    output = tmp_path / "branch"
+    builder.build(tree, output, "0.3.4.1", run=run, mode="shipping")
+    postinstall = (output / "scripts/postinstall").read_text()
+    # The presence test must gate the choice, not the other way round.
+    assert 'if [ -e "$PROGRAM" ] || [ -L "$PROGRAM" ]' in postinstall
+    # Both invocations use the inventory-bearing entry.
+    assert '"$UPGRADE_ENTRY" first-program --confirm-legacy-clients-disabled' in postinstall
+    assert '"$UPGRADE_ENTRY" "$VERB" "$STAGE" "$PROGRAM"' in postinstall
+    # first-program copies instead of renaming, so its stage must be cleaned or
+    # the preinstall residue check blocks the next install of this same package.
+    assert 'rm -rf "$STAGE"' in postinstall
+    # Cleanup is conditional on success: a refused publish keeps its evidence.
+    cleanup = postinstall.split('rm -rf "$STAGE"')[0].rstrip().splitlines()[-1]
+    assert 'if [ "$status" -eq 0 ]' in cleanup
+
+
+def test_installable_builds_refuse_a_program_path_the_native_entry_cannot_honour(builder, tree, tmp_path):
+    """`first-program` has its destination compiled in.
+
+    Accepting a different --program would emit a script whose two branches
+    publish to different paths: the upgrade would use $PROGRAM while the first
+    install quietly used the hardcoded one. That is a silent mismatch between a
+    build option and the product contract, so it is refused at build time.
+    """
+    def run(argv, **kwargs):
+        raise AssertionError("packaging must not start for an unsupported program path")
+
+    with pytest.raises(ValueError, match="first-install branch disagree"):
+        builder.build(
+            tree,
+            tmp_path / "package",
+            "0.3.4.1",
+            run=run,
+            mode="shipping",
+            program="/opt/some-other-client",
+        )
+    # The inspection product never publishes, so it keeps the old freedom.
+    def quiet(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 0, stdout=".\t40755\t0/0\n")
+
+    builder.build(
+        tree, tmp_path / "inspection", "0.3.4.1", run=quiet, program="/opt/some-other-client"
+    )
 
 
 def test_rehearsal_modes_stay_silent_about_configuration(builder, tree, tmp_path):

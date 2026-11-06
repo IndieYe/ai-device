@@ -79,6 +79,10 @@ COMMIT_ENTRY = "ai-device-client-commit"
 # management directory, which the script creates with an explicit mode.
 COMMIT_STATUS_DIR = "/Library/Application Support/ai-device-client-management"
 COMMIT_STATUS_FILE = f"{COMMIT_STATUS_DIR}/install-status"
+# The destination the native entries have compiled in (client-macos-first-entry.h
+# and client-macos-upgrade-entry.h). Kept as a constant so the builder can refuse
+# a --program that would disagree with it; see the check in build().
+NATIVE_PROGRAM_PATH = "/opt/ai-device-client"
 # The registered upgrade entry locates its resources relative to its own
 # executable (locate_bound_resources uses <exe dir>/resources/client-tree), so
 # it has to live at a path that does not carry the version. A per-release
@@ -299,10 +303,49 @@ if [ -f "$REGISTRATION" ]; then
     status=$?
     set -e
 else
-    set +e
-    result=$("$ENTRY" "$VERB" "$STAGE" "$PROGRAM" 2>&1)
-    status=$?
-    set -e
+    # No client identity on this host, but the live path may still hold a program
+    # from an earlier install whose identity was removed (or an abandoned one).
+    # The two cases need different primitives, and neither can stand in for the
+    # other:
+    #
+    #   absent  -> first-program. It is strictly create-only, so it is the only
+    #              choice here, and it carries the gates a bare rename lacks: a
+    #              private management lock, an inventory check against this
+    #              build's embedded hashes, and a read-only host conflict probe
+    #              that refuses while a legacy client is still running.
+    #
+    #   present -> commit. first-program refuses an existing target by design, so
+    #              using it unconditionally would make this package impossible to
+    #              reinstall. commit is a single atomic rename and performs no
+    #              conflict probe, which is acceptable precisely because no
+    #              identity means no registered service of ours is running from
+    #              that path.
+    #
+    # Both are invoked through the upgrade entry: it is the executable that
+    # carries the inventory. The commit binary staged in the payload has none.
+    if [ ! -x "$UPGRADE_ENTRY" ]; then
+        echo 'PROGRAM_COMMIT_REFUSED_V1: no entry in payload to publish the program' >&2
+        exit 1
+    fi
+    if [ -e "$PROGRAM" ] || [ -L "$PROGRAM" ]; then
+        set +e
+        result=$("$UPGRADE_ENTRY" "$VERB" "$STAGE" "$PROGRAM" 2>&1)
+        status=$?
+        set -e
+    else
+        set +e
+        result=$("$UPGRADE_ENTRY" first-program --confirm-legacy-clients-disabled "$STAGE" 2>&1)
+        status=$?
+        set -e
+        # first-program publishes by COPYING the staged payload, so unlike the
+        # rename-based commit the source stage is still there afterwards. Left
+        # in place it would make the preinstall residue check refuse this same
+        # package on the next attempt, so the published payload is removed.
+        # Only on success: a failed publish keeps the stage as its evidence.
+        if [ "$status" -eq 0 ] && [ -d "$STAGE" ]; then
+            rm -rf "$STAGE" 2>/dev/null || echo 'stage cleanup failed; it will block a reinstall' >&2
+        fi
+    fi
 fi
 if [ -n "$result" ]; then
     echo "$result" >&2
@@ -599,6 +642,18 @@ def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
     # window the atomic commit exists to remove.
     if not stage.startswith("/") or not program.startswith("/"):
         raise ValueError("program and stage paths must be absolute")
+    # The first-install branch in postinstall calls `first-program`, which takes
+    # no destination: the native entry has /opt/ai-device-client compiled in. A
+    # builder that accepted a different --program would emit a script whose two
+    # branches publish to different paths, with the first install silently
+    # landing on the hardcoded one. Refuse the mismatch instead of
+    # parameterising it: the fixed path is the product contract, and the
+    # registered upgrade already uses the same constant.
+    if mode != "inspection" and program != NATIVE_PROGRAM_PATH:
+        raise ValueError(
+            f"installable packages publish to {NATIVE_PROGRAM_PATH}; "
+            f"program={program!r} would make the first-install branch disagree"
+        )
     if stage == program or stage.startswith(program + "/") or program.startswith(stage + "/"):
         raise ValueError("stage must be a separate location from the live program")
     manifest = json.loads((tree / "build-manifest.json").read_text())
