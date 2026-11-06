@@ -393,6 +393,87 @@ def test_status_dir_mode_matches_the_registration_contract(builder, tree, tmp_pa
     assert 'mkdir -p -m 0700 "$STATUS_DIR"' in postinstall
 
 
+def test_upgrade_payload_keeps_the_tree_beside_the_entry(builder, tree, tmp_path):
+    """The entry resolves resources relative to itself, at a version-free path.
+
+    `locate_bound_resources` uses `<exe dir>/resources/client-tree`, and the
+    entry cannot live inside the program tree it replaces. Emitting it without
+    that sibling tree would produce a binary that is present but refuses every
+    call, so the layout is asserted rather than assumed.
+    """
+
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        if argv[0].endswith("lipo"):
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        if "clang" in argv:
+            Path(argv[argv.index("-o") + 1]).write_bytes(b"binary")
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        if argv[0].endswith("pkgbuild"):
+            Path(argv[-1]).write_bytes(b"pkg")
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        if argv[0].endswith("pkgutil"):
+            payload = Path(argv[-1]) / "Payload" / builder.UPGRADE_ROOT.lstrip("/")
+            (payload / "resources" / "client-tree").mkdir(parents=True, exist_ok=True)
+            (payload / builder.UPGRADE_ENTRY).write_bytes(b"binary")
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        if argv[0].endswith("lsbom"):
+            return subprocess.CompletedProcess(argv, 0, stdout=".\t40755\t0/0\n", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    output = tmp_path / "upgrade"
+    builder.build_upgrade_payload(tree, output, run=run)
+    root = output / "root" / builder.UPGRADE_ROOT.lstrip("/")
+    assert (root / builder.UPGRADE_ENTRY).exists()
+    assert (root / "resources" / "client-tree" / "bin/ai-device-client-launcher").is_file()
+    # The entry is compiled for the architecture the package claims.
+    assert any("client-macos-installer.m" in part for call in calls for part in call)
+    assert any(call[0].endswith("lipo") for call in calls)
+
+
+def test_upgrade_payload_never_installs_over_the_program(builder, tree, tmp_path):
+    """The upgrade layer must not ship a replacement program tree.
+
+    It carries the coordinator and the tree it validates against; publishing
+    the program stays the coordinator's job at run time. A second program tree
+    in this payload would be a competing writer with no commit discipline.
+    """
+
+    def run(argv, **kwargs):
+        if "clang" in argv:
+            Path(argv[argv.index("-o") + 1]).write_bytes(b"binary")
+        if argv[0].endswith("pkgbuild"):
+            Path(argv[-1]).write_bytes(b"pkg")
+        if argv[0].endswith("pkgutil"):
+            payload = Path(argv[-1]) / "Payload" / builder.UPGRADE_ROOT.lstrip("/")
+            (payload / "resources" / "client-tree").mkdir(parents=True, exist_ok=True)
+            (payload / builder.UPGRADE_ENTRY).write_bytes(b"binary")
+        if argv[0].endswith("lsbom"):
+            return subprocess.CompletedProcess(argv, 0, stdout=".\t40755\t0/0\n", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    output = tmp_path / "upgrade"
+    builder.build_upgrade_payload(tree, output, run=run)
+    installed = {p.relative_to(output / "root").as_posix() for p in (output / "root").rglob("*")}
+    assert not any(path.startswith("opt/ai-device-client/") for path in installed)
+    assert not any("ai-device-client-stage" in path for path in installed)
+
+
+def test_upgrade_payload_rejects_a_missing_client_tree(builder, tmp_path):
+    """An incomplete tree must fail at build time, not at upgrade time."""
+
+    broken = tmp_path / "broken"
+    (broken / "runtime/bin").mkdir(parents=True)
+    (broken / "bin").mkdir()
+    (broken / "build-manifest.json").write_text(
+        json.dumps({"schema_version": 1, "platform": "darwin-arm64"})
+    )
+    with pytest.raises(ValueError, match="incomplete"):
+        builder.build_upgrade_payload(broken, tmp_path / "out")
+
+
 def test_generated_postinstall_verb_matches_the_shipped_binary(builder, tree, tmp_path):
     """The generated script and the compiled commit binary must agree on the verb.
 

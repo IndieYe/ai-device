@@ -5,6 +5,7 @@ are rejected until the native lifecycle has been implemented and verified.
 """
 
 import argparse
+import importlib.util
 import json
 import os
 import platform
@@ -13,6 +14,14 @@ import shutil
 import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
+# Shared inventory of a finished tree; the upgrade payload embeds it so the
+# compiled resource table and the shipped tree are the same bytes.
+_SPEC = importlib.util.spec_from_file_location(
+    "mac_resource_inventory", Path(__file__).with_name("client-macos-resource-manifest.py")
+)
+INVENTORY = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(INVENTORY)
 
 IDENTIFIER = "local.ai-device.client.inspection"
 # Installable builds must never share an identifier with the inspection product:
@@ -58,6 +67,13 @@ COMMIT_ENTRY = "ai-device-client-commit"
 # management directory, which the script creates with an explicit mode.
 COMMIT_STATUS_DIR = "/Library/Application Support/ai-device-client-management"
 COMMIT_STATUS_FILE = f"{COMMIT_STATUS_DIR}/install-status"
+# The registered upgrade entry locates its resources relative to its own
+# executable (locate_bound_resources uses <exe dir>/resources/client-tree), so
+# it has to live at a path that does not carry the version. A per-release
+# directory would change the address it is invoked through on every upgrade.
+UPGRADE_ROOT = "/opt/ai-device-client-upgrade"
+UPGRADE_ENTRY = "installer-inspection"
+UPGRADE_IDENTIFIER = "local.ai-device.client.upgrade-entry"
 
 
 def stage_for(version: str, identity_build_id: str) -> str:
@@ -331,6 +347,120 @@ def validate_bom(text):
             raise ValueError("package payload ownership is not root:wheel")
 
 
+def build_upgrade_payload(tree, output, *, run=None):
+    """Build the registered-upgrade entry and its bound resource tree.
+
+    `upgrade-registered-program` resolves its resources relative to its own
+    executable (`<exe dir>/resources/client-tree`), and `tree_owner_valid`
+    requires that tree to be root-owned with no group/other write bit. The
+    entry therefore cannot live inside the program tree it is upgrading: that
+    tree is replaced by this very operation, and its stage path changes per
+    build. It is emitted as a separate installable layer at a version-free
+    path instead.
+
+    This deliberately does NOT emit a refusal-gated product. The caller decides
+    when the window may run; the binary itself still demands
+    `--confirm-idle-instance-exits` and refuses a busy instance.
+    """
+    if (platform.system(), platform.machine()) != ("Darwin", "arm64"):
+        raise ValueError("native macOS arm64 builder required")
+    tree, output = Path(tree).resolve(), Path(output).absolute()
+    if output.is_relative_to(tree) or tree.is_relative_to(output):
+        raise ValueError("output must be separate from the input tree")
+    manifest = json.loads((tree / "build-manifest.json").read_text())
+    if manifest.get("schema_version") != 1 or manifest.get("platform") != "darwin-arm64":
+        raise ValueError("upgrade payload requires a darwin-arm64 client tree")
+    for name in ("runtime/bin/python3", "bin/ai-device-client-launcher",
+                 "third-party-inventory.json"):
+        if not (tree / name).is_file():
+            raise ValueError("client tree is incomplete")
+    output.mkdir(parents=True, exist_ok=False)
+    payload = output / "root" / UPGRADE_ROOT.lstrip("/")
+    resources = payload / "resources"
+    resources.mkdir(parents=True)
+    # Same exclusion as the other builders: bytecode belongs to the machine
+    # that produced it and would make the inventory differ between runs.
+    shutil.copytree(
+        tree, resources / "client-tree", symlinks=True,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
+    native = Path(__file__).resolve().parents[1] / "native"
+    build_directory = output / "build"
+    build_directory.mkdir()
+    # `client-macos-installer.m` reaches resource-check.c through writer-probe.c,
+    # which includes a generated resource-table.h. It is built from the tree this
+    # payload actually ships, so the embedded inventory and the sibling
+    # resources/client-tree cannot disagree.
+    manifest = INVENTORY.inventory(resources / "client-tree")
+    records = []
+    for item in manifest["entries"]:
+        kind = {"file": 0, "directory": 1, "symlink": 2}[item["kind"]]
+        value = item.get("sha256", item.get("target", ""))
+        records.append(
+            "{{{},{},{},{},{}}}".format(
+                json.dumps(item["path"]), kind, item.get("mode", 0),
+                item.get("size", 0), json.dumps(value),
+            )
+        )
+    (build_directory / "resource-table.h").write_text(
+        "static const struct resource resources[] = {\n"
+        + ",\n".join(records)
+        + "\n};\n#define RESOURCE_COUNT (sizeof(resources)/sizeof(resources[0]))\n"
+    )
+    entry = payload / UPGRADE_ENTRY
+    execute = run or subprocess.run
+    execute(
+        [
+            "/usr/bin/xcrun", "clang", "-Wall", "-Wextra", "-Werror", "-O2",
+            "-arch", "arm64", "-mmacosx-version-min=11.0", "-fobjc-arc",
+            "-framework", "Foundation",
+            "-I", str(build_directory),
+            str(native / "client-macos-installer.m"),
+            "-o", str(entry),
+        ],
+        check=True,
+    )
+    entry.chmod(0o755)
+    execute(["/usr/bin/lipo", "-verify_arch", "arm64", str(entry)], check=True)
+    # The entry validates the tree against the owner of the running user (0 for
+    # the administrator entry); the package itself is audited by validate_bom.
+    package = output / f"ai-device-client-upgrade-{UPGRADE_ENTRY}.pkg"
+    execute(
+        [
+            "/usr/bin/pkgbuild",
+            "--root",
+            str(output / "root"),
+            "--identifier",
+            UPGRADE_IDENTIFIER,
+            "--version",
+            "1.0",
+            "--install-location",
+            "/",
+            "--ownership",
+            "recommended",
+            str(package),
+        ],
+        check=True,
+    )
+    expanded = output / "component-audit"
+    # --expand-full, not --expand: the latter leaves Payload as an opaque
+    # archive, so the layout this package exists to guarantee cannot be checked.
+    execute(["/usr/sbin/pkgutil", "--expand-full", str(package), str(expanded)], check=True)
+    bom = execute(["/usr/bin/lsbom", str(expanded / "Bom")], check=True,
+                  capture_output=True, text=True)
+    validate_bom(bom.stdout)
+    # The entry looks for this exact relative shape; a package that installed
+    # it anywhere else would be present but unusable. `pkgutil --expand` yields
+    # Payload/<install-location>/..., so the audit path drops the leading slash
+    # exactly as pkgbuild does when it lays the root down.
+    audited = expanded / "Payload" / UPGRADE_ROOT.lstrip("/")
+    if not (audited / "resources" / "client-tree").is_dir():
+        raise ValueError("upgrade payload has no bound resource tree beside the entry")
+    if not (audited / UPGRADE_ENTRY).is_file():
+        raise ValueError("upgrade payload has no entry executable")
+    return package
+
+
 def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
           stage=None, mode="inspection"):
     if mode not in MODES:
@@ -510,7 +640,20 @@ if __name__ == "__main__":
         help="Verification variant that writes the payload and stops before "
         "publishing, so the post-payload/pre-swap stage can be observed.",
     )
+    parser.add_argument(
+        "--upgrade-entry",
+        action="store_true",
+        help="Emit only the registered-upgrade entry and its bound resource "
+        "tree at a version-free path. This layer replaces no program; the "
+        "entry still refuses a busy instance and requires an explicit "
+        "acknowledgement when invoked.",
+    )
     args = parser.parse_args()
+    if args.upgrade_entry:
+        if args.stage_only or args.verification:
+            parser.error("--upgrade-entry is a separate product")
+        print(build_upgrade_payload(args.tree, args.output))
+        raise SystemExit(0)
     if args.stage_only and args.verification:
         parser.error("--verification and --stage-only are separate products")
     mode = "stage_only" if args.stage_only else "verification" if args.verification else "inspection"
