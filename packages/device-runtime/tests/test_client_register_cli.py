@@ -63,7 +63,7 @@ def environment(tmp_path, monkeypatch):
 
     monkeypatch.setattr(registration.os, "chown", record)
     monkeypatch.setattr(registration.os, "chmod", lambda *a, **k: None)
-    monkeypatch.setattr(registration, "_require_owner", lambda info, account: None)
+    monkeypatch.setattr(registration, "_require_owner", lambda info, allowed: None)
     enabled = []
     import device_runtime.client_service as service
 
@@ -129,6 +129,20 @@ def test_foreign_owner_is_refused(environment, monkeypatch):
         registration.register("device")
 
 
+def test_returning_to_a_previous_user_is_allowed(environment, monkeypatch):
+    """root -> device -> root must work: the unit names the previous owner."""
+    _accounts(monkeypatch, _user())
+    registration.register("device")
+    environment.unit.write_text("[Service]\nUser=device\n")
+    previous = registration._previous_user()
+    assert previous is not None and previous.pw_uid == 1234
+    allowed = registration._allowed_owners(ROOT, previous)
+    assert previous.pw_uid in allowed
+def test_unrelated_owner_is_not_allowed(environment):
+    allowed = registration._allowed_owners(ROOT, None)
+    assert 1234 not in allowed
+
+
 def test_missing_user_is_refused(environment):
     with pytest.raises(ValueError):
         registration.register("")
@@ -170,14 +184,21 @@ def test_token_outside_configuration_directory_is_refused(environment, monkeypat
 def test_running_service_cannot_change_user(environment, monkeypatch):
     _accounts(monkeypatch, _user())
     monkeypatch.setattr(registration, "service_active", lambda: True)
-    environment.unit.write_text("[Service]\nUser=someoneelse\n")
+    environment.unit.write_text("[Service]\nUser=device\n")
+    # A different, existing account holds the unit; registration must not move it.
+    monkeypatch.setattr(
+        registration, "_previous_user", lambda: _user("operator", 4242, 4242, "/home/operator")
+    )
     with pytest.raises(ValueError, match="different user"):
         registration.register("device")
 
 
 def test_unknown_service_state_blocks_registration(environment, monkeypatch):
     _accounts(monkeypatch, _user())
-    environment.unit.write_text("[Service]\nUser=someoneelse\n")
+    environment.unit.write_text("[Service]\nUser=device\n")
+    monkeypatch.setattr(
+        registration, "_previous_user", lambda: _user("operator", 4242, 4242, "/home/operator")
+    )
     monkeypatch.setattr(
         registration,
         "service_active",

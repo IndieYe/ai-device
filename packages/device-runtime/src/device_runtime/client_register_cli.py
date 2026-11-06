@@ -72,21 +72,43 @@ def service_active():
     raise ValueError("client service state is unknown; the running user is unchanged")
 
 
-def _require_owner(info, account):
-    # systemd creates these directories as the unit user; a different owner means
-    # another identity already holds the runtime, which registration must not take.
-    if info.st_uid not in (0, account.pw_uid):
+def _previous_user():
+    """Return the user the installed unit currently names, if any."""
+    if not UNIT_PATH.is_file():
+        return None
+    for line in UNIT_PATH.read_text().splitlines():
+        if line.startswith("User="):
+            name = line.split("=", 1)[1].strip()
+            try:
+                return pwd.getpwnam(name)
+            except KeyError:
+                return None
+    return None
+
+
+def _allowed_owners(account, previous):
+    """Owners registration may take over: root, the target, and the last choice."""
+    allowed = {0, account.pw_uid}
+    if previous is not None:
+        allowed.add(previous.pw_uid)
+    return allowed
+
+
+def _require_owner(info, allowed):
+    # systemd creates these directories as the unit user. Anything else means an
+    # unrelated identity holds the runtime, which registration must not take.
+    if info.st_uid not in allowed:
         raise ValueError("runtime path is owned by another user")
 
 
-def adopt_directories(account):
+def adopt_directories(account, allowed):
     """Give the runtime directories to the service user without widening modes."""
     for path in (STATE_DIR, LOG_DIR):
         path.mkdir(parents=True, exist_ok=True)
-        _adopt_tree(path, account)
+        _adopt_tree(path, account, allowed)
 
 
-def _adopt_tree(root, account):
+def _adopt_tree(root, account, allowed):
     """Align existing contents so a user change cannot leave unreadable state."""
     pending = [root]
     while pending:
@@ -94,7 +116,7 @@ def _adopt_tree(root, account):
         info = current.lstat()
         if not stat.S_ISDIR(info.st_mode):
             raise ValueError("runtime path is not a plain directory")
-        _require_owner(info, account)
+        _require_owner(info, allowed)
         os.chown(current, account.pw_uid, account.pw_gid)
         os.chmod(current, 0o700)
         for entry in current.iterdir():
@@ -102,13 +124,13 @@ def _adopt_tree(root, account):
             if stat.S_ISDIR(info.st_mode):
                 pending.append(entry)
             elif stat.S_ISREG(info.st_mode):
-                _require_owner(info, account)
+                _require_owner(info, allowed)
                 os.chown(entry, account.pw_uid, account.pw_gid)
             else:
                 raise ValueError("runtime directory contains an unsupported entry")
 
 
-def adopt_credentials(account):
+def adopt_credentials(account, allowed):
     """The service user must be able to read the token the service loads."""
     try:
         value = json.loads(CONFIG.read_text())
@@ -119,21 +141,14 @@ def adopt_credentials(account):
         raise ValueError("client token is outside the configuration directory")
     if token_path.is_symlink() or not token_path.is_file():
         raise ValueError("client token is not a regular file")
-    _require_owner(token_path.lstat(), account)
+    _require_owner(token_path.lstat(), allowed)
     os.chown(token_path, account.pw_uid, account.pw_gid)
     os.chmod(token_path, 0o600)
 
 
-def _refuse_running_user_change(account):
+def _refuse_running_user_change(account, previous):
     """Never hand a running service to a different user behind the operator."""
-    if not UNIT_PATH.is_file():
-        return
-    current = None
-    for line in UNIT_PATH.read_text().splitlines():
-        if line.startswith("User="):
-            current = line.split("=", 1)[1].strip()
-            break
-    if current is None or current == account.pw_name:
+    if previous is None or previous.pw_name == account.pw_name:
         return
     if service_active():
         raise ValueError(
@@ -154,9 +169,11 @@ def register(user):
         from .client_service import SystemdClient
 
         check_conflicts()
-        _refuse_running_user_change(account)
-        adopt_directories(account)
-        adopt_credentials(account)
+        previous = _previous_user()
+        _refuse_running_user_change(account, previous)
+        allowed = _allowed_owners(account, previous)
+        adopt_directories(account, allowed)
+        adopt_credentials(account, allowed)
         CONFIG_DIR.chmod(0o755)
         os.chmod(CONFIG, 0o644)
         temporary = UNIT_PATH.with_name(UNIT_PATH.name + ".new")
