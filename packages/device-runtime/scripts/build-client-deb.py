@@ -117,6 +117,19 @@ case "${1:-}" in
         rm /etc/systemd/system/ai-device-client.service
     fi
     systemctl daemon-reload
+    # Interpreter caches are created at run time and are absent from the
+    # manifest, so dpkg cannot remove them; leftover directories would block
+    # the parent directory removal and strand the whole runtime tree.
+    if [ -d /opt/ai-device-client/runtime ]; then
+        find /opt/ai-device-client/runtime -type d -name __pycache__ -prune -exec rm -rf {} + || exit 1
+    fi
+    ;;
+esac
+# Configuration and credentials outlive an upgrade and a plain remove; only an
+# explicit purge may discard them. State is never touched here.
+case "${1:-}" in
+ purge)
+    rm -rf /etc/ai-device-client || exit 1
     ;;
 esac
 """,

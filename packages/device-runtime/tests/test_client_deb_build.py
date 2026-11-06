@@ -49,7 +49,20 @@ def test_build_hooks_and_layout(tmp_path, monkeypatch):
     assert postrm.index("grep -Fxq") < postrm.index("systemctl disable")
     assert "/var/lib/ai-device-client" not in postrm
     removals = [line.strip() for line in postrm.splitlines() if line.strip().startswith("rm ")]
-    assert removals == ["rm /etc/systemd/system/ai-device-client.service"]
+    assert removals == [
+        "rm /etc/systemd/system/ai-device-client.service",
+        "rm -rf /etc/ai-device-client || exit 1",
+    ]
+    # State directories hold the device journal and must never be swept here.
+    assert "state" not in postrm.replace("state-dir", "")
+    # purge removes configuration and credentials; a plain remove keeps them.
+    purge = postrm.split("purge)", 2)[-1]
+    assert "/etc/ai-device-client" in purge
+    remove_only = postrm.split("purge)")[0]
+    assert "rm -rf /etc/ai-device-client" not in remove_only
+    # Interpreter caches are created at run time and are not in the manifest.
+    assert "__pycache__" in postrm
+    assert "-prune" in postrm
 
 
 @pytest.mark.parametrize("version", ["", "bad", "1\nInjected: yes", "1;false"])
