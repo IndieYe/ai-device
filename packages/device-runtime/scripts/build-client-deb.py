@@ -32,6 +32,13 @@ fi
 state=$(systemctl show "$unit" --property=ActiveState --value) || exit 1
 main=$(systemctl show "$unit" --property=MainPID --value) || exit 1
 control=$(systemctl show "$unit" --property=ControlPID --value) || exit 1
+# A later unpack failure cannot roll back a stop, and dpkg does not call
+# postinst afterwards. Say so while the operator is looking at this output.
+case "$state:$main:$control" in
+    active:*:0)
+        echo 'note: stopping the client; if unpacking then fails it stays stopped — reinstall a complete package to repair' >&2
+        ;;
+esac
 case "$state:$main:$control" in
     inactive:0:0|failed:0:0) ;;
     active:*:0)

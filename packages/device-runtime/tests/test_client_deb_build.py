@@ -69,6 +69,16 @@ def test_build_hooks_and_layout(tmp_path, monkeypatch):
     assert "-depth -type d -empty -delete" in postrm
 
 
+def test_stop_explains_the_failure_consequence():
+    """dpkg cannot roll back a stop when unpacking fails, so say so up front."""
+    assert "reinstall a complete package to repair" in module.STOP
+    # The note must precede the stop, not follow it: after the stop the
+    # remaining scripts see an inactive unit and would skip the message.
+    note = module.STOP.index("reinstall a complete package to repair")
+    stop = module.STOP.index("client_package stop")
+    assert note < stop
+
+
 @pytest.mark.parametrize("version", ["", "bad", "1\nInjected: yes", "1;false"])
 def test_invalid_version_before_writes(tmp_path, version):
     with pytest.raises(ValueError):
