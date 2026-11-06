@@ -130,6 +130,10 @@ case "${1:-}" in
     # the parent directory removal and strand the whole runtime tree.
     if [ -d /opt/ai-device-client/runtime ]; then
         find /opt/ai-device-client/runtime -type d -name __pycache__ -prune -exec rm -rf {} + || exit 1
+        # Those caches were the only entries left in some stdlib directories, so
+        # dpkg had already given up on the parents before this script ran. Prune
+        # what is empty now, deepest first; a directory holding files is kept.
+        find /opt/ai-device-client -depth -type d -empty -delete || exit 1
     fi
     ;;
 esac

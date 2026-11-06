@@ -63,6 +63,10 @@ def test_build_hooks_and_layout(tmp_path, monkeypatch):
     # Interpreter caches are created at run time and are not in the manifest.
     assert "__pycache__" in postrm
     assert "-prune" in postrm
+    # Caches are often the only content of their directory, so dpkg's own removal
+    # leaves the parents behind; prune only what is empty, never a directory
+    # that still holds files.
+    assert "-depth -type d -empty -delete" in postrm
 
 
 @pytest.mark.parametrize("version", ["", "bad", "1\nInjected: yes", "1;false"])
@@ -134,3 +138,38 @@ def test_postrm_rejects_unrelated_command_without_disabling(tmp_path, monkeypatc
     assert result.returncode != 0
     assert unit.read_text() == content
     assert not marker.exists()
+
+
+def test_postrm_prunes_only_empty_directories(tmp_path, monkeypatch):
+    """A cache-only stdlib directory must not survive; a populated one must."""
+    tree = tmp_path / "tree"
+    binary = tree / "runtime/bin/python3"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("fixture")
+    original_run = subprocess.run
+    monkeypatch.setattr(module.subprocess, "run", lambda *a, **k: None)
+    output = tmp_path / "output"
+    module.build(tree, output, "0.3.4~test")
+
+    program = tmp_path / "opt/ai-device-client"
+    cache_only = program / "runtime/lib/python3.13/json"
+    cache_only.mkdir(parents=True)
+    (cache_only / "__pycache__").mkdir()
+    (cache_only / "__pycache__/codec.pyc").write_text("cache")
+    kept = program / "runtime/lib/python3.13/asyncio"
+    kept.mkdir(parents=True)
+    (kept / "tasks.py").write_text("source")
+
+    units = tmp_path / "units"
+    units.mkdir()
+    script = (output / "root/DEBIAN/postrm").read_text()
+    script = script.replace("/etc/systemd/system", str(units))
+    script = script.replace("/opt/ai-device-client", str(program))
+    script = script.replace("systemctl ", "true # ")
+
+    result = original_run(
+        ["/bin/sh", "-c", script, "postrm", "remove"], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
+    assert not cache_only.exists(), "cache-only directory must be pruned"
+    assert (kept / "tasks.py").is_file(), "contents must never be removed"
