@@ -32,6 +32,8 @@
  * user and plist the unload has to target.
  */
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <errno.h>
 /* fd-relative recursive removal that never follows a symlink. Shared with the
  * stage-cleanup path rather than reimplemented here. */
 #include "client-macos-stage-cleanup.h"
@@ -57,9 +59,34 @@
 #define UNINSTALL_MANAGEMENT_OWNER 0
 #endif
 
+/* 1 loaded, 0 not loaded, -1 could not tell. Read-only; changes nothing. */
+#ifndef UNINSTALL_HAVE_JOB_PROBE
+#define UNINSTALL_HAVE_JOB_PROBE 1
+static int launchctl_job_loaded(const char *target) {
+    if (!target || !*target) return -1;
+    pid_t child = fork();
+    if (child < 0) return -1;
+    if (child == 0) {
+        int null = open("/dev/null", O_RDWR);
+        if (null >= 0) {
+            dup2(null, STDOUT_FILENO);
+            dup2(null, STDERR_FILENO);
+            if (null > STDERR_FILENO) close(null);
+        }
+        execl("/bin/launchctl", "launchctl", "print", target, (char *)NULL);
+        _exit(127);
+    }
+    int status = 0;
+    while (waitpid(child, &status, 0) < 0) {
+        if (errno != EINTR) return -1;
+    }
+    if (!WIFEXITED(status)) return -1;
+    return WEXITSTATUS(status) == 0 ? 1 : 0;
+}
+#endif
+
 static int uninstall_remove_file(const char *path, const char *parent,
                                  uid_t owner, int require_owner) {
-    /* Unlink by name inside the checked parent, never through a symlink. */
     int directory = open(parent, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (directory < 0) return 0;
     struct stat info;
@@ -117,13 +144,42 @@ static int uninstall_registered_entry(int argc, char **argv) {
         return 70;
     }
 
-    if (!unload_registered_service_relay(management, 0, guards.management, program, deadline)) {
-        /* A failed bootout does not prove the job is still loaded. Registration
-         * stays: it is the record needed to retry against the same target. */
+    /* Unload only when the job is actually loaded.
+     *
+     * `bootout` on a job that is not loaded exits 3 ("No such process"), which
+     * the shared unload path reports as an unknown outcome. For an upgrade
+     * that is right -- the job was guaranteed loaded before the window opened.
+     * For an uninstall it is not: an operator who already stopped the service
+     * (which is exactly what --confirm-service-not-running asserts) would be
+     * refused forever, because the precondition for a successful bootout is
+     * the state they were told to create.
+     *
+     * `launchctl print` on the registered target answers "is it loaded"
+     * without changing anything: 0 when loaded, nonzero when not. Only 0 leads
+     * to bootout; a failure to read the state refuses rather than assuming.
+     */
+    int loaded = launchctl_job_loaded([paths[@"service"] fileSystemRepresentation]);
+    if (loaded < 0) {
         release_guards(&guards);
-        puts("AI_DEVICE_UNINSTALL_UNLOAD_UNKNOWN_V1");
+        puts("AI_DEVICE_UNINSTALL_UNKNOWN_OR_REFUSED_V1");
         return 70;
     }
+    if (loaded == 1) {
+        if (!unload_registered_service_relay(management, 0, guards.management, program, deadline)) {
+            /* A failed bootout on a loaded job does not prove it is still
+             * loaded. Registration stays: it is the record needed to retry
+             * against the same target. */
+            release_guards(&guards);
+            puts("AI_DEVICE_UNINSTALL_UNLOAD_UNKNOWN_V1");
+            return 70;
+        }
+        if (!registered_guards_current(management, 0, paths, &guards)) {
+            release_guards(&guards);
+            puts("AI_DEVICE_UNINSTALL_UNKNOWN_OR_REFUSED_V1");
+            return 70;
+        }
+    }
+
     if (!registered_guards_current(management, 0, paths, &guards)) {
         release_guards(&guards);
         puts("AI_DEVICE_UNINSTALL_UNKNOWN_OR_REFUSED_V1");

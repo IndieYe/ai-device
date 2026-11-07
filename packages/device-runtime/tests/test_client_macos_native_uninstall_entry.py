@@ -82,6 +82,9 @@ static int unload_registered_service_relay(const char *m,uid_t u,int fd,
     unload_calls++;
     if(unload_ok) note(1);
     return unload_ok;}
+/* 1 loaded, 0 not loaded, -1 unknown -- as the real launchctl print probe. */
+#define UNINSTALL_HAVE_JOB_PROBE 0
+static int launchctl_job_loaded(const char *t){(void)t;return $job_loaded;}
 static uid_t test_uid(void){return 0;}
 static uid_t test_euid(void){return 0;}
 #define getuid test_uid
@@ -118,8 +121,8 @@ def build_tree(tmp_path):
 
 
 def compile_harness(tmp_path, *, registered=1, program_valid=1, runtime_ok=1,
-                    unload_ok=1, name="uninstall", break_registration=False,
-                    break_program=False):
+                    unload_ok=1, job_loaded=1, name="uninstall",
+                    break_registration=False, break_program=False):
     program, plist, management, runtime, _ = build_tree(tmp_path)
     if break_registration:
         # A directory where a regular file is expected: the entry's own
@@ -142,6 +145,7 @@ def compile_harness(tmp_path, *, registered=1, program_valid=1, runtime_ok=1,
         program_valid=program_valid,
         runtime_ok=runtime_ok,
         unload_ok=unload_ok,
+        job_loaded=job_loaded,
     )
     native = Path(__file__).parents[1] / "native"
     harness = tmp_path / f"{name}.m"
@@ -262,6 +266,45 @@ def test_program_removal_happens_last(tmp_path):
     assert not (management / "registration.json").exists(), (
         "registration removed before the program"
     )
+
+
+def test_already_stopped_service_is_uninstalled_without_bootout(tmp_path):
+    """A service the operator already stopped must still uninstall.
+
+    This is a real defect found on hardware: bootout of a job that is not
+    loaded exits 3, which the shared unload path reports as unknown, so an
+    operator who did exactly what --confirm-service-not-running asks for could
+    never finish the uninstall. The job state is therefore read first.
+    """
+    result, program, plist, management, _ = compile_harness(
+        tmp_path, job_loaded=0, name="uninstall-stopped"
+    )
+    assert rc_of(result) == 0, result.stdout
+    assert "AI_DEVICE_UNINSTALL_SERVICE_REMOVED_V1" in result.stdout
+    assert "UNLOADS=0" in result.stdout, "no bootout when nothing is loaded"
+    assert not program.exists()
+    assert not plist.exists()
+    assert not (management / "registration.json").exists()
+
+
+def test_unreadable_job_state_is_refused(tmp_path):
+    """Not knowing whether the job is loaded must not be read as 'not loaded'."""
+    result, program, plist, management, _ = compile_harness(
+        tmp_path, job_loaded=-1, name="uninstall-unknown"
+    )
+    assert rc_of(result) == 70
+    assert "AI_DEVICE_UNINSTALL_UNKNOWN_OR_REFUSED_V1" in result.stdout
+    assert "UNLOADS=0" in result.stdout
+    assert program.exists() and plist.exists()
+    assert (management / "registration.json").exists()
+
+
+def test_loaded_service_is_booted_out_before_removal(tmp_path):
+    """The ordinary case still unloads first."""
+    result, program, plist, _, _ = compile_harness(tmp_path, job_loaded=1)
+    assert rc_of(result) == 0, result.stdout
+    assert "UNLOADS=1" in result.stdout
+    assert not program.exists() and not plist.exists()
 
 
 def test_entry_never_references_runtime_data_paths():
