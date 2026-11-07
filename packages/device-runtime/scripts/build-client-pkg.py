@@ -284,7 +284,7 @@ OUTSTANDING
 fi
 """
 
-POSTINSTALL = """#!/bin/sh
+POSTINSTALL = r"""#!/bin/sh
 # Runs as root inside the installer's own transaction. The staged tree is never
 # written to the live path: it is published by one atomic rename either way.
 #
@@ -343,6 +343,11 @@ record_status() {{
             if [ -n "$STATUS_NOTE" ] && [ ! -L "$STATUS_DIR/install-note" ]; then
                 printf '%s\n' "$STATUS_NOTE" > "$STATUS_DIR/install-note" 2>/dev/null || true
                 chmod 0600 "$STATUS_DIR/install-note" 2>/dev/null || true
+            elif [ -z "$STATUS_NOTE" ] && [ -f "$STATUS_DIR/install-note" ] && [ ! -L "$STATUS_DIR/install-note" ]; then
+                # A successful install leaves no note behind. Keeping the
+                # previous failure's text next to status 0 tells the operator
+                # their new install has a problem it does not have.
+                rm -f "$STATUS_DIR/install-note" 2>/dev/null || true
             fi
         fi
     fi
@@ -375,39 +380,121 @@ if [ -f "$REGISTRATION" ]; then
     # failed", no cause, and no way out -- every later install retried the same
     # doomed branch. Detect it here, name it, and print the exact recovery
     # command instead of running a coordinator that cannot succeed.
+    if [ -L "$PROGRAM" ]; then
+        # The live path is a symlink, not a directory. An orphan is "the tree is
+        # gone"; a link is a different fault (a relocation or a stray link), and
+        # the recovery for it is not "delete the identity". Name it and stop
+        # rather than reporting the case the notice can actually explain.
+        STATUS_CODE=70
+        STATUS_NOTE="program path is a symlink, not a program tree: $PROGRAM"
+        record_status
+        cat >&2 <<'SYMLINKED'
+AI_DEVICE_CLIENT_PROGRAM_IS_SYMLINK_V1
+The client program path exists but is a symbolic link, not the installed
+program tree:
+SYMLINKED
+        printf '  %s -> %s\n' "$PROGRAM" "$(readlink "$PROGRAM" 2>/dev/null || echo '?')" >&2
+        cat >&2 <<'SYMLINKED'
+
+This is not an orphaned registration: the identity still describes a program
+that was placed elsewhere. Nothing was changed by this attempt. Inspect the
+link target before removing anything; if the tree really is gone, remove the
+link first and run this installer again.
+SYMLINKED
+        exit 1
+    fi
     if [ ! -d "$PROGRAM" ]; then
         STATUS_CODE=70
-        STATUS_NOTE="orphan: registration without program at $PROGRAM"
+        # "No program directory" does not mean "no client running": an instance
+        # started before the tree was removed keeps running from its open files.
+        # Observe first -- a read-only host-conflict check driven by this
+        # payload's own inventory -- because deleting the identity out from under
+        # a live client leaves a process that can never be managed again, which
+        # is worse than the orphan it was meant to fix.
+        observe_status=1
+        if [ -x "$UPGRADE_ENTRY" ] && [ -d "$STAGE" ]; then
+            set +e
+            "$UPGRADE_ENTRY" observe-unregistered-program --confirm-legacy-clients-disabled "$STAGE" >/dev/null 2>&1
+            observe_status=$?
+            set -e
+        fi
+        if [ "$observe_status" -eq 0 ]; then
+            host_line='No client instance was found running from this program.'
+        else
+            host_line='WARNING: a client instance may still be running. Stop it first;'
+            host_line="$host_line
+removing the identity of a running client leaves a process nothing can manage."
+        fi
+        # The registered home comes from the identity file, never from this
+        # shell: postinstall runs as root, where $HOME is /var/root.
+        owner_home=$(sed -n 's/.*"home":[[:space:]]*"\([^"]*\)".*/\1/p' "$REGISTRATION" 2>/dev/null | head -1)
+        owner_uid=$(sed -n 's/.*"uid":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$REGISTRATION" 2>/dev/null | head -1)
+        [ -n "$owner_home" ] || owner_home='<registered user home>'
+        [ -n "$owner_uid" ] || owner_uid='<uid>'
+        STATUS_NOTE="orphan: registration without program at $PROGRAM; recovery steps recorded in install-note"
         record_status
-        cat >&2 <<ORPHANED
+        # Every heredoc below is QUOTED and every path is either a build-time
+        # constant or read from the identity file, so nothing depends on this
+        # root shell's environment.
+        cat >&2 <<'ORPHANED'
 AI_DEVICE_CLIENT_IDENTITY_WITHOUT_PROGRAM_V1
-This machine has a client registration but no program at $PROGRAM.
-The upgrade path needs a running client to hand over, and there is none, so
-this install cannot proceed. Nothing has been changed on this machine.
+This machine has a client registration but no program tree, so the upgrade
+path has nothing to hand over and this install cannot proceed. No program,
+configuration, token or business data has been changed by this attempt.
 
-The registration records a user and uid only; configuration, token and
-business data are NOT part of it and are not touched by removing it.
+ORPHANED
+        printf '%s\n' "$host_line" >&2
+        cat >&2 <<'ORPHANED'
 
-To recover, remove the orphaned identity, then install again:
+The registration records a user, uid, gid and home only; configuration, token
+and business data are NOT part of it and are not removed with it.
 
-  sudo rm -f "$REGISTRATION"
+To recover, in this order:
 
-If a LaunchAgent for a client that no longer exists is still present, remove
-it too (it is a per-user file, so run it as that user):
+  1. Make sure no client process is left running, then unload the job if it is
+     still registered:
+ORPHANED
+        printf '       launchctl bootout gui/%s/local.ai-device.client\n' "$owner_uid" >&2
+        cat >&2 <<'ORPHANED'
 
-  rm -f "$HOME/Library/LaunchAgents/local.ai-device.client.plist"
+  2. Remove that user's LaunchAgent plist:
+ORPHANED
+        printf '       rm -f "%s/Library/LaunchAgents/local.ai-device.client.plist"\n' "$owner_home" >&2
+        cat >&2 <<'ORPHANED'
 
-A previously interrupted install may also have left a staged payload behind.
-The preinstall checks for that and refuses, so clear any that remain:
+  3. Remove the orphaned identity -- it is the only file that must go:
+ORPHANED
+        printf '       sudo rm -f "%s"\n' "$REGISTRATION" >&2
+        cat >&2 <<'ORPHANED'
 
-  sudo rm -rf /opt/ai-device-client-stage-*
+  4. If an interrupted attempt left this package's own stage directory behind,
+     remove exactly this path (no other directory is involved):
+ORPHANED
+        printf '       sudo rm -rf "%s"\n' "$STAGE" >&2
+        cat >&2 <<'ORPHANED'
 
 Then run this same installer again; it will take the first-install path.
 
-This message is also recorded at:
-  $STATUS_FILE
-  $STATUS_DIR/install-note
+The same guidance is saved in:
 ORPHANED
+        printf '  %s\n' "$STATUS_DIR/install-note" >&2
+        # install-note is the only channel the operator can read afterwards:
+        # the installer window shows just "the install failed".
+        if [ -d "$STATUS_DIR" ] && [ ! -L "$STATUS_DIR" ] && [ ! -L "$STATUS_DIR/install-note" ]; then
+            RECOVERY_TEXT=$(printf '%s\n' \
+                'AI_DEVICE_CLIENT_IDENTITY_WITHOUT_PROGRAM_V1' \
+                "$(printf 'program missing: %s' "$PROGRAM")" \
+                "$host_line" \
+                "$(printf 'registered home: %s (uid %s)' "$owner_home" "$owner_uid")" \
+                'recover:' \
+                "$(printf '  1) launchctl bootout gui/%s/local.ai-device.client' "$owner_uid")" \
+                "$(printf '  2) rm -f \"%s/Library/LaunchAgents/local.ai-device.client.plist\"' "$owner_home")" \
+                "$(printf '  3) sudo rm -f \"%s\"' "$REGISTRATION")" \
+                "$(printf '  4) sudo rm -rf \"%s\"' "$STAGE")" \
+                '  5) run this installer again')
+            printf '%s\n' "$RECOVERY_TEXT" > "$STATUS_DIR/install-note" 2>/dev/null || true
+            chmod 0600 "$STATUS_DIR/install-note" 2>/dev/null || true
+        fi
         exit 1
     fi
     # The stage path is this package's own payload. The entry verifies it

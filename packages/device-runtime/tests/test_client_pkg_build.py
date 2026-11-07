@@ -809,8 +809,25 @@ def test_postinstall_detects_registration_without_a_program(builder, tree, tmp_p
     orphan = postinstall.index("AI_DEVICE_CLIENT_IDENTITY_WITHOUT_PROGRAM_V1")
     coordinator = postinstall.index("upgrade-registered-program")
     assert registered < orphan < coordinator
-    # Recovery must be a command the operator can actually run, not prose.
-    assert 'sudo rm -f "$REGISTRATION"' in postinstall
+    # Recovery must be commands the operator can actually run, not prose. The
+    # identity path is injected by printf from a build-time constant rather than
+    # left as $REGISTRATION, because the heredoc is quoted: postinstall runs as
+    # root, so nothing inside it may depend on shell expansion.
+    assert 'sudo rm -f "%s"' in postinstall
+    # The notice text itself must not reference shell variables that a quoted
+    # heredoc would print literally. Only the printf calls may carry them.
+    orphan_text = postinstall.split("AI_DEVICE_CLIENT_IDENTITY_WITHOUT_PROGRAM_V1")[1]
+    orphan_text = orphan_text[:orphan_text.index("The same guidance is saved in:")]
+    # The notice must not print a shell variable to the operator. $HOME is the
+    # one that matters: postinstall runs as root, so an unquoted heredoc would
+    # have printed /var/root -- a directory the reader does not own.
+    notice_only = "\n".join(
+        ln for ln in orphan_text.splitlines()
+        if "$" in ln and not ln.strip().startswith(("printf", "cat "))
+    )
+    # Every remaining $VAR must be inside a printf argument, not free text.
+    assert "$HOME" not in notice_only
+    assert "$USER" not in notice_only
     # install-status and install-note are the only channels that survive the
     # install: installer discards script stderr, so an early exit that skips the
     # status write leaves the operator with nothing at all.
@@ -822,7 +839,10 @@ def test_postinstall_detects_registration_without_a_program(builder, tree, tmp_p
     assert "install-note" in postinstall
     # A leftover stage from an interrupted install makes preinstall refuse, so a
     # recovery that omits it sends the operator straight back to the same error.
-    assert "ai-device-client-stage-" in postinstall
+    # It must be THIS package's stage path, not a glob: a wildcard tells the
+    # operator to delete every stage-named directory on the machine, including
+    # ones belonging to a different version or an in-flight install.
+    assert "rm -rf /opt/ai-device-client-stage-*" not in postinstall
     # The status writer must not consume positional parameters: this text is a
     # str.format template, and $1/$2 are parsed as replacement fields.
     assert "record_status \"$" not in postinstall
@@ -1009,3 +1029,157 @@ def test_rehearsal_modes_stay_silent_about_configuration(builder, tree, tmp_path
     postinstall = (output / "scripts/postinstall").read_text()
     assert "AI_DEVICE_CLIENT_INSTALLED_NOT_REGISTERED_V1" not in postinstall
     assert "client_macos_register" not in postinstall
+
+
+def _orphan_notice_shell(tmp_path, *, observe_ok=False, program_exists=False,
+                         program_is_symlink=False, home="/Users/tester", uid=555):
+    """Run the shipped orphan notice for real and return what it prints.
+
+    String assertions cannot tell whether the notice is operable: a quoted
+    heredoc and an unquoted one contain the same words but print different
+    things. This executes the fragment with the same variables postinstall has.
+    """
+    import importlib.util as _iu
+
+    spec = _iu.spec_from_file_location(
+        "orphan_builder", Path(__file__).parents[1] / "scripts/build-client-pkg.py"
+    )
+    builder = _iu.module_from_spec(spec)
+    spec.loader.exec_module(builder)
+    rendered = builder.POSTINSTALL.format(
+        program=str(tmp_path / "prog"),
+        stage=str(tmp_path / "stage"),
+        entry=str(tmp_path / "stage/bin/commit"),
+        verb="commit",
+        status_dir=str(tmp_path / "status"),
+        status_file=str(tmp_path / "status/install-status"),
+        upgrade_entry=str(tmp_path / "entry"),
+        registration=str(tmp_path / "registration.json"),
+        epilogue="",
+    )
+    start = rendered.index('    if [ -L "$PROGRAM" ]; then')
+    # End at the orphan branch's own exit, so the fragment is two complete
+    # if-blocks rather than a slice that leaves later branches unterminated.
+    marker = rendered.index("IDENTITY_WITHOUT_PROGRAM_V1", start)
+    end = rendered.index("\n        exit 1\n    fi\n", marker) + len("\n        exit 1\n    fi\n")
+    fragment = rendered[start:end]
+
+    (tmp_path / "registration.json").write_text(
+        f'{{"schema_version": 1, "user": "tester", "uid": {uid}, "gid": 20, '
+        f'"home": "{home}"}}'
+    )
+    (tmp_path / "stage").mkdir()
+    if program_is_symlink:
+        (tmp_path / "realtree").mkdir()
+        (tmp_path / "prog").symlink_to(tmp_path / "realtree")
+    elif program_exists:
+        (tmp_path / "prog").mkdir()
+    entry = tmp_path / "entry"
+    entry.write_text(f"#!/bin/sh\nexit {0 if observe_ok else 70}\n")
+    entry.chmod(0o755)
+
+    script = tmp_path / "notice.sh"
+    script.write_text(
+        "#!/bin/sh\n"
+        f'PROGRAM="{tmp_path}/prog"\n'
+        f'STAGE="{tmp_path}/stage"\n'
+        f'UPGRADE_ENTRY="{tmp_path}/entry"\n'
+        f'REGISTRATION="{tmp_path}/registration.json"\n'
+        f'STATUS_DIR="{tmp_path}/status"\n'
+        f'STATUS_FILE="{tmp_path}/status/install-status"\n'
+        "STATUS_CODE=\nSTATUS_NOTE=\n"
+        'record_status() { mkdir -p "$STATUS_DIR" 2>/dev/null; '
+        'printf \'%s\\n\' "$STATUS_CODE" > "$STATUS_FILE" 2>/dev/null; }\n'
+        + fragment + "\n"
+    )
+    script.chmod(0o755)
+    result = subprocess.run(
+        ["/bin/sh", str(script)], capture_output=True, check=False, text=True, timeout=30,
+        env={"PATH": "/usr/bin:/bin", "HOME": "/var/root"},
+    )
+    note = tmp_path / "status/install-note"
+    return result, (note.read_text() if note.exists() else "")
+
+
+def test_orphan_notice_never_prints_the_root_home(tmp_path):
+    """postinstall runs as root, where HOME is /var/root.
+
+    The notice tells the operator to remove a file under their own home. A
+    notice that reads $HOME -- or lets the shell expand it -- prints root's home
+    instead: an instruction that cannot be followed, and one that suggests the
+    client lived somewhere it never did.
+
+    The guard is that the home is read from the identity file and interpolated
+    as data, so no quoting rule has to hold for it to be right. This asserts the
+    observable outcome for both shapes.
+    """
+    result, note = _orphan_notice_shell(tmp_path, home="/Users/tester")
+    assert "/var/root" not in result.stderr, result.stderr
+    assert "/Users/tester/Library/LaunchAgents/local.ai-device.client.plist" in result.stderr
+    assert "/var/root" not in note
+    # The operator's home must come from the registration, not be hardcoded.
+    second = tmp_path / "b"
+    second.mkdir()
+    other, _ = _orphan_notice_shell(second, home="/Users/someone-else")
+    assert "/Users/someone-else/Library/LaunchAgents" in other.stderr
+    assert "/Users/tester" not in other.stderr
+
+
+def test_orphan_notice_reports_a_running_instance_before_deleting_anything(tmp_path):
+    """A missing program tree does not prove no client is running.
+
+    An instance started before the tree was removed keeps running. Telling the
+    operator to delete the identity first would strand that process: it stays
+    alive and nothing can manage it again. The notice must say which case it is.
+    """
+    ok, _ = _orphan_notice_shell(tmp_path, observe_ok=True)
+    assert "No client instance was found running" in ok.stderr
+    assert "may still be running" not in ok.stderr
+
+    other = tmp_path / "other"
+    other.mkdir()
+    failed, _ = _orphan_notice_shell(other, observe_ok=False)
+    assert "may still be running" in failed.stderr
+
+
+def test_orphan_recovery_names_exact_paths_not_a_wildcard(tmp_path):
+    """Recovery must not hand the operator a glob over /opt.
+
+    An earlier version printed `sudo rm -rf /opt/ai-device-client-stage-*`, which
+    deletes every stage-named directory on the machine -- including one belonging
+    to a different version or an install running right now.
+    """
+    result, _ = _orphan_notice_shell(tmp_path)
+    assert "/opt/ai-device-client-stage-*" not in result.stderr
+    assert str(tmp_path / "stage") in result.stderr
+    assert str(tmp_path / "registration.json") in result.stderr
+
+
+def test_orphan_notice_persists_the_full_recovery_not_just_a_reason(tmp_path):
+    """install-note is the only channel left after the installer window closes.
+
+    Writing a 62-byte reason there tells the operator what went wrong but not
+    what to do, and the stderr text they would need is already gone.
+    """
+    _, note = _orphan_notice_shell(tmp_path)
+    assert "launchctl bootout gui/555" in note
+    assert "registration.json" in note
+    assert len(note) > 200
+
+
+def test_symlinked_program_path_is_not_reported_as_an_orphan(tmp_path):
+    """A symlink at the live path is a different fault than a missing tree.
+
+    `[ ! -d ]` follows links, so a dangling link reads as "missing" and a link to
+    a directory reads as "present". Neither is an orphan, and the orphan recovery
+    (delete the identity) would destroy a working registration.
+    """
+    result, _ = _orphan_notice_shell(tmp_path, program_is_symlink=True)
+    assert "AI_DEVICE_CLIENT_PROGRAM_IS_SYMLINK_V1" in result.stderr
+    assert "AI_DEVICE_CLIENT_IDENTITY_WITHOUT_PROGRAM_V1" not in result.stderr
+    # It must name where the link points, or "inspect the target" is advice with
+    # nothing to act on.
+    assert str(tmp_path / "realtree") in result.stderr
+    # And it must not tell the operator to delete anything: the identity is
+    # still valid here.
+    assert "sudo rm" not in result.stderr
