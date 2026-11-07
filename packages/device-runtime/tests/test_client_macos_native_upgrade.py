@@ -76,6 +76,9 @@ def test_upgrade_once_order(tmp_path, failure):
                 "static int handoff_registered_start(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;if(!gate())return 0;if(!registered_guards_current(m,u,p,g))return 0;g->start=-1;g->runtime=-1;return 1;}\n"
         'static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d){(void)d;if(g->start>=0 || g->runtime>=0)return 0;if(!registered_management_current(m,u,p,g))return 0;if(bound && (![v isEqual:@"bound-2"] || ![b isEqual:@"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]))return 0;return gate();}\n'
         f'static NSDictionary *read_target_identity(const char *s,uid_t u){{if(strcmp(s,"fixed") || u!=0)return nil;return {identity_literal};}}\n'
+        'static int cleanup_calls=0;static const char *cleanup_last_stage=0;\n'
+        '#define STAGE_CLEANUP_OK 0\n#define STAGE_CLEANUP_REFUSED 1\n#define STAGE_CLEANUP_INCOMPLETE 2\n'
+        'static int cleanup_swapped_stage(const char *s,const char *p,uid_t o){cleanup_calls++;cleanup_last_stage=s;(void)p;(void)o;return STAGE_CLEANUP_OK;}\n'
         f'#include "{native / "client-macos-registered-upgrade.h"}"\n'
         "int main(void){@autoreleasepool {(void)upgrade_registered_bound_once;(void)upgrade_recover_after_stage;struct managed_guards g={1,2,-1};\n"
         f"int result={call};\n"
@@ -167,6 +170,12 @@ static int load_registered_service_relay_unattested(const char *m,uid_t u,int fd
 static int registered_management_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}
 static int registered_management_confirmed(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}
 static NSDictionary *read_target_identity(const char *s,uid_t u){(void)s;(void)u;return nil;}
+
+#define STAGE_CLEANUP_OK 0
+#define STAGE_CLEANUP_REFUSED 1
+#define STAGE_CLEANUP_INCOMPLETE 2
+static int cleanup_calls=0;
+static int cleanup_swapped_stage(const char *s,const char *p,uid_t o){(void)s;(void)p;(void)o;cleanup_calls++;return STAGE_CLEANUP_OK;}
 #include "NATIVE_HEADER"
 int main(void){@autoreleasepool {
     struct managed_guards g={1,2,-1};
@@ -233,6 +242,7 @@ def test_real_upgrade_translation_unit_compiles(tmp_path):
         "client-macos-service-relay.h",
         "client-macos-target-identity.h",
         "client-macos-program-commit.h",
+        "client-macos-stage-cleanup.h",
         "client-macos-registered-upgrade.h",
     ]
     harness.write_text(
@@ -302,6 +312,9 @@ def test_upgrade_invalid_clock_stops_before_next_action(
         "static int handoff_registered_start(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;actions++;return 1;}\n"
         "static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d){(void)m;(void)u;(void)p;(void)g;(void)v;(void)b;(void)d;return 1;}\n"
         "static NSDictionary *read_target_identity(const char *s,uid_t u){(void)s;(void)u;return nil;}\n"
+        'static int cleanup_calls=0;static const char *cleanup_last_stage=0;\n'
+        '#define STAGE_CLEANUP_OK 0\n#define STAGE_CLEANUP_REFUSED 1\n#define STAGE_CLEANUP_INCOMPLETE 2\n'
+        'static int cleanup_swapped_stage(const char *s,const char *p,uid_t o){cleanup_calls++;cleanup_last_stage=s;(void)p;(void)o;return STAGE_CLEANUP_OK;}\n'
         f'#include "{native / "client-macos-registered-upgrade.h"}"\n'
         "int main(void){@autoreleasepool {(void)upgrade_registered_bound_once;(void)upgrade_recover_after_stage;struct managed_guards g={1,2,-1};"
         'int r=upgrade_registered_once("unused",0,@{},&g,@"1",@"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",10,"fixed");'
@@ -345,6 +358,11 @@ struct managed_guards {int management,start,runtime;};
 static int confirmed_rc=1,guards_rc=1,handoff_rc=1,load_rc=1;
 static int handoff_calls=0,load_calls=0;
 static void unused_leaves(void);
+#define STAGE_CLEANUP_OK 0
+#define STAGE_CLEANUP_REFUSED 1
+#define STAGE_CLEANUP_INCOMPLETE 2
+static int cleanup_calls=0;
+static int cleanup_swapped_stage(const char *s,const char *p,uid_t o){(void)s;(void)p;(void)o;cleanup_calls++;return STAGE_CLEANUP_OK;}
 static int registered_exit_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 0;}
 #define PROGRAM_COMMIT_OK 0
 #define PROGRAM_COMMIT_REFUSED 1
@@ -463,3 +481,133 @@ def test_recovery_refuses_every_non_recoverable_stage(tmp_path, stage):
     already loaded) must never be recovered."""
     result, handoffs, loads, _ = _build_recovery_harness(tmp_path, stage=stage)
     assert (result, handoffs, loads) == (0, 0, 0)
+
+
+CLEANUP_HARNESS = r"""
+#import <Foundation/Foundation.h>
+#include <limits.h>
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+struct managed_guards {int management,start,runtime;};
+#define LEASE_ACCEPTED 1
+#define LEASE_BUSY 0
+#define LEASE_UNKNOWN -1
+static int ready_rc=1,cleanup_rc=0,cleanup_calls=0;
+static char cleanup_stage[PATH_MAX],cleanup_program[PATH_MAX];
+static int cleanup_owner=-1;
+/* A not-yet-ready target must exhaust the deadline instead of spinning: the
+ * clock only advances while the readiness query keeps failing, so the wait
+ * loop terminates quickly here instead of sleeping out 1000 attempts. */
+static double clock_now=0;
+static double lease_clock(void){return clock_now;}
+static int registered_exit_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}
+#define PROGRAM_COMMIT_OK 0
+#define PROGRAM_COMMIT_REFUSED 1
+#define PROGRAM_COMMIT_UNKNOWN 2
+static int verify_resource_tree(const char *p){(void)p;return 1;}
+static int tree_owner_valid(const char *p,uid_t u,int d){(void)p;(void)u;(void)d;return 1;}
+static int exit_registered_original(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,double d){(void)m;(void)u;(void)p;(void)g;(void)d;return LEASE_ACCEPTED;}
+static int registered_guards_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}
+static int unload_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;return 1;}
+static int commit_staged_program(const char *s,const char *p,uid_t o,int(*v)(const char*)){(void)s;(void)p;(void)o;(void)v;return PROGRAM_COMMIT_OK;}
+static int registered_target_exact(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}
+static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d){(void)m;(void)u;(void)p;(void)g;(void)v;(void)b;(void)d;if(ready_rc)return 1;clock_now+=1.0;return 0;}
+static int handoff_registered_start(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;g->start=-1;g->runtime=-1;return 1;}
+static int load_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;return 1;}
+static int load_registered_service_relay_unattested(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;return 1;}
+static int registered_management_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}
+static int registered_management_confirmed(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}
+static NSDictionary *read_target_identity(const char *s,uid_t u){(void)s;(void)u;return nil;}
+#define STAGE_CLEANUP_OK 0
+#define STAGE_CLEANUP_REFUSED 1
+#define STAGE_CLEANUP_INCOMPLETE 2
+static int cleanup_swapped_stage(const char *s,const char *p,uid_t o){
+    cleanup_calls++;
+    snprintf(cleanup_stage,sizeof(cleanup_stage),"%s",s);
+    snprintf(cleanup_program,sizeof(cleanup_program),"%s",p);
+    cleanup_owner=(int)o;
+    return cleanup_rc;
+}
+"""
+
+
+def _run_cleanup_case(tmp_path, ready_rc=1, cleanup_rc=0):
+    native = Path(__file__).parents[1] / "native"
+    source = tmp_path / "cleanup-upgrade.m"
+    source.write_text(
+        CLEANUP_HARNESS
+        + f"#include \"{native / 'client-macos-registered-upgrade.h'}\"\n"
+        + "int main(void){@autoreleasepool {"
+        + f"ready_rc={ready_rc};cleanup_rc={cleanup_rc};"
+        + "struct managed_guards g={1,2,-1};"
+        + 'NSDictionary *paths=@{@"program":@"/opt/ai-device-client/run",'
+        + '@"management_owner":@(501)};'
+        + 'int r=upgrade_registered_once("management",501,paths,&g,@"1",'
+        + '@"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
+        + '10,"/opt/ai-device-client-stage-1-deadbeef");'
+        + 'printf("%d|%d|%s|%s|%d\\n",r,cleanup_calls,cleanup_stage,cleanup_program,cleanup_owner);'
+        + "return 0;}}"
+    )
+    binary = tmp_path / "cleanup-upgrade"
+    subprocess.run(
+        ["/usr/bin/xcrun", "clang", "-Wall", "-Wextra", "-Werror", "-fobjc-arc",
+         "-framework", "Foundation", str(source), "-o", str(binary)],
+        check=True, capture_output=True,
+    )
+    out = subprocess.run([str(binary)], check=True, capture_output=True, text=True, timeout=10)
+    stage, calls, stage_arg, program_arg, owner = out.stdout.strip().split("|")
+    return {
+        "stage": int(stage),
+        "calls": int(calls),
+        "stage_arg": stage_arg,
+        "program_arg": program_arg,
+        "owner": int(owner),
+        "stderr": out.stderr,
+    }
+
+
+def test_cleanup_runs_only_after_the_new_instance_is_ready(tmp_path):
+    """The swapped-out tree is deleted only once the instance serves the new one.
+
+    Before this, nothing deleted the stage tree after a successful upgrade, so
+    every upgrade left a full tree behind and the next upgrade to the same
+    version could not even start: the package writes to that exact stage path.
+    """
+    result = _run_cleanup_case(tmp_path)
+    assert result["stage"] == 0
+    assert result["calls"] == 1
+    assert result["stage_arg"] == "/opt/ai-device-client-stage-1-deadbeef"
+    assert result["program_arg"] == "/opt/ai-device-client/run"
+    assert result["owner"] == 501
+
+
+def test_cleanup_uses_the_live_program_path_not_another_copy(tmp_path):
+    """Overlap refusal depends on the live path, so it must be the published one."""
+    result = _run_cleanup_case(tmp_path)
+    assert result["program_arg"] == "/opt/ai-device-client/run"
+
+
+def test_not_ready_never_cleans_the_old_tree(tmp_path):
+    """A failed ready check leaves the stage tree in place.
+
+    The new instance is not proven to be serving, so the old tree may still be
+    what is running. Deleting it there would be the unsafe case, not cleanup.
+    """
+    result = _run_cleanup_case(tmp_path, ready_rc=0)
+    assert result["stage"] != 0
+    assert result["calls"] == 0
+
+
+@pytest.mark.parametrize("cleanup_rc", [1, 2])
+def test_cleanup_failure_does_not_fail_the_upgrade(tmp_path, cleanup_rc):
+    """A leftover tree is debris, not a failed install.
+
+    Reporting failure would tell the operator to reinstall, and a reinstall
+    swaps again. The commit already succeeded and the instance is serving.
+    """
+    result = _run_cleanup_case(tmp_path, cleanup_rc=cleanup_rc)
+    assert result["stage"] == 0
+    assert result["calls"] == 1
+    assert "stage cleanup" in result["stderr"]

@@ -877,6 +877,9 @@ def test_registered_native_exit_acquires_runtime_without_python_coordinator(
         "static int load_registered_service_relay_unattested(const char *m,uid_t u,int fd,const char *t,double d) {\n"
         ' (void)m;(void)u;(void)fd;(void)d;if(!t||!*t)return 0;puts("SERVICE_LOADED");fflush(stdout);return 1;}\n'
         f'#include "{native / "client-macos-program-commit.h"}"\n'
+        'static int cleanup_calls=0;static const char *cleanup_last_stage=0;\n'
+        '#define STAGE_CLEANUP_OK 0\n#define STAGE_CLEANUP_REFUSED 1\n#define STAGE_CLEANUP_INCOMPLETE 2\n'
+        'static int cleanup_swapped_stage(const char *s,const char *p,uid_t o){cleanup_calls++;cleanup_last_stage=s;(void)p;(void)o;return STAGE_CLEANUP_OK;}\n'
         f'#include "{native / "client-macos-registered-upgrade.h"}"\n'
         f'#include "{native / "client-macos-start-child.h"}"\n'
         "static int test_start_child(const char *m,uid_t u,int fd,const char *tree,double timeout) {\n"

@@ -33,6 +33,10 @@
 /* The registered upgrade publishes by renaming the staged payload rather than
  * copying it, so it needs the commit primitive here as well. */
 #include "client-macos-program-commit.h"
+/* Deleting the tree the swap left behind. Required before
+ * client-macos-registered-upgrade.h, which calls it once the new instance is
+ * serving and the old tree is provably unused. */
+#include "client-macos-stage-cleanup.h"
 #include "client-macos-start-handoff.h"
 #include "client-macos-target-identity.h"
 #include "client-macos-registered-publish.h"

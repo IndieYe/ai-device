@@ -149,8 +149,37 @@ static inline int upgrade_registered_once(const char *management,uid_t manager,
         return UPGRADE_STAGE_AFTER_LOAD;
     if (!registered_management_current(management,manager,paths,guards) ||
         !upgrade_time_remaining(deadline)) return UPGRADE_STAGE_AFTER_LOAD;
-    return upgrade_wait_ready(management,manager,paths,guards,version,build,deadline)
-        ? UPGRADE_STAGE_OK : UPGRADE_STAGE_NOT_READY;
+    if (!upgrade_wait_ready(management,manager,paths,guards,version,build,deadline))
+        return UPGRADE_STAGE_NOT_READY;
+    /* The upgrade is complete: the new program is published, verified, and the
+     * instance is serving it. The old tree is no longer what any instance runs,
+     * so this is the earliest point at which deleting it cannot break a live
+     * process.
+     *
+     * `source_path` is the stage path this package wrote and this coordinator
+     * swapped FROM. That is the whole reason cleanup runs here instead of in
+     * postinstall: the caller supplies a path, but this frame knows the tree at
+     * that path is the one it just exchanged, because it observed the swap.
+     * Exposing a path-taking cleanup verb could not know that and was disabled
+     * for exactly that reason.
+     *
+     * What this does NOT establish: cleanup_swapped_stage re-checks the path
+     * itself and has a check-to-rename window, and this call passes no inode
+     * recorded at commit time. So this is "this frame saw a swap here", not
+     * continuous identity binding. A writer replacing the path in between is
+     * not excluded by this frame's knowledge.
+     *
+     * A failure here does NOT change the outcome. The commit is what makes the
+     * install valid; a leftover tree is disk debris. Reporting the install as
+     * failed would push the operator to reinstall, and a reinstall swaps again.
+     */
+    int cleaned=cleanup_swapped_stage(source_path,[paths[@"program"] fileSystemRepresentation],
+        [paths[@"management_owner"] unsignedIntValue]);
+    if (cleaned==STAGE_CLEANUP_INCOMPLETE)
+        fprintf(stderr,"stage cleanup incomplete; old tree renamed aside as debris\n");
+    else if (cleaned==STAGE_CLEANUP_REFUSED)
+        fprintf(stderr,"stage cleanup refused; old tree left at %s\n",source_path);
+    return UPGRADE_STAGE_OK;
 }
 
 /* Bounded, single-attempt recovery for the ONLY two stages whose on-disk state
