@@ -34,12 +34,15 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <errno.h>
+#include <string.h>
 /* fd-relative recursive removal that never follows a symlink. Shared with the
  * stage-cleanup path rather than reimplemented here. */
 #include "client-macos-stage-cleanup.h"
 /* Three-state "is the job loaded". Kept separate so the exit-code mapping can
  * be tested on its own; this file's harness substitutes the probe wholesale. */
 #include "client-macos-launchctl-probe.h"
+/* fd-relative, name-only file removal. Separate so it can be tested alone. */
+#include "client-macos-uninstall-remove.h"
 
 #define UNINSTALL_UNLOADED "AI_DEVICE_UNINSTALL_SERVICE_REMOVED_V1"
 
@@ -62,21 +65,6 @@
 #define UNINSTALL_MANAGEMENT_OWNER 0
 #endif
 
-
-static int uninstall_remove_file(const char *path, const char *parent,
-                                 uid_t owner, int require_owner) {
-    int directory = open(parent, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-    if (directory < 0) return 0;
-    struct stat info;
-    int ok = 0;
-    if (fstatat(directory, path, &info, AT_SYMLINK_NOFOLLOW) == 0 &&
-        S_ISREG(info.st_mode) && info.st_nlink == 1 &&
-        (!require_owner || info.st_uid == owner) &&
-        unlinkat(directory, path, 0) == 0)
-        ok = 1;
-    close(directory);
-    return ok;
-}
 
 static int uninstall_registered_entry(int argc, char **argv) {
     if (argc != 3 || strcmp(argv[1], "uninstall-registered-program") ||
@@ -170,7 +158,10 @@ static int uninstall_registered_entry(int argc, char **argv) {
      * reloaded at the next login and would point at a tree we are about to
      * delete. */
     NSString *plist = paths[@"plist"];
-    if (!plist || !uninstall_remove_file([plist fileSystemRepresentation],
+    /* Name and directory separately: the removal is fd-relative, so it must be
+     * given the bare file name and the directory it was validated against. */
+    if (!plist || !uninstall_remove_file(
+            [[plist lastPathComponent] fileSystemRepresentation],
             [[plist stringByDeletingLastPathComponent] fileSystemRepresentation],
             [paths[@"runtime_owner"] unsignedIntValue], 1)) {
         release_guards(&guards);

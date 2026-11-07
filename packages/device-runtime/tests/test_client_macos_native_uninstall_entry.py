@@ -382,6 +382,100 @@ def test_loaded_service_is_booted_out_before_removal(tmp_path):
     assert not program.exists() and not plist.exists()
 
 
+def test_removal_refuses_a_path_that_is_not_a_bare_name(tmp_path):
+    """A path with a separator defeats the whole point of the dirfd.
+
+    fstatat and unlinkat resolve an absolute path from the process root and
+    ignore the descriptor entirely, so the O_NOFOLLOW|O_DIRECTORY open above
+    would guard nothing and the checks below would be applied to a different
+    object than the directory the call claims to be bound to. The plist removal
+    used to pass its full path here, which is exactly that bug.
+    """
+    source = (Path(__file__).parents[1] / "native/client-macos-uninstall-entry.h").read_text()
+    code = "\n".join(
+        line for line in source.splitlines() if not line.strip().startswith(("*", "/*"))
+    )
+    # The plist call must pass a bare name and a separate directory.
+    assert "[plist lastPathComponent]" in code, (
+        "the removal takes a file name, not a path"
+    )
+    assert "uninstall_remove_file([plist fileSystemRepresentation]" not in code, (
+        "passing the full path makes the dirfd ineffectual"
+    )
+
+
+def test_removal_refuses_a_writable_directory(tmp_path):
+    """The bound directory itself must be checked, not just opened.
+
+    Opening a path proves only that some directory is there. If it is writable
+    by another user, the validated file can be replaced between the check and
+    the unlink, so the ownership assertion on the file carries no weight.
+    """
+    native = Path(__file__).parents[1] / "native"
+    source = tmp_path / "remove-probe.m"
+    protected = tmp_path / "protected"
+    protected.mkdir()
+    writable = tmp_path / "writable"
+    writable.mkdir()
+    (writable / "registration.json").write_text("x")
+    writable.chmod(0o777)
+    # Each case gets its own file: an earlier successful removal would make a
+    # later case pass for the wrong reason (nothing left to find), and the slash
+    # assertion below would then hold even with the guard removed.
+    subjects = {}
+    for label in ("OK", "SLASH", "DOTDOT", "ABS"):
+        name = f"{label}.json"
+        (protected / name).write_text("x")
+        subjects[label] = name
+    source.write_text(
+        "#include <stdio.h>\n"
+        "#include <unistd.h>\n"
+        + f'#include "{native}/client-macos-uninstall-remove.h"\n'
+        + "int main(void){"
+          # A bare name in an owned, non-writable directory succeeds.
+          f'printf("OK=%d\\n",uninstall_remove_file("{subjects["OK"]}",'
+          f'"{protected}",{os.getuid()},1));'
+          # The same shape in a world-writable directory is refused.
+          f'printf("WRITABLE=%d\\n",uninstall_remove_file("registration.json",'
+          f'"{writable}",{os.getuid()},1));'
+          # A name containing a separator is refused before any syscall. It
+          # names a real file, so a missing guard would really delete it.
+          f'printf("SLASH=%d\\n",uninstall_remove_file('
+          f'"../protected/{subjects["SLASH"]}","{protected}",{os.getuid()},1));'
+          f'printf("DOTDOT=%d\\n",uninstall_remove_file("..","{protected}",'
+          f'{os.getuid()},1));'
+          # An absolute path that exists and is valid: without the bare-name
+          # guard fstatat would resolve it from the root and the unlink would
+          # succeed, which is the bug this signature exists to prevent.
+          f'printf("ABS=%d\\n",uninstall_remove_file('
+          f'"{protected}/{subjects["ABS"]}","{protected}",{os.getuid()},1));'
+          "return 0;}\n"
+    )
+    binary = tmp_path / "remove-probe"
+    compiled = subprocess.run(
+        ["/usr/bin/xcrun", "clang", "-Wall", "-Wextra", "-Werror",
+         str(source), "-o", str(binary)],
+        check=False, capture_output=True, text=True,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+    result = subprocess.run([str(binary)], check=False, capture_output=True,
+                            text=True, timeout=5)
+    seen = {
+        key: int(value)
+        for key, value in (line.split("=") for line in result.stdout.splitlines())
+    }
+    assert seen["OK"] == 1, result.stdout
+    assert not (protected / subjects["OK"]).exists(), "the accepted case really removed it"
+    assert seen["WRITABLE"] == 0, "a directory others can write is not bound"
+    assert seen["SLASH"] == 0, "a name containing a separator is refused"
+    assert seen["DOTDOT"] == 0, "traversal is refused"
+    assert seen["ABS"] == 0, "an absolute path is not a bare name"
+    # The refusals removed nothing.
+    assert (protected / subjects["SLASH"]).exists()
+    assert (protected / subjects["ABS"]).exists()
+    assert (writable / "registration.json").exists(), "nothing was removed"
+
+
 def test_entry_never_references_runtime_data_paths():
     """A guard against a later edit quietly adding data deletion.
 
