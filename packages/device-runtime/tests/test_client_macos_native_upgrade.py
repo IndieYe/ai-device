@@ -55,6 +55,7 @@ def test_upgrade_once_order(tmp_path, failure):
     harness = tmp_path / "upgrade.m"
     harness.write_text(
         "#import <Foundation/Foundation.h>\n#include <limits.h>\n#include <math.h>\n#include <stdio.h>\n#include <unistd.h>\n"
+        "#include <sys/stat.h>\n"
         "struct managed_guards {int management,start,runtime;};\n"
         f"static int failure={failure if not bound else 0},step=0,bound={int(bound)};\n"
         "static int gate(void){return ++step!=failure;}\n"
@@ -66,7 +67,7 @@ def test_upgrade_once_order(tmp_path, failure):
         "static int tree_owner_valid(const char *p,uid_t u,int d){(void)p;(void)u;(void)d;return gate();}\n"
         "static int exit_registered_original(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,double d){(void)m;(void)u;(void)p;(void)d;if(!gate())return 0;g->runtime=3;return 1;}\n"
         "static int registered_guards_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;return g->management==1 && g->start==2 && g->runtime==3 && gate();}\n"
-        "static int commit_staged_program(const char *s,const char *p,uid_t o,int(*v)(const char*)){(void)s;(void)p;(void)o;(void)v;return gate()?PROGRAM_COMMIT_OK:PROGRAM_COMMIT_REFUSED;}\n"
+        "static int commit_staged_program(const char *s,const char *p,uid_t o,int(*v)(const char*),struct stat *r){(void)s;(void)p;(void)o;(void)v;if(r)memset(r,0,sizeof(*r));return gate()?PROGRAM_COMMIT_OK:PROGRAM_COMMIT_REFUSED;}\n"
         "static int registered_target_exact(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return gate();}\n"
         "static int unload_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;return gate();}\n"
         "static int load_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;return gate();}\n"
@@ -78,7 +79,7 @@ def test_upgrade_once_order(tmp_path, failure):
         f'static NSDictionary *read_target_identity(const char *s,uid_t u){{if(strcmp(s,"fixed") || u!=0)return nil;return {identity_literal};}}\n'
         'static int cleanup_calls=0;static const char *cleanup_last_stage=0;\n'
         '#define STAGE_CLEANUP_OK 0\n#define STAGE_CLEANUP_REFUSED 1\n#define STAGE_CLEANUP_INCOMPLETE 2\n'
-        'static int cleanup_swapped_stage(const char *s,const char *p,uid_t o){cleanup_calls++;cleanup_last_stage=s;(void)p;(void)o;return STAGE_CLEANUP_OK;}\n'
+        'static int cleanup_swapped_stage(const char *s,const char *p,uid_t o,const struct stat *r){cleanup_calls++;cleanup_last_stage=s;(void)p;(void)o;(void)r;return STAGE_CLEANUP_OK;}\n'
         f'#include "{native / "client-macos-registered-upgrade.h"}"\n'
         "int main(void){@autoreleasepool {(void)upgrade_registered_bound_once;(void)upgrade_recover_after_stage;struct managed_guards g={1,2,-1};\n"
         f"int result={call};\n"
@@ -144,6 +145,7 @@ BUSY_UNKNOWN_HARNESS = """
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
+#include <sys/stat.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -161,7 +163,7 @@ static int tree_owner_valid(const char *p,uid_t u,int d){(void)p;(void)u;(void)d
 static int exit_registered_original(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,double d){(void)m;(void)u;(void)p;(void)g;(void)d;return LEASE_RESULT;}
 static int registered_guards_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}
 static int unload_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;return 1;}
-static int commit_staged_program(const char *s,const char *p,uid_t o,int(*v)(const char*)){(void)s;(void)p;(void)o;(void)v;return 0;}
+static int commit_staged_program(const char *s,const char *p,uid_t o,int(*v)(const char*),struct stat *r){(void)s;(void)p;(void)o;(void)v;if(r){memset(r,0,sizeof(*r));r->st_dev=1;r->st_ino=2;}return 0;}
 static int registered_target_exact(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}
 static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d){(void)m;(void)u;(void)p;(void)g;(void)v;(void)b;(void)d;return 1;}
 static int handoff_registered_start(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}
@@ -175,7 +177,7 @@ static NSDictionary *read_target_identity(const char *s,uid_t u){(void)s;(void)u
 #define STAGE_CLEANUP_REFUSED 1
 #define STAGE_CLEANUP_INCOMPLETE 2
 static int cleanup_calls=0;
-static int cleanup_swapped_stage(const char *s,const char *p,uid_t o){(void)s;(void)p;(void)o;cleanup_calls++;return STAGE_CLEANUP_OK;}
+static int cleanup_swapped_stage(const char *s,const char *p,uid_t o,const struct stat *r){(void)s;(void)p;(void)o;(void)r;cleanup_calls++;return STAGE_CLEANUP_OK;}
 #include "NATIVE_HEADER"
 int main(void){@autoreleasepool {
     struct managed_guards g={1,2,-1};
@@ -292,6 +294,7 @@ def test_upgrade_invalid_clock_stops_before_next_action(
     source = tmp_path / "clock-upgrade.m"
     source.write_text(
         "#import <Foundation/Foundation.h>\n#include <limits.h>\n#include <math.h>\n#include <string.h>\n"
+        "#include <sys/stat.h>\n"
         "struct managed_guards {int management,start,runtime;};\n"
         "static int clocks=0,actions=0;\n"
         f"static double lease_clock(void){{return ++clocks=={failure_call} ? {invalid} : 0;}}\n"
@@ -302,7 +305,7 @@ def test_upgrade_invalid_clock_stops_before_next_action(
         "static int tree_owner_valid(const char *s,uid_t u,int d){(void)s;(void)u;(void)d;return 1;}\n"
         "static int exit_registered_original(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,double d){(void)m;(void)u;(void)p;(void)g;(void)d;actions++;return 1;}\n"
         "static int registered_guards_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}\n"
-        "static int commit_staged_program(const char *s,const char *p,uid_t o,int(*v)(const char*)){(void)s;(void)p;(void)o;(void)v;actions++;return 0;}\n"
+        "static int commit_staged_program(const char *s,const char *p,uid_t o,int(*v)(const char*),struct stat *r){(void)s;(void)p;(void)o;(void)v;if(r){memset(r,0,sizeof(*r));r->st_dev=1;r->st_ino=2;}actions++;return 0;}\n"
         "static int registered_target_exact(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}\n"
         "static int registered_management_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}\n"
         "static int registered_management_confirmed(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}\n"
@@ -314,7 +317,7 @@ def test_upgrade_invalid_clock_stops_before_next_action(
         "static NSDictionary *read_target_identity(const char *s,uid_t u){(void)s;(void)u;return nil;}\n"
         'static int cleanup_calls=0;static const char *cleanup_last_stage=0;\n'
         '#define STAGE_CLEANUP_OK 0\n#define STAGE_CLEANUP_REFUSED 1\n#define STAGE_CLEANUP_INCOMPLETE 2\n'
-        'static int cleanup_swapped_stage(const char *s,const char *p,uid_t o){cleanup_calls++;cleanup_last_stage=s;(void)p;(void)o;return STAGE_CLEANUP_OK;}\n'
+        'static int cleanup_swapped_stage(const char *s,const char *p,uid_t o,const struct stat *r){cleanup_calls++;cleanup_last_stage=s;(void)p;(void)o;(void)r;return STAGE_CLEANUP_OK;}\n'
         f'#include "{native / "client-macos-registered-upgrade.h"}"\n'
         "int main(void){@autoreleasepool {(void)upgrade_registered_bound_once;(void)upgrade_recover_after_stage;struct managed_guards g={1,2,-1};"
         'int r=upgrade_registered_once("unused",0,@{},&g,@"1",@"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",10,"fixed");'
@@ -348,6 +351,7 @@ RECOVERY_HARNESS = r"""
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
+#include <sys/stat.h>
 #include <string.h>
 #include <unistd.h>
 struct managed_guards {int management,start,runtime;};
@@ -362,7 +366,7 @@ static void unused_leaves(void);
 #define STAGE_CLEANUP_REFUSED 1
 #define STAGE_CLEANUP_INCOMPLETE 2
 static int cleanup_calls=0;
-static int cleanup_swapped_stage(const char *s,const char *p,uid_t o){(void)s;(void)p;(void)o;cleanup_calls++;return STAGE_CLEANUP_OK;}
+static int cleanup_swapped_stage(const char *s,const char *p,uid_t o,const struct stat *r){(void)s;(void)p;(void)o;(void)r;cleanup_calls++;return STAGE_CLEANUP_OK;}
 static int registered_exit_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 0;}
 #define PROGRAM_COMMIT_OK 0
 #define PROGRAM_COMMIT_REFUSED 1
@@ -370,7 +374,7 @@ static int registered_exit_current(const char *m,uid_t u,NSDictionary *p,struct 
 static int verify_resource_tree(const char *p){(void)p;return 0;}
 static int tree_owner_valid(const char *p,uid_t u,int d){(void)p;(void)u;(void)d;return 0;}
 static int exit_registered_original(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,double d){(void)m;(void)u;(void)p;(void)g;(void)d;return 0;}
-static int commit_staged_program(const char *s,const char *p,uid_t o,int(*v)(const char*)){(void)s;(void)p;(void)o;(void)v;return 0;}
+static int commit_staged_program(const char *s,const char *p,uid_t o,int(*v)(const char*),struct stat *r){(void)s;(void)p;(void)o;(void)v;if(r){memset(r,0,sizeof(*r));r->st_dev=1;r->st_ino=2;}return 0;}
 static int registered_target_exact(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 0;}
 static int unload_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;return 0;}
 static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d){(void)m;(void)u;(void)p;(void)g;(void)v;(void)b;(void)d;return 0;}
@@ -489,12 +493,13 @@ CLEANUP_HARNESS = r"""
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 struct managed_guards {int management,start,runtime;};
 #define LEASE_ACCEPTED 1
 #define LEASE_BUSY 0
 #define LEASE_UNKNOWN -1
-static int ready_rc=1,cleanup_rc=0,cleanup_calls=0;
+static int ready_rc=1,cleanup_rc=0,cleanup_calls=0,cleanup_receipt=0;
 static char cleanup_stage[PATH_MAX],cleanup_program[PATH_MAX];
 static int cleanup_owner=-1;
 /* A not-yet-ready target must exhaust the deadline instead of spinning: the
@@ -511,7 +516,11 @@ static int tree_owner_valid(const char *p,uid_t u,int d){(void)p;(void)u;(void)d
 static int exit_registered_original(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,double d){(void)m;(void)u;(void)p;(void)g;(void)d;return LEASE_ACCEPTED;}
 static int registered_guards_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}
 static int unload_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;return 1;}
-static int commit_staged_program(const char *s,const char *p,uid_t o,int(*v)(const char*)){(void)s;(void)p;(void)o;(void)v;return PROGRAM_COMMIT_OK;}
+/* Non-zero receipt: this stub models RENAME_SWAP (an old tree was displaced),
+ * which is the only case in which cleanup runs at all. A zeroed stat here would
+ * mean "first install", and cleanup would be correctly skipped -- the tests
+ * below would then pass without ever exercising cleanup. */
+static int commit_staged_program(const char *s,const char *p,uid_t o,int(*v)(const char*),struct stat *r){(void)s;(void)p;(void)o;(void)v;if(r){memset(r,0,sizeof(*r));r->st_dev=1;r->st_ino=2;}return PROGRAM_COMMIT_OK;}
 static int registered_target_exact(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}
 static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d){(void)m;(void)u;(void)p;(void)g;(void)v;(void)b;(void)d;if(ready_rc)return 1;clock_now+=1.0;return 0;}
 static int handoff_registered_start(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;g->start=-1;g->runtime=-1;return 1;}
@@ -523,11 +532,12 @@ static NSDictionary *read_target_identity(const char *s,uid_t u){(void)s;(void)u
 #define STAGE_CLEANUP_OK 0
 #define STAGE_CLEANUP_REFUSED 1
 #define STAGE_CLEANUP_INCOMPLETE 2
-static int cleanup_swapped_stage(const char *s,const char *p,uid_t o){
+static int cleanup_swapped_stage(const char *s,const char *p,uid_t o,const struct stat *r){
     cleanup_calls++;
     snprintf(cleanup_stage,sizeof(cleanup_stage),"%s",s);
     snprintf(cleanup_program,sizeof(cleanup_program),"%s",p);
     cleanup_owner=(int)o;
+    cleanup_receipt=(r?1:0);
     return cleanup_rc;
 }
 """

@@ -31,16 +31,22 @@
  * (see path_spelling_plain) and bails on `..`, `.` and empty components outright.
  *
  * Residual windows, stated plainly rather than glossed:
- *   - the rename is bound to the validated inode via fstatat, but binding is a
+ *   - the rename is bound to the committed inode via fstatat, but binding is a
  *     comparison, not an atomic check-and-rename; a replacement in the instant
- *     between that call and renamex_np is not excluded
+ *     between that call and renamex_np is not excluded. The window is now
+ *     bounded by "did someone swap this path after commit", not "was this ever
+ *     the right tree"
  *   - the parent directory is opened with O_NOFOLLOW, yet the parent path itself
  *     can be replaced before open()
  *   - renamex_np semantics under these conditions are untested on a real system
  *
- * Still not claimed: that this tree really is the swapped-out OLD one. That
- * requires the caller's commit receipt and an inode it recorded; this header
- * only narrows what can be deleted, it does not prove the target was correct.
+ * What IS now claimed: the deleted inode is the one `commit_staged_program`
+ * displaced, because the receipt is the stat taken immediately before the swap
+ * and the stage must still be that exact dev+inode. A tree written to the stage
+ * path after the swap has a different inode and is refused. What is still NOT
+ * claimed: that the commit itself displaced a tree rather than finding none --
+ * that case is handled by the caller not calling cleanup at all (RENAME_EXCL
+ * displaced nothing, so the receipt is zeroed).
  */
 #ifndef CLIENT_MACOS_STAGE_CLEANUP_H
 #define CLIENT_MACOS_STAGE_CLEANUP_H
@@ -220,13 +226,30 @@ static inline int stage_entry_bound(int parent_fd, const char *name,
  * directory was renamed away but not fully deleted — the install is still valid,
  * the residue is just debris, and the caller must report it rather than retry.
  *
+ * `replaced` is the commit receipt: the stat of the tree that RENAME_SWAP
+ * displaced, captured by `commit_staged_program` immediately before the swap.
+ *
+ * This is the whole difference between this function and the withdrawn cleanup
+ * verb. That verb took two path strings and had to guess whether the stage still
+ * held the displaced tree; every spelling of that guess was eventually defeated
+ * (see the header comment). Here the caller states which inode it displaced, and
+ * the stage must BE that inode or nothing is deleted. A replacement written after
+ * the swap has a different inode and is refused.
+ *
+ * NULL means "the caller has no receipt". That is refused rather than degraded
+ * to a path-only check -- falling back is exactly how the old hole would return.
+ * On a first install (RENAME_EXCL) nothing was displaced, so the caller must not
+ * call this at all.
+ *
  * The parent directory is opened once and every later step is relative to that
  * descriptor, so the rename cannot be redirected by swapping the parent path.
  */
-static inline int cleanup_swapped_stage(const char *stage, const char *program, uid_t owner) {
+static inline int cleanup_swapped_stage(const char *stage, const char *program, uid_t owner,
+                                        const struct stat *replaced) {
     /* Validate ONCE and keep the identity the gate approved. The earlier shape
      * validated, returned a bool, then re-lstat'd — so the rename was bound to a
      * fresh observation rather than to the checked object. */
+    if (!replaced) return STAGE_CLEANUP_REFUSED;
     struct stat validated;
     char resolved[PATH_MAX];
     if (!stage_cleanup_validate(stage, program, owner, &validated, resolved))
@@ -244,10 +267,12 @@ static inline int cleanup_swapped_stage(const char *stage, const char *program, 
     if (written < 0 || written >= (int)sizeof(debris)) return STAGE_CLEANUP_REFUSED;
     int parent_fd = open(parent, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (parent_fd < 0) return STAGE_CLEANUP_REFUSED;
-    /* Bind to the inode the gate came back with. If the entry changed since then,
-     * this is a different object than the one that passed, and the rename would
-     * delete something unreviewed. */
-    if (!stage_entry_bound(parent_fd, base, &validated, owner)) {
+    /* Bind to the inode the COMMIT displaced, not to the one this call happened
+     * to observe. A stage replaced after the swap fails here, which is the point:
+     * the previous shape compared the observation with itself and could only
+     * prove "this path looked acceptable", never "this is the tree I displaced". */
+    if (!stage_entry_bound(parent_fd, base, replaced, owner) ||
+        validated.st_dev != replaced->st_dev || validated.st_ino != replaced->st_ino) {
         close(parent_fd);
         return STAGE_CLEANUP_REFUSED;
     }

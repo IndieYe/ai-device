@@ -120,9 +120,10 @@ static inline int upgrade_registered_once(const char *management,uid_t manager,
      * After the swap the PREVIOUS tree sits at the stage path, so `source_path`
      * no longer addresses what was just published. Everything below reads the
      * live path through `registered_target_exact`, never the source again. */
+    struct stat replaced;
     int committed=commit_staged_program(source_path,
         [paths[@"program"] fileSystemRepresentation],
-        [paths[@"management_owner"] unsignedIntValue],verify_resource_tree);
+        [paths[@"management_owner"] unsignedIntValue],verify_resource_tree,&replaced);
     if (committed!=PROGRAM_COMMIT_OK ||
         !registered_target_exact(management,manager,paths,guards) ||
         !upgrade_time_remaining(deadline)) return UPGRADE_STAGE_PUBLISH_UNKNOWN;
@@ -157,24 +158,30 @@ static inline int upgrade_registered_once(const char *management,uid_t manager,
      * process.
      *
      * `source_path` is the stage path this package wrote and this coordinator
-     * swapped FROM. That is the whole reason cleanup runs here instead of in
-     * postinstall: the caller supplies a path, but this frame knows the tree at
-     * that path is the one it just exchanged, because it observed the swap.
-     * Exposing a path-taking cleanup verb could not know that and was disabled
-     * for exactly that reason.
+     * swapped FROM. The caller supplies a path, but this frame holds the commit
+     * receipt: the exact dev+inode that the swap displaced. Cleanup is handed
+     * that identity, so it deletes only the tree this commit displaced -- not
+     * whatever happens to sit at the stage path later.
      *
-     * What this does NOT establish: cleanup_swapped_stage re-checks the path
-     * itself and has a check-to-rename window, and this call passes no inode
-     * recorded at commit time. So this is "this frame saw a swap here", not
-     * continuous identity binding. A writer replacing the path in between is
-     * not excluded by this frame's knowledge.
+     * That receipt is also why the path-taking `cleanup` verb stays disabled:
+     * it has no way to know which tree was displaced.
+     *
+     * A zeroed receipt means RENAME_EXCL ran (first install, nothing displaced).
+     * There is no old tree to remove, so cleanup is skipped rather than called
+     * with an empty identity.
+     *
+     * Not covered by this receipt: the management lock does not exclude an
+     * Installer writer, and the parent path itself can still be replaced before
+     * open(). Those remain open; see the header.
      *
      * A failure here does NOT change the outcome. The commit is what makes the
      * install valid; a leftover tree is disk debris. Reporting the install as
      * failed would push the operator to reinstall, and a reinstall swaps again.
      */
+    int displaced=(replaced.st_dev!=0||replaced.st_ino!=0);
+    if (!displaced) return UPGRADE_STAGE_OK;
     int cleaned=cleanup_swapped_stage(source_path,[paths[@"program"] fileSystemRepresentation],
-        [paths[@"management_owner"] unsignedIntValue]);
+        [paths[@"management_owner"] unsignedIntValue],&replaced);
     if (cleaned==STAGE_CLEANUP_INCOMPLETE)
         fprintf(stderr,"stage cleanup incomplete; old tree renamed aside as debris\n");
     else if (cleaned==STAGE_CLEANUP_REFUSED)

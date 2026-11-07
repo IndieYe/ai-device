@@ -25,7 +25,7 @@ static int program_commit_entry(int argc, char **argv) {
         fprintf(stderr, "program commit requires administrator identity\n");
         return 70;
     }
-    int result = commit_staged_program(argv[2], argv[3], 0, NULL);
+    int result = commit_staged_program(argv[2], argv[3], 0, NULL, NULL);
     switch (result) {
         case PROGRAM_COMMIT_OK:
             puts("PROGRAM_COMMITTED_V1");

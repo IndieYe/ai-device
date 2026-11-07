@@ -879,7 +879,7 @@ def test_registered_native_exit_acquires_runtime_without_python_coordinator(
         f'#include "{native / "client-macos-program-commit.h"}"\n'
         'static int cleanup_calls=0;static const char *cleanup_last_stage=0;\n'
         '#define STAGE_CLEANUP_OK 0\n#define STAGE_CLEANUP_REFUSED 1\n#define STAGE_CLEANUP_INCOMPLETE 2\n'
-        'static int cleanup_swapped_stage(const char *s,const char *p,uid_t o){cleanup_calls++;cleanup_last_stage=s;(void)p;(void)o;return STAGE_CLEANUP_OK;}\n'
+        'static int cleanup_swapped_stage(const char *s,const char *p,uid_t o,const struct stat *r){cleanup_calls++;cleanup_last_stage=s;(void)p;(void)o;(void)r;return STAGE_CLEANUP_OK;}\n'
         f'#include "{native / "client-macos-registered-upgrade.h"}"\n'
         f'#include "{native / "client-macos-start-child.h"}"\n'
         "static int test_start_child(const char *m,uid_t u,int fd,const char *tree,double timeout) {\n"

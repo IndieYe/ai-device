@@ -52,7 +52,7 @@
  * second copy of the tree. Called after the path and ownership checks and
  * immediately before the swap, so a refusal here has still performed no rename. */
 static inline int commit_staged_program(const char *stage, const char *program, uid_t owner,
-                                        int (*verify)(const char *root)) {
+                                        int (*verify)(const char *root), struct stat *replaced) {
     if (!stage || !program || !*stage || !*program) return PROGRAM_COMMIT_REFUSED;
     /* Refuse identical paths: committing a stage onto itself would be a no-op
      * reported as success, which is the worst possible answer here. */
@@ -81,9 +81,19 @@ static inline int commit_staged_program(const char *stage, const char *program, 
     if (!path_resolve_allow_missing(program, resolved_program)) return PROGRAM_COMMIT_REFUSED;
     if (path_overlaps_resolved(resolved_stage, resolved_program)) return PROGRAM_COMMIT_REFUSED;
     unsigned int flags;
+    /* `program_info` is the tree that RENAME_SWAP is about to displace: the
+     * kernel moves it to `stage` in the same atomic step. Capturing it here, 
+     * before the swap, is the only moment at which "the old tree" has a single
+     * well-defined identity -- afterwards the stage path can hold anything.
+     *
+     * Handing this to the caller is what turns cleanup from "this path is not
+     * obviously wrong" into "this is the inode I displaced". A path-only cleanup
+     * cannot tell the displaced tree from a replacement written afterwards. */
+    int displaces = 0;
     if (!lstat(program, &program_info)) {
         if (!S_ISDIR(program_info.st_mode)) return PROGRAM_COMMIT_REFUSED;
         flags = RENAME_SWAP;
+        displaces = 1;
     } else if (errno == ENOENT) {
         flags = RENAME_EXCL;
     } else {
@@ -100,6 +110,10 @@ static inline int commit_staged_program(const char *stage, const char *program, 
      * and ownership checks already passed. Refusal here performs no rename. */
     if (verify && !verify(stage)) return PROGRAM_COMMIT_REFUSED;
     if (renamex_np(stage, program, flags)) return PROGRAM_COMMIT_UNKNOWN;
+    /* Published only now: on UNKNOWN the swap may or may not have happened, so
+     * there is no displaced identity to report. RENAME_EXCL displaced nothing,
+     * so `replaced` keeps its zeroed form and cleanup can see that. */
+    if (replaced) *replaced = displaces ? program_info : (struct stat){0};
     return PROGRAM_COMMIT_OK;
 }
 

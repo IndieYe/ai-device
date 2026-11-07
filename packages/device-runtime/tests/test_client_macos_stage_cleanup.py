@@ -34,8 +34,28 @@ static int bound_directory(const char *path, uid_t owner) {
 }
 #include "client-macos-stage-cleanup.h"
 int main(int argc, char **argv) {
-    if (argc != 4) return 64;
-    int result = cleanup_swapped_stage(argv[1], argv[2], (uid_t)atoi(argv[3]));
+    if (argc != 4 && argc != 6) return 64;
+    /* Production passes the dev+inode captured by commit_staged_program
+     * immediately before the swap. With argc==4 the harness has no swap, so it
+     * derives that identity by stating the path -- the binding under test is
+     * "does cleanup delete only the inode it was told", not how that identity
+     * was obtained. With argc==6 the caller supplies the receipt explicitly,
+     * which is how the replaced-after-swap case is expressed.
+     * RELEASE_RECEIPT=1 passes NULL instead, which must refuse. */
+    struct stat replaced;
+    if (getenv("RELEASE_RECEIPT")) {
+        int result = cleanup_swapped_stage(argv[1], argv[2], (uid_t)atoi(argv[3]), NULL);
+        printf("%d\n", result);
+        return 0;
+    }
+    if (argc == 6) {
+        memset(&replaced, 0, sizeof(replaced));
+        replaced.st_dev = (dev_t)atoll(argv[4]);
+        replaced.st_ino = (ino_t)atoll(argv[5]);
+    } else if (lstat(argv[1], &replaced)) {
+        memset(&replaced, 0, sizeof(replaced));
+    }
+    int result = cleanup_swapped_stage(argv[1], argv[2], (uid_t)atoi(argv[3]), &replaced);
     printf("%d\n", result);
     return 0;
 }
@@ -414,6 +434,60 @@ def test_cleanup_still_removes_a_plain_stage_path(tmp_path):
     assert run(binary, stage, program) == 0
     assert not stage.exists()
     assert (program / "version").read_text() == "NEW"
+
+
+def test_receipt_refuses_a_tree_written_after_the_swap(tmp_path):
+    """The whole point of the commit receipt.
+
+    The receipt is the dev+inode the swap displaced. If something else now sits
+    at the stage path -- a later Installer write, a re-staged payload, any
+    replacement -- its inode differs from the receipt and nothing is deleted.
+
+    Without the receipt this case was undetectable: the path was a valid,
+    owned, non-symlink directory, so a path-only check would have accepted it
+    and deleted a tree that was never displaced.
+    """
+    binary = build(tmp_path)
+    parent = tmp_path / "opt"
+    program = make_tree(parent / "ai-device-client", "NEW")
+    stage = make_tree(parent / "ai-device-client-stage", "OLD")
+    displaced = os.lstat(stage)
+
+    # Simulate a writer replacing the stage after the swap: same name, same
+    # contents shape, different inode.
+    replacement = make_tree(tmp_path / "staging" / "later", "SOMETHING-ELSE")
+    (parent / "ai-device-client-stage").rename(tmp_path / "moved-away")
+    replacement.rename(parent / "ai-device-client-stage")
+
+    out = subprocess.run(
+        [str(binary), str(stage), str(program), str(os.getuid()),
+         str(displaced.st_dev), str(displaced.st_ino)],
+        check=True, capture_output=True, text=True, timeout=15,
+    )
+    assert out.stdout.strip() == "1"
+    # The replacement survives: it is not the tree this commit displaced.
+    assert (stage / "version").read_text() == "SOMETHING-ELSE"
+    assert (program / "version").read_text() == "NEW"
+
+
+def test_missing_receipt_is_refused_not_degraded(tmp_path):
+    """NULL must refuse rather than fall back to the path-only check.
+
+    A fallback would silently restore the exact hole the receipt closes, and it
+    would do so only on the path where the caller forgot to pass one -- the
+    hardest case to notice.
+    """
+    binary = build(tmp_path)
+    program = make_tree(tmp_path / "opt" / "ai-device-client", "NEW")
+    stage = make_tree(tmp_path / "opt" / "ai-device-client-stage", "OLD")
+
+    out = subprocess.run(
+        [str(binary), str(stage), str(program), str(os.getuid())],
+        check=True, capture_output=True, text=True, timeout=15,
+        env={**os.environ, "RELEASE_RECEIPT": "1"},
+    )
+    assert out.stdout.strip() == "1"
+    assert (stage / "version").read_text() == "OLD"
 
 
 def test_production_cleanup_verb_is_disabled(tmp_path):
