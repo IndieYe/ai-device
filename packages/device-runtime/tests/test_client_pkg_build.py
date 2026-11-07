@@ -139,6 +139,100 @@ def test_upgrade_entry_compilation_refuses_a_stale_tree(builder, tree, tmp_path)
     assert calls == [], "no compiler runs once the snapshot is known stale"
 
 
+def test_staged_entry_name_is_unique_per_package(builder):
+    """Two builds must not write the entry to the same payload name.
+
+    The Installer writes payload entries one at a time. A single fixed name lets
+    two concurrent installers interleave their writes into one executable, which
+    is the window this exists to close.
+    """
+    a = builder.staged_entry_name("/opt/ai-device-client-stage-0.3.4.8-aaaaaaaaaaaa")
+    b = builder.staged_entry_name("/opt/ai-device-client-stage-0.3.4.9-bbbbbbbbbbbb")
+    assert a != b
+    assert a.startswith(builder.UPGRADE_ENTRY)
+    # The stage path is the discriminator, so the same package always produces
+    # the same name and two packages never collide.
+    assert a == builder.staged_entry_name("/opt/ai-device-client-stage-0.3.4.8-aaaaaaaaaaaa")
+
+
+def test_postinstall_renames_the_staged_entry_into_place(builder, tmp_path):
+    """The rename must happen before anything executes the entry.
+
+    Writing straight to the fixed name is the bug; a package that ships the
+    staged name and never moves it would simply invoke a path that does not
+    exist.
+    """
+    rendered = builder.POSTINSTALL.format(
+        program=str(tmp_path / "prog"),
+        stage=str(tmp_path / "stage"),
+        entry=str(tmp_path / "stage/bin/commit"),
+        verb="commit",
+        status_dir=str(tmp_path / "status"),
+        status_file=str(tmp_path / "status/install-status"),
+        upgrade_entry=str(tmp_path / "entry"),
+        staged_upgrade_entry=str(tmp_path / "entry.staged"),
+        registration=str(tmp_path / "registration.json"),
+        epilogue="",
+    )
+    rename = rendered.index('mv -f "$STAGED_UPGRADE_ENTRY" "$UPGRADE_ENTRY"')
+    # Not an assertion about ordering cosmetics: the entry is invoked from both
+    # the registered and the unregistered branch, and both must see the final
+    # path already in place. Match the invocations, not the prose above them --
+    # the comment block mentions both verbs long before either runs.
+    assert rename < rendered.index('"$UPGRADE_ENTRY" upgrade-registered-program')
+    assert rename < rendered.index('"$UPGRADE_ENTRY" first-program')
+
+
+def test_same_entry_path_means_no_rename(builder, tmp_path):
+    """When the two names match the rename is skipped, not run for nothing."""
+    rendered = builder.POSTINSTALL.format(
+        program=str(tmp_path / "prog"),
+        stage=str(tmp_path / "stage"),
+        entry=str(tmp_path / "stage/bin/commit"),
+        verb="commit",
+        status_dir=str(tmp_path / "status"),
+        status_file=str(tmp_path / "status/install-status"),
+        upgrade_entry=str(tmp_path / "entry"),
+        staged_upgrade_entry=str(tmp_path / "entry"),
+        registration=str(tmp_path / "registration.json"),
+        epilogue="",
+    )
+    assert 'if [ "$STAGED_UPGRADE_ENTRY" != "$UPGRADE_ENTRY" ]; then' in rendered
+
+
+def test_shipping_payload_entry_is_not_written_to_the_fixed_name(builder, tree, tmp_path):
+    """The payload must carry the staged name, not the fixed one.
+
+    Asserting the postinstall rename alone would pass even if the package still
+    wrote to the fixed path during the install, which is the interleaving being
+    prevented.
+    """
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout=".\t40755\t0/0\n")
+
+    compiled = []
+
+    def capture(argv, **kwargs):
+        if argv[0] == "/usr/bin/xcrun":
+            path = Path(argv[argv.index("-o") + 1])
+            compiled.append(path)
+            path.write_bytes(b"entry")
+        return run(argv, **kwargs)
+
+    builder.stage_upgrade_entry(
+        tree, tmp_path / "root", tmp_path / "build",
+        run=capture, entry_name=builder.staged_entry_name("/opt/stage-x"),
+    )
+    assert compiled, "the entry was compiled somewhere"
+    produced = compiled[0]
+    assert produced.name != builder.UPGRADE_ENTRY
+    assert produced.name.startswith(builder.UPGRADE_ENTRY)
+    assert produced.is_file()
+
+
 def test_build_only_calls_packagers(builder, tree, tmp_path):
     calls = []
     output = tmp_path / "package"
@@ -1190,6 +1284,7 @@ def _orphan_notice_shell(tmp_path, *, observe_ok=False, program_exists=False,
         status_dir=str(tmp_path / "status"),
         status_file=str(tmp_path / "status/install-status"),
         upgrade_entry=str(tmp_path / "entry"),
+        staged_upgrade_entry=str(tmp_path / "entry"),
         registration=str(tmp_path / "registration.json"),
         epilogue="",
     )

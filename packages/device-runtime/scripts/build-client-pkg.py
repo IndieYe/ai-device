@@ -86,10 +86,20 @@ COMMIT_STATUS_FILE = f"{COMMIT_STATUS_DIR}/install-status"
 # and client-macos-upgrade-entry.h). Kept as a constant so the builder can refuse
 # a --program that would disagree with it; see the check in build().
 NATIVE_PROGRAM_PATH = "/opt/ai-device-client"
-# The registered upgrade entry locates its resources relative to its own
-# executable (locate_bound_resources uses <exe dir>/resources/client-tree), so
-# it has to live at a path that does not carry the version. A per-release
-# directory would change the address it is invoked through on every upgrade.
+# The registered upgrade entry locates the tree it publishes from the path the
+# Installer passes on argv, not from its own directory: the shipping package
+# deliberately carries one tree, so a `resources/client-tree` beside the
+# executable does not exist (see upgrade_registered_bound_once). The path is
+# therefore free to carry the version -- an earlier comment here claimed the
+# opposite, from when the entry found its resources relative to itself.
+#
+# It still *lands* at a version-free path, because that is the address the
+# postinstall invokes and the path an operator can find. Keeping it fixed is
+# what makes a staged name necessary: the Installer writes payload files one at
+# a time, so two concurrent installers would interleave writes into a single
+# fixed executable and one could execute a half-written binary. The payload
+# therefore ships the entry under a per-package name (see staged_entry_name) and
+# postinstall renames it into place, which is atomic.
 UPGRADE_ROOT = "/opt/ai-device-client-upgrade"
 UPGRADE_ENTRY = "installer-inspection"
 UPGRADE_IDENTIFIER = "local.ai-device.client.upgrade-entry"
@@ -327,6 +337,7 @@ VERB='{verb}'
 STATUS_DIR='{status_dir}'
 STATUS_FILE='{status_file}'
 UPGRADE_ENTRY='{upgrade_entry}'
+STAGED_UPGRADE_ENTRY='{staged_upgrade_entry}'
 REGISTRATION='{registration}'
 # Record an outcome even on the early-refusal paths below. installer shows the
 # operator only "the install failed" and discards script stderr, so a message
@@ -360,6 +371,20 @@ if [ ! -d "$STAGE" ]; then
     # Nothing was staged: refuse rather than touch the live program.
     echo 'PROGRAM_COMMIT_REFUSED_V1' >&2
     exit 1
+fi
+# The payload ships the entry under a per-package name so two concurrent
+# installers cannot interleave writes into one executable. Move it to the fixed
+# name both branches invoke; rename(2) is atomic, so a reader sees either the
+# whole previous file or the whole new one, never a partial write.
+if [ "$STAGED_UPGRADE_ENTRY" != "$UPGRADE_ENTRY" ]; then
+    if [ ! -x "$STAGED_UPGRADE_ENTRY" ]; then
+        echo 'PROGRAM_COMMIT_REFUSED_V1: staged upgrade entry missing' >&2
+        exit 1
+    fi
+    if ! mv -f "$STAGED_UPGRADE_ENTRY" "$UPGRADE_ENTRY"; then
+        echo 'PROGRAM_COMMIT_REFUSED_V1: could not place the upgrade entry' >&2
+        exit 1
+    fi
 fi
 if [ ! -x "$ENTRY" ]; then
     echo 'PROGRAM_COMMIT_REFUSED_V1: commit entry missing' >&2
@@ -807,7 +832,20 @@ def verify_native_snapshot(tree, native):
     return len(source)
 
 
-def stage_upgrade_entry(tree, root, build_directory, *, run=None):
+def staged_entry_name(stage: str) -> str:
+    """The name the payload uses for the entry before it is renamed into place.
+
+    Derived from the stage path, which is already unique per package build. The
+    Installer writes payload entries individually, so writing straight to the
+    fixed UPGRADE_ENTRY would let two concurrent installers interleave their
+    writes into one executable and leave a binary that neither of them built.
+    A per-package name means each installer writes its own file; postinstall
+    then renames it over the fixed name in one step.
+    """
+    return f"{UPGRADE_ENTRY}.{Path(stage).name}"
+
+
+def stage_upgrade_entry(tree, root, build_directory, *, run=None, entry_name=None):
     """Compile the upgrade entry, embedding the inventory of `tree`.
 
     The entry does NOT ship a copy of the tree. It embeds the inventory
@@ -854,7 +892,7 @@ def stage_upgrade_entry(tree, root, build_directory, *, run=None):
         + ",\n".join(records)
         + "\n};\n#define RESOURCE_COUNT (sizeof(resources)/sizeof(resources[0]))\n"
     )
-    entry = payload / UPGRADE_ENTRY
+    entry = payload / (entry_name or UPGRADE_ENTRY)
     execute = run or subprocess.run
     execute(
         [
@@ -868,7 +906,7 @@ def stage_upgrade_entry(tree, root, build_directory, *, run=None):
         check=True,
     )
     if not entry.is_file():
-        raise ValueError(f"upgrade entry {UPGRADE_ENTRY} was not produced")
+        raise ValueError(f"upgrade entry {entry.name} was not produced")
     entry.chmod(0o755)
     execute(["/usr/bin/lipo", "-verify_arch", "arm64", str(entry)], check=True)
     return entry
@@ -1014,7 +1052,10 @@ def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
     # The result was a package that built and signed cleanly and then refused
     # every install on real hardware. The manifest must describe what ships.
     if mode != "inspection":
-        stage_upgrade_entry(payload, output / "root", output / "upgrade-build", run=run)
+        stage_upgrade_entry(
+            payload, output / "root", output / "upgrade-build", run=run,
+            entry_name=staged_entry_name(stage),
+        )
     scripts = output / "scripts"
     scripts.mkdir()
     preinstall = scripts / "preinstall"
@@ -1037,6 +1078,7 @@ def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
                 status_dir=COMMIT_STATUS_DIR,
                 status_file=COMMIT_STATUS_FILE,
                 upgrade_entry=f"{UPGRADE_ROOT}/{UPGRADE_ENTRY}",
+                staged_upgrade_entry=f"{UPGRADE_ROOT}/{staged_entry_name(stage)}",
                 registration=REGISTRATION_FILE,
                 epilogue=SHIPPING_EPILOGUE.format(program=program) if mode == "shipping" else "",
             )
