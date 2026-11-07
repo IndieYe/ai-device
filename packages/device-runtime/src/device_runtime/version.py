@@ -20,25 +20,32 @@ class RuntimeVersion(Model):
 # Native executables this tree ships, relative to the tree root. Their bytes are
 # part of the program identity: the launcher and the commit helper are compiled
 # from repository sources by the build and replaced together with the Python
-# package, so a change to either must change build_id. The upgrade entry is NOT
-# here -- it lives outside the tree and is not part of what a running client is.
+# package, so a change to either must change build_id.
 NATIVE_IDENTITY_FILES = ("bin/ai-device-client-launcher", "bin/ai-device-client-commit")
+
+# The C sources those executables and the upgrade entry are compiled from. They
+# ship inside the tree precisely so this function can recompute the digest from
+# files the process can reach; reading client-identity.json instead would make
+# readiness compare a digest against the file that recorded it.
+NATIVE_IDENTITY_SOURCES = "native"
+NATIVE_IDENTITY_SUFFIXES = (".h", ".c", ".m")
 
 
 def _source_fingerprint():
     # Hash names and exact bytes, not timestamps, venv paths or credentials.
     # This is a source fingerprint, NOT a wheel digest or proof of integrity.
     #
-    # Two inputs, in this order:
+    # Three inputs, in this order:
     #   1. every .py in this package, so a Python-only change moves the digest;
-    #   2. every native executable the tree ships, so a native-only change does.
-    #   3. the tree-relative marker for each native binary, so renaming or
-    #      dropping one is a change even if the remaining bytes are identical.
+    #   2. every native executable the tree ships, so a native-only change does;
+    #   3. the native sources those binaries and the out-of-tree upgrade entry
+    #      are compiled from, so a change to installer-only code (which never
+    #      reaches the two executables) also moves the digest.
     #
-    # The native binaries are found by walking up from this package to the tree
+    # The native files are found by walking up from this package to the tree
     # root. That distance is fixed by the install layout; if the layout ever
-    # changes, the binaries stop being found and the digest changes, which is the
-    # safe direction -- a silently ignored native change is not.
+    # changes, they stop being found and the digest changes, which is the safe
+    # direction -- a silently ignored native change is not.
     #
     # build-client-tree.py computes the same digest for client-identity.json, and
     # readiness compares the two exactly, so the two implementations must stay
@@ -60,12 +67,17 @@ def _source_fingerprint():
                 try:
                     content = binary.read_bytes()
                 except FileNotFoundError:
-                    # The name is hashed whether or not the file exists, so a
-                    # missing binary cannot equal a present one. Its bytes are
-                    # simply empty here; the marker is what keeps the two states
-                    # distinguishable.
                     content = b""
             digest.update(len(content).to_bytes(8, "big") + content)
+        sources = (tree / NATIVE_IDENTITY_SOURCES) if tree else None
+        if sources is not None and sources.is_dir():
+            for path in sorted(sources.iterdir()):
+                if path.suffix not in NATIVE_IDENTITY_SUFFIXES or not path.is_file():
+                    continue
+                name = path.relative_to(tree).as_posix().encode()
+                content = path.read_bytes()
+                digest.update(len(name).to_bytes(8, "big") + name)
+                digest.update(len(content).to_bytes(8, "big") + content)
         return "sha256:" + digest.hexdigest()
     except OSError:
         return None

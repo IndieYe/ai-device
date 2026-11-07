@@ -123,13 +123,13 @@ def test_build_real_fixed_launcher_without_executing(tmp_path):
 
 
 def test_client_identity_matches_actual_runtime_fingerprint(tmp_path):
-    """The two fingerprints must agree, including the native binaries.
+    """The two fingerprints must agree, including native binaries and sources.
 
     Readiness compares client-identity.json against what the running client
     reports for itself, so a drift between build-client-tree.py and
     version.py does not degrade a diagnostic -- it makes every upgrade fail
-    to become ready. The native executables are created here specifically so
-    this test covers the part that used to be missing.
+    to become ready. The native executables and the staged sources are created
+    here specifically so this test covers the parts that used to be missing.
     """
     import subprocess
     import sys
@@ -145,14 +145,19 @@ def test_client_identity_matches_actual_runtime_fingerprint(tmp_path):
         ("ai-device-client-commit", b"commit-bytes"),
     ):
         (tmp_path / "bin" / name).write_bytes(content)
+    (tmp_path / "native").mkdir()
+    (tmp_path / "native/client-macos-launcher.c").write_text("int main(void){return 0;}\n")
+    (tmp_path / "native/client-macos-installer.m").write_text("int installer;\n")
     identity = module.write_client_identity(tmp_path)
     version_source = Path(__file__).parents[1] / "src/device_runtime/version.py"
     code = """import ast, pathlib, sys
 source=ast.parse(pathlib.Path(sys.argv[1]).read_text())
 native=next(n for n in source.body if isinstance(n,ast.Assign) and any(getattr(t,"id",None)=="NATIVE_IDENTITY_FILES" for t in n.targets))
+sources=next(n for n in source.body if isinstance(n,ast.Assign) and any(getattr(t,"id",None)=="NATIVE_IDENTITY_SOURCES" for t in n.targets))
+suffixes=next(n for n in source.body if isinstance(n,ast.Assign) and any(getattr(t,"id",None)=="NATIVE_IDENTITY_SUFFIXES" for t in n.targets))
 function=next(n for n in source.body if isinstance(n,ast.FunctionDef) and n.name=="_source_fingerprint")
 ns={"Path":pathlib.Path,"__file__":sys.argv[2],"hashlib":__import__("hashlib")}
-exec(compile(ast.Module(body=[native,function],type_ignores=[]),"fingerprint","exec"),ns)
+exec(compile(ast.Module(body=[native,sources,suffixes,function],type_ignores=[]),"fingerprint","exec"),ns)
 print(ns["_source_fingerprint"]())
 """
     result = subprocess.run(
@@ -240,3 +245,68 @@ def test_native_name_change_is_not_invisible(tmp_path):
     (renamed / "bin/other").write_bytes(b"launcher-bytes")
     after = module.write_client_identity(renamed)["build_id"]
     assert before != after
+
+
+def test_build_id_moves_for_a_change_only_the_installer_sees(tmp_path):
+    """The case this whole scheme exists for.
+
+    The upgrade entry is compiled outside the tree and embeds the inventory, so
+    a header it includes but the two shipped executables never reach (the stage
+    cleanup receipt fix was exactly this) changed the installer binary while
+    build_id stayed identical. Hashing the sources it is built from is what
+    makes those two builds distinguishable again.
+    """
+    def tree(name, installer):
+        root = _identity_tree(tmp_path / name)
+        (root / "native").mkdir()
+        (root / "native/client-macos-launcher.c").write_text("int launcher;\n")
+        (root / "native/client-macos-stage-cleanup.h").write_text(installer)
+        return root
+
+    before = module.write_client_identity(tree("before", "void cleanup(void){}\n"))["build_id"]
+    after = module.write_client_identity(
+        tree("after", "void cleanup(void){ /* receipt check */ }\n")
+    )["build_id"]
+    assert before != after
+
+
+def test_build_id_ignores_non_source_files_in_the_native_directory(tmp_path):
+    """Only compilation inputs count; notes must not move the identity.
+
+    native/ also holds README/HELPER docs and lock files. Hashing those would
+    report a new build every time a README is reworded.
+    """
+    def tree(name, helper):
+        root = _identity_tree(tmp_path / name)
+        (root / "native").mkdir()
+        (root / "native/client-macos-launcher.c").write_text("int launcher;\n")
+        (root / "native/README.md").write_text(helper)
+        (root / "native/runtime-lock.json").write_text(helper)
+        return root
+
+    before = module.write_client_identity(tree("a", "notes\n"))["build_id"]
+    after = module.write_client_identity(tree("b", "different notes\n"))["build_id"]
+    assert before == after
+
+
+def test_changing_a_native_source_changes_the_digest(tmp_path):
+    """Same binaries, different source: still a distinct build."""
+    def tree(name, source):
+        root = _identity_tree(tmp_path / name)
+        (root / "native").mkdir()
+        (root / "native/client-macos-installer.m").write_text(source)
+        return root
+
+    before = module.write_client_identity(tree("a", "int a;\n"))["build_id"]
+    after = module.write_client_identity(tree("b", "int b;\n"))["build_id"]
+    assert before != after
+
+
+def test_absent_native_sources_differ_from_present_ones(tmp_path):
+    """A tree that ships no sources must not look like one that does."""
+    with_sources = _identity_tree(tmp_path / "with")
+    (with_sources / "native").mkdir()
+    (with_sources / "native/client-macos-launcher.c").write_text("int launcher;\n")
+    present = module.write_client_identity(with_sources)["build_id"]
+    absent = module.write_client_identity(_identity_tree(tmp_path / "without"))["build_id"]
+    assert present != absent

@@ -19,6 +19,14 @@ from pathlib import Path
 # two digests exactly, so a divergence makes every upgrade fail to become ready.
 NATIVE_IDENTITY_FILES = ("bin/ai-device-client-launcher", "bin/ai-device-client-commit")
 
+# The C sources those executables -- and the installer -- are compiled from.
+# Shipped inside the tree so the running process can recompute the same digest
+# from files it can actually reach: the runtime fingerprint must be independent
+# of client-identity.json, or readiness would only be comparing a file with
+# itself. MUST match NATIVE_IDENTITY_SOURCES in version.py.
+NATIVE_IDENTITY_SOURCES = "native"
+NATIVE_IDENTITY_SUFFIXES = (".h", ".c", ".m")
+
 
 def verify(path, record):
     if (
@@ -75,13 +83,45 @@ def build_target():
     raise ValueError("build requires native Linux amd64 or macOS arm64")
 
 
+def stage_native_sources(output):
+    """Copy the native build inputs into the tree next to the built binaries.
+
+    These are the sources the two shipped executables and the upgrade entry are
+    compiled from. They go into the tree because the runtime fingerprint has to
+    be recomputable from the installed tree alone: if it read
+    client-identity.json instead, readiness would compare a digest with the file
+    that recorded it, which proves nothing.
+
+    The upgrade entry itself still lives outside the tree (it performs the swap
+    and cannot be replaced by it), so its own build inputs are covered here as
+    source rather than as a compiled artifact -- see write_client_identity.
+    """
+    native = Path(__file__).resolve().parents[1] / "native"
+    destination = output / NATIVE_IDENTITY_SOURCES
+    if destination.exists():
+        raise ValueError("native source directory would be overwritten")
+    destination.mkdir(parents=True)
+    staged = 0
+    for path in sorted(native.iterdir()):
+        if path.suffix not in NATIVE_IDENTITY_SUFFIXES:
+            continue
+        if not path.is_file() or path.is_symlink():
+            raise ValueError("native source must be regular files")
+        (destination / path.name).write_bytes(path.read_bytes())
+        staged += 1
+    if not staged:
+        raise ValueError("no native sources staged into the client tree")
+
+
 def write_client_identity(output):
     """Match version.py's runtime fingerprint without importing target code.
 
-    Two inputs, mirroring device_runtime/version.py exactly:
+    Inputs, mirroring device_runtime/version.py exactly:
       1. every .py in the installed package;
       2. every native executable this tree ships (NATIVE_IDENTITY_FILES),
-         by tree-relative name and byte content.
+         by tree-relative name and byte content;
+      3. the native sources those binaries and the upgrade entry are built from
+         (NATIVE_IDENTITY_SOURCES), by tree-relative name and bytes.
 
     The native binaries must be built before this runs; build() orders it that
     way. Readiness compares this digest against the runtime's own, so a drift
@@ -121,6 +161,16 @@ def write_client_identity(output):
         digest.update(len(marker).to_bytes(8, "big") + marker)
         binary = output / relative
         content = binary.read_bytes() if binary.is_file() else b""
+        digest.update(len(content).to_bytes(8, "big") + content)
+    sources = output / NATIVE_IDENTITY_SOURCES
+    for path in sorted(sources.iterdir()) if sources.is_dir() else ():
+        if path.suffix not in NATIVE_IDENTITY_SUFFIXES:
+            continue
+        if not path.is_file():
+            raise ValueError("staged native source is not a regular file")
+        name = path.relative_to(output).as_posix().encode()
+        content = path.read_bytes()
+        digest.update(len(name).to_bytes(8, "big") + name)
         digest.update(len(content).to_bytes(8, "big") + content)
     identity = {"version": versions[0], "build_id": "sha256:" + digest.hexdigest()}
     with (output / "client-identity.json").open("x") as stream:
@@ -289,6 +339,7 @@ def build(inputs, locks, output):
         if target == "darwin-arm64":
             build_macos_launcher(output)
             build_macos_commit_entry(output)
+            stage_native_sources(output)
         records = verify_installed_wheels(
             inputs / "wheels", output / "runtime/lib/python3.13/site-packages"
         )
