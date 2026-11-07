@@ -9,12 +9,13 @@ import os
 import sys
 
 from .client_macos_account import (
+    MacAccountError,
     resolve_account,
     validate_config_as_user,
     validate_launcher,
     validate_registration_files,
 )
-from .client_macos_conflicts import check_registration_conflicts
+from .client_macos_conflicts import MacClientConflict, check_registration_conflicts
 from .client_macos_identity import MacIdentityError, read_identity, reserve_identity
 from .client_macos_lock import provision_runtime_lock
 from .client_macos_management import management_lock, prepare_user_directories
@@ -53,7 +54,9 @@ def _register(user, *, confirm_legacy_clients_disabled, resume):
             }
             if identity != expected:
                 raise MacIdentityError("registered account changed; automatic rebinding refused")
-        check_registration_conflicts(confirm_legacy_clients_disabled=True)
+        check_registration_conflicts(
+            confirm_legacy_clients_disabled=True, own_plist=account.layout.plist
+        )
         validate_launcher()
         validate_registration_files(account)
         validate_config_as_user(account)
@@ -71,6 +74,22 @@ def _register(user, *, confirm_legacy_clients_disabled, resume):
         return {"registered": True, "started": False, "uid": account.layout.uid, "plist": str(path)}
 
 
+def _refusal_detail(exc):
+    """Return a safe-to-print cause for a refusal, never arbitrary text.
+
+    Only the registration preflight's own exception types are introduced here.
+    They carry fixed diagnostics by contract -- MacAccountError documents that
+    it excludes configuration and credential data -- whereas a bare OSError
+    from the filesystem can quote a path. Anything unrecognised keeps the
+    original generic wording instead of leaking into the message.
+    """
+    if isinstance(exc, (MacAccountError, MacClientConflict, MacIdentityError)):
+        text = str(exc)
+        if text:
+            return text
+    return "inspect registration state before retrying"
+
+
 def main(argv=None):
     """Explicit administrator entry; never invoked by the inspection package."""
     import argparse
@@ -86,11 +105,13 @@ def main(argv=None):
         result = operation(
             args.user, confirm_legacy_clients_disabled=args.confirm_legacy_clients_disabled
         )
-    except (ValueError, RuntimeError, OSError):
-        parser.exit(
-            2,
-            "macOS registration refused or incomplete; inspect registration state before retrying\n",
-        )
+    except (ValueError, RuntimeError, OSError) as exc:
+        # Report the cause when it is one of our own fixed diagnostics, and only
+        # then. An existing valid registration (do nothing) and a stale
+        # definition that must be retired (bootout first) require opposite
+        # actions, but were previously collapsed into one unusable line.
+        detail = _refusal_detail(exc)
+        parser.exit(2, f"macOS registration refused or incomplete: {detail}\n")
     print(json.dumps(result))
 
 

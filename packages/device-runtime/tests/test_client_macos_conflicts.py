@@ -82,6 +82,65 @@ def test_symlinked_definition_inspected(tmp_path):
         check_known_files([], service_directories=[directory])
 
 
+def test_own_registration_is_not_reported_as_another_service(tmp_path):
+    """The installed client's own plist must not read as a rival installation.
+
+    It is still refused -- registration is create-only -- but naming it
+    "another client service" sends the operator hunting for a second client
+    that does not exist.
+    """
+    home = tmp_path / "home"
+    agents = home / "Library/LaunchAgents"
+    agents.mkdir(parents=True)
+    own = agents / "local.ai-device.client.plist"
+    own.write_bytes(
+        plistlib.dumps(
+            {
+                "Label": "local.ai-device.client",
+                "ProgramArguments": ["/opt/ai-device-client/bin/ai-device-client-launcher"],
+            }
+        )
+    )
+    with pytest.raises(MacClientConflict, match="already registered for this user"):
+        check_known_files([home], service_directories=[], own_plist=own)
+
+
+def test_foreign_plist_same_directory_still_conflicts(tmp_path):
+    """Excluding our own path must not blind the check to a rival definition."""
+    home = tmp_path / "home"
+    agents = home / "Library/LaunchAgents"
+    agents.mkdir(parents=True)
+    own = agents / "local.ai-device.client.plist"
+    (agents / "local.ai-device.client-other.plist").write_bytes(
+        plistlib.dumps(
+            {
+                "Label": "local.ai-device.client",
+                "ProgramArguments": ["/opt/ai-device-client/bin/ai-device-client-launcher"],
+            }
+        )
+    )
+    with pytest.raises(MacClientConflict, match="another client service"):
+        check_known_files([home], service_directories=[], own_plist=own)
+
+
+def test_own_plist_label_mismatch_still_conflicts(tmp_path):
+    """Path alone is not identity: an unexpected label at our path is a conflict."""
+    home = tmp_path / "home"
+    agents = home / "Library/LaunchAgents"
+    agents.mkdir(parents=True)
+    own = agents / "local.ai-device.client.plist"
+    own.write_bytes(
+        plistlib.dumps(
+            {
+                "Label": "com.device-runtime.other",
+                "ProgramArguments": ["/opt/ai-device-client/bin/ai-device-client-launcher"],
+            }
+        )
+    )
+    with pytest.raises(MacClientConflict, match="another client service"):
+        check_known_files([home], service_directories=[], own_plist=own)
+
+
 @pytest.mark.parametrize(
     "argv",
     [
@@ -149,7 +208,8 @@ def test_host_checks_all_account_homes_and_system_directories(monkeypatch):
                 "service_directories": [
                     Path("/Library/LaunchAgents"),
                     Path("/Library/LaunchDaemons"),
-                ]
+                ],
+                "own_plist": None,
             },
         )
     ]

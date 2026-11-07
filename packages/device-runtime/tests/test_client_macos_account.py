@@ -127,7 +127,7 @@ def test_bad_paths_rejected(filesystem, field, mode, uid):
 def test_existing_registration_not_overwritten(filesystem, mode):
     account, files = filesystem
     files[account.layout.plist] = SimpleNamespace(st_mode=mode, st_uid=501)
-    with pytest.raises(MacAccountError, match="will not overwrite"):
+    with pytest.raises(MacAccountError, match="create-only"):
         validate_registration_files(account)
 
 

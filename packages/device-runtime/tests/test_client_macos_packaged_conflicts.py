@@ -26,7 +26,7 @@ case=sys.argv[2]
 # Replace every host enumeration boundary before entering the actual main.
 pwd.getpwall=lambda: [SimpleNamespace(pw_dir="/offline-test-home")]
 calls=[]
-def files(homes, *, service_directories):
+def files(homes, *, service_directories, own_plist=None):
     assert list(homes)==[m.Path("/offline-test-home")]
     assert service_directories==[m.Path("/Library/LaunchAgents"),m.Path("/Library/LaunchDaemons")]
     calls.append("files")

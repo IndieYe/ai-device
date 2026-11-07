@@ -12,6 +12,7 @@ import stat
 import sys
 
 FIXED_LAUNCHER = "/opt/ai-device-client/bin/ai-device-client-launcher"
+LABEL = "local.ai-device.client"
 
 
 class MacClientConflict(ValueError):
@@ -45,7 +46,7 @@ def _entries(path):
         return []
 
 
-def check_known_files(homes, *, service_directories):
+def check_known_files(homes, *, service_directories, own_plist=None):
     """Inspect explicit account homes and system service directories.
 
     Include all account homes and /Library/{LaunchAgents,LaunchDaemons} in the
@@ -81,6 +82,10 @@ def check_known_files(homes, *, service_directories):
                 label = definition.get("Label", "")
                 argv = definition.get("ProgramArguments", [])
                 program = definition.get("Program", "")
+                # Our own published definition is not a conflicting third-party
+                # service. Reporting it as one sends the operator looking for a
+                # second client that does not exist. It is still refused, just
+                # for the actual reason: registration is create-only.
                 if (
                     not isinstance(label, str)
                     or not isinstance(program, str)
@@ -88,6 +93,11 @@ def check_known_files(homes, *, service_directories):
                     or any(not isinstance(x, str) for x in argv)
                 ):
                     raise MacClientConflict("service definition is inconclusive")
+                if own_plist is not None and (directory / name) == own_plist and label == LABEL:
+                    raise MacClientConflict(
+                        "already registered for this user; registration is create-only, "
+                        "so use the existing definition or retire it first"
+                    )
                 command = " ".join([program, *argv])
                 if (
                     label.startswith("com.device-runtime.")
@@ -135,7 +145,7 @@ def is_client_command(argv):
 
 
 def check_registration_conflicts(
-    *, confirm_legacy_clients_disabled=False, accounts=None, processes=None
+    *, confirm_legacy_clients_disabled=False, accounts=None, processes=None, own_plist=None
 ):
     """Host registration preflight; no own-process exception for first install.
 
@@ -160,6 +170,7 @@ def check_registration_conflicts(
         check_known_files(
             homes,
             service_directories=[Path("/Library/LaunchAgents"), Path("/Library/LaunchDaemons")],
+            own_plist=own_plist,
         )
         for process in (processes or psutil.process_iter)():
             try:

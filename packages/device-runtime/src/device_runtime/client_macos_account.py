@@ -165,7 +165,10 @@ def validate_registration_files(account):
     except OSError:
         raise MacAccountError("LaunchAgent registration state is unavailable") from None
     else:
-        raise MacAccountError("LaunchAgent already exists; registration will not overwrite it")
+        raise MacAccountError(
+            "LaunchAgent already exists for this user; registration is create-only and "
+            "will not overwrite it"
+        )
 
 
 # Fixed code, with paths in separate argv fields. No user data is interpolated

@@ -11,7 +11,10 @@ from device_runtime import client_macos_register as reg
 def flow(monkeypatch):
     events = []
     account = SimpleNamespace(
-        layout=SimpleNamespace(uid=501, directory=Path("/Users/test/config")), gid=20
+        layout=SimpleNamespace(
+            uid=501, directory=Path("/Users/test/config"), plist=Path("/fixture/agent.plist")
+        ),
+        gid=20,
     )
     monkeypatch.setattr(reg.sys, "platform", "darwin")
     monkeypatch.setattr(reg.os, "geteuid", lambda: 0)
@@ -233,3 +236,87 @@ def test_configured_user_registration_and_explicit_resume(tmp_path, monkeypatch,
     assert plistlib.loads(layout.plist.read_bytes()) == layout.definition()
     assert layout.config.read_bytes() == config_before
     assert layout.token.read_bytes() == token_before
+
+
+def test_cli_reports_the_actual_refusal_reason(monkeypatch, capsys):
+    """The operator needs the cause, not a generic "inspect state".
+
+    An existing valid registration and a stale definition owned by someone
+    else require opposite actions; collapsing both into one line made the
+    message useless.
+    """
+
+    from device_runtime.client_macos_account import MacAccountError
+
+    def refuse(*args, **kwargs):
+        raise MacAccountError("LaunchAgent already exists for this user; create-only")
+
+    monkeypatch.setattr(reg, "register", refuse)
+    with pytest.raises(SystemExit) as exit_info:
+        reg.main(["register", "--user", "test", "--confirm-legacy-clients-disabled"])
+    assert exit_info.value.code == 2
+    err = capsys.readouterr().err
+    assert "create-only" in err
+    assert "inspect registration state" not in err
+
+
+def test_cli_withholds_text_from_unexpected_exceptions(monkeypatch, capsys):
+    """A bare OSError can quote a path; its text must not reach the operator."""
+
+    def refuse(*args, **kwargs):
+        raise OSError("/Users/alice/secret/token")
+
+    monkeypatch.setattr(reg, "register", refuse)
+    with pytest.raises(SystemExit):
+        reg.main(["register", "--user", "test", "--confirm-legacy-clients-disabled"])
+    err = capsys.readouterr().err
+    assert "secret" not in err
+    assert "inspect registration state" in err
+
+
+def test_cli_keeps_generic_wording_for_empty_diagnostic(monkeypatch, capsys):
+    from device_runtime.client_macos_account import MacAccountError
+
+    def refuse(*args, **kwargs):
+        raise MacAccountError("")
+
+    monkeypatch.setattr(reg, "register", refuse)
+    with pytest.raises(SystemExit):
+        reg.main(["register", "--user", "test", "--confirm-legacy-clients-disabled"])
+    assert "inspect registration state" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "error,needle",
+    [
+        (
+            "conflict",
+            (
+                "already registered for this user; registration is create-only, "
+                "so use the existing definition or retire it first"
+            ),
+        ),
+        ("identity", "registered account changed; automatic rebinding refused"),
+    ],
+)
+def test_cli_reports_conflict_and_identity_diagnostics(monkeypatch, capsys, error, needle):
+    """These two are the refusals an operator actually hits on a used machine.
+
+    They are covered with their real exception types because the safe-to-print
+    allowlist is by type: dropping either type from it would silently degrade
+    the message back to the generic wording.
+    """
+    from device_runtime.client_macos_conflicts import MacClientConflict
+    from device_runtime.client_macos_identity import MacIdentityError
+
+    builder = {"conflict": MacClientConflict, "identity": MacIdentityError}[error]
+
+    def refuse(*args, **kwargs):
+        raise builder(needle)
+
+    monkeypatch.setattr(reg, "register", refuse)
+    with pytest.raises(SystemExit):
+        reg.main(["register", "--user", "test", "--confirm-legacy-clients-disabled"])
+    err = capsys.readouterr().err
+    assert needle in err
+    assert "inspect registration state" not in err
