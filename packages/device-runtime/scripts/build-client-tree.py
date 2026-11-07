@@ -14,6 +14,11 @@ import tarfile
 import zipfile
 from pathlib import Path
 
+# Native executables this tree ships, relative to the tree root. MUST match
+# NATIVE_IDENTITY_FILES in src/device_runtime/version.py: readiness compares the
+# two digests exactly, so a divergence makes every upgrade fail to become ready.
+NATIVE_IDENTITY_FILES = ("bin/ai-device-client-launcher", "bin/ai-device-client-commit")
+
 
 def verify(path, record):
     if (
@@ -71,7 +76,22 @@ def build_target():
 
 
 def write_client_identity(output):
-    """Match version.py source fingerprint without importing target code."""
+    """Match version.py's runtime fingerprint without importing target code.
+
+    Two inputs, mirroring device_runtime/version.py exactly:
+      1. every .py in the installed package;
+      2. every native executable this tree ships (NATIVE_IDENTITY_FILES),
+         by tree-relative name and byte content.
+
+    The native binaries must be built before this runs; build() orders it that
+    way. Readiness compares this digest against the runtime's own, so a drift
+    between the two implementations is not cosmetic -- it makes every upgrade
+    fail to become ready. tests/test_client_tree_build.py pins them together.
+
+    A missing native binary is hashed as empty rather than raising: the digest
+    then differs from any real build, which is a truthful "this tree is not
+    complete" rather than a silent pass.
+    """
     import ast
     import re
 
@@ -95,6 +115,12 @@ def write_client_identity(output):
             raise ValueError("client source must be regular files")
         name, content = path.relative_to(package).as_posix().encode(), path.read_bytes()
         digest.update(len(name).to_bytes(8, "big") + name)
+        digest.update(len(content).to_bytes(8, "big") + content)
+    for relative in NATIVE_IDENTITY_FILES:
+        marker = relative.encode()
+        digest.update(len(marker).to_bytes(8, "big") + marker)
+        binary = output / relative
+        content = binary.read_bytes() if binary.is_file() else b""
         digest.update(len(content).to_bytes(8, "big") + content)
     identity = {"version": versions[0], "build_id": "sha256:" + digest.hexdigest()}
     with (output / "client-identity.json").open("x") as stream:
