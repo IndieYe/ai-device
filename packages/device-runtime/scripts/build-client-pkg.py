@@ -618,7 +618,11 @@ def distribution(version, *, mode="inspection"):
         "inspection": "AI Device Client — inspection only",
         "verification": "AI Device Client — VERIFICATION BUILD, not for release",
         "stage_only": "AI Device Client — VERIFICATION stage-only, not for release",
-        "shipping": "AI Device Client",
+        # Requirement 11: a local development package may be unsigned but must
+        # say so. The title is the one string an ordinary user always sees, and
+        # it is what distinguishes this artifact from a signed public release --
+        # the filename deliberately carries no mode word.
+        "shipping": "AI Device Client — UNSIGNED development build",
     }[mode]
     root = ET.Element("installer-gui-script", {"minSpecVersion": "2"})
     ET.SubElement(root, "title").text = title
@@ -677,7 +681,69 @@ function rejectInspection() {
     choice = ET.SubElement(root, "choice", {"id": "client", "visible": "false"})
     ET.SubElement(choice, "pkg-ref", {"id": identifier})
     ET.SubElement(root, "pkg-ref", {"id": identifier, "version": version}).text = "client.pkg"
+    if mode == "shipping":
+        # Requirement 11 requires the package to be MARKED, not merely built
+        # unsigned. Measured behaviour of an unsigned package with a quarantine
+        # attribute: Installer.app is suspended by Gatekeeper and nothing is
+        # installed, while `sudo installer` still succeeds -- so the difference
+        # between "works for me" and "works for a user" is entirely whether
+        # they double-click. Saying that here, before the payload is written,
+        # is the honest place for it.
+        ET.SubElement(root, "welcome", {"file": "welcome.html"})
     return ET.tostring(root, encoding="unicode", xml_declaration=True)
+
+
+UNSIGNED_NOTICE = """UNSIGNED DEVELOPMENT BUILD -- NOT FOR PUBLIC DISTRIBUTION
+
+This package has no Developer ID signature and no notarisation ticket.
+
+Measured on macOS 27.0.1 (2026-11-07):
+
+  spctl -a -vv -t install <pkg>       rejected / no usable signature
+  sudo installer -pkg <pkg> -target /  succeeds (rc=0), with or without
+                                       com.apple.quarantine
+  double-click the .pkg                Gatekeeper suspends Installer.app; the
+                                       payload is never written, so the install
+                                       does not happen
+
+The third line is the one that matters for a real user: the graphical install
+path -- the only one most users try -- is blocked when the package carries a
+quarantine attribute, which a downloaded copy always does.
+
+To install deliberately, as an administrator:
+
+  xattr -d com.apple.quarantine <pkg>
+  sudo installer -pkg <pkg> -target /
+
+Signing and notarisation require an Apple Developer Program account and are
+outstanding work for real release. Requirement 11 permits an unsigned local
+development package, but requires it to be marked as such.
+"""
+
+
+UNSIGNED_WELCOME = """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+body { font: 13px -apple-system, sans-serif; margin: 0; }
+h2 { font-size: 14px; margin: 0 0 8px; }
+p { margin: 0 0 8px; }
+code { font-family: ui-monospace, monospace; font-size: 12px; }
+.note { color: #a05000; font-weight: 600; }
+</style></head><body>
+<h2>This build is unsigned</h2>
+<p class="note">Not for public distribution.</p>
+<p>The package carries no Developer ID signature and no notarisation ticket.
+Because of that, macOS Gatekeeper blocks it when it is installed by
+double-clicking, which is how a user normally installs a package. The install
+will not start; the dialog will say the developer cannot be verified.</p>
+<p>An administrator can install the same package from a terminal, where the
+installer does not consult Gatekeeper:</p>
+<p><code>sudo installer -pkg &lt;path&gt; -target /</code></p>
+<p>If this is a downloaded copy, remove the quarantine attribute first:
+<code>xattr -d com.apple.quarantine &lt;path&gt;</code></p>
+<p>Signing and notarisation are outstanding work for real release. Installing
+this build means accepting that its origin is not authenticated.</p>
+</body></html>
+"""
 
 
 def validate_bom(text):
@@ -924,6 +990,15 @@ def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
     postinstall.chmod(0o755)
     dist = output / "Distribution.xml"
     dist.write_text(distribution(version, mode=mode))
+    resources = None
+    if mode == "shipping":
+        # productbuild only embeds a welcome page when it is found through
+        # --resources; a file sitting next to Distribution.xml is referenced by
+        # name and silently dropped, leaving a distribution that points at
+        # nothing. Keep it in its own directory so nothing else is swept in.
+        resources = output / "resources"
+        resources.mkdir(exist_ok=True)
+        (resources / "welcome.html").write_text(UNSIGNED_WELCOME)
     identifier = {
         "inspection": IDENTIFIER,
         "verification": VERIFICATION_IDENTIFIER,
@@ -1009,10 +1084,16 @@ def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
             str(dist),
             "--package-path",
             str(output),
+            *(["--resources", str(resources)] if resources else []),
             str(result),
         ],
         check=True,
     )
+    if mode == "shipping":
+        # The artifact travels outside this directory, so the marker goes with
+        # it: whoever picks up the .pkg must not have to open the installer or
+        # read the build script to learn it is unsigned.
+        (output / f"{result.name}.UNSIGNED.txt").write_text(UNSIGNED_NOTICE)
     return result
 
 

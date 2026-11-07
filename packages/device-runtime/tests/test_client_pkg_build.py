@@ -574,6 +574,40 @@ def test_default_build_stays_inspection_only(builder, tmp_path):
     assert "$STAGE" not in builder.PREINSTALL
 
 
+def test_shipping_build_is_marked_unsigned(builder):
+    """Requirement 11: an unsigned development package must be marked.
+
+    The package has no signature and no notarisation ticket, and a downloaded
+    copy carries a quarantine attribute, which makes Gatekeeper suspend
+    Installer.app on double-click. Since the filename is shared with what a
+    signed release would use, the title and welcome page are the only places
+    that tell a user what they are holding.
+    """
+    xml = ET.fromstring(builder.distribution("0.3.4.1", mode="shipping"))
+    assert "UNSIGNED" in xml.find("title").text
+    assert "development build" in xml.find("title").text
+    # The marker must be visible before the payload is written, not buried in a
+    # post-install message after the fact.
+    assert xml.find("welcome").get("file") == "welcome.html"
+    welcome = builder.UNSIGNED_WELCOME
+    assert "unsigned" in welcome.lower()
+    assert "sudo installer -pkg" in welcome
+    assert "notarisation" in welcome.lower()
+
+
+def test_rehearsal_builds_do_not_claim_to_be_shipping(builder):
+    """The unsigned marker is about the deliverable only.
+
+    Verification and stage-only already say they are not for release; adding
+    the shipping welcome page to them would claim a distribution property they
+    do not have.
+    """
+    for mode in ("inspection", "verification", "stage_only"):
+        xml = ET.fromstring(builder.distribution("0.3.4.1", mode=mode))
+        assert xml.find("welcome") is None, f"{mode} must not carry the welcome page"
+        assert "UNSIGNED" not in (xml.find("title").text or "")
+
+
 def test_verification_distribution_is_installable_and_distinguishable(builder):
     xml = ET.fromstring(builder.distribution("0.3.4.1", mode="verification"))
     # No blanket refusal: this product is meant to install.
@@ -730,12 +764,14 @@ def test_installable_modes_reject_installation_check_only_for_inspection(builder
 def test_shipping_product_carries_no_rehearsal_wording(builder):
     """The deliverable must not tell its user it is a verification build.
 
-    Every other installable mode says so in the title and in the install-check
-    message -- the two strings a user actually reads. A shipping build reusing
-    either would ship the rehearsal disclaimer to real machines.
+    Every rehearsal mode says so in the title and in the install-check message --
+    the two strings a user actually reads. A shipping build reusing either would
+    ship the rehearsal disclaimer to real machines. It does carry a different
+    disclaimer, because it is in fact unsigned; that one is asserted in
+    test_shipping_build_is_marked_unsigned.
     """
     xml = ET.fromstring(builder.distribution("0.3.4.2", mode="shipping"))
-    assert xml.find("title").text == "AI Device Client"
+    assert xml.find("title").text == "AI Device Client — UNSIGNED development build"
     rendered = ET.tostring(xml, encoding="unicode").lower()
     assert "verification" not in rendered
     assert "not for release" not in rendered
