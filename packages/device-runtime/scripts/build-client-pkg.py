@@ -225,37 +225,48 @@ SHIPPING_EPILOGUE = """# A shipping install that published the program on a mach
 # so telling the operator to "run register --help" would only send them into a
 # refusal. The path below is the layout the registrar itself will read.
 if [ ! -f "$REGISTRATION" ]; then
-    # Unquoted heredoc: $PROGRAM must expand, or the printed command is not the
-    # absolute path the operator can actually run.
-    cat >&2 <<OUTSTANDING
+    # QUOTED heredoc: nothing inside is expanded by this script. The script runs
+    # as root, so an unquoted $HOME would print /var/root -- a path that does not
+    # exist for the user who must actually run these steps. The program path is
+    # inlined at build time for the same reason: it is a constant of this
+    # package, so the shell does not need to resolve it.
+    cat >&2 <<'OUTSTANDING'
 AI_DEVICE_CLIENT_INSTALLED_NOT_REGISTERED_V1
-The client program is installed at $PROGRAM, but this machine has no client
+The client program is installed at {program}, but this machine has no client
 identity yet, so nothing will start at login.
 
 Still required, in this order. Do not paraphrase these paths: the registrar
 compares client.json against the fixed layout and refuses anything else.
+Run all three steps as the user who should run the client, in that user's own
+terminal: below, ~ and $HOME mean that user's home, not root's.
 
-  1. As the user who should run the client, create
-     ~/Library/Application Support/ai-device-client/ with mode 0700, and inside
-     it two files owned by that user:
+  1. Create the configuration directory with mode 0700, and inside it two files
+     owned by you:
 
-       ~/Library/Application Support/ai-device-client/client.json  (0644)
+       ~/Library/Application Support/ai-device-client/client.json  (0600)
          exactly these four keys are required:
-         {"server_url": "<centre url>",
+         {{"server_url": "wss://<centre host>",
           "device_id": "<device id>",
-          "state_dir": "$HOME/Library/Application Support/ai-device-client/state",
-          "token_file": "$HOME/Library/Application Support/ai-device-client/token"}
+          "state_dir": "<home>/Library/Application Support/ai-device-client/state",
+          "token_file": "<home>/Library/Application Support/ai-device-client/token"}}
+
+         server_url must be a ws/wss URL without embedded credentials; any
+         non-loopback host requires wss://. A /device-runtime mount is accepted;
+         query strings and fragments are refused.
 
        ~/Library/Application Support/ai-device-client/token  (0600)
          the device token, one line, no extra keys
 
-     state_dir and token_file must be these absolute paths; the probe compares
-     them literally after expanding the account home.
+     Mode 0600 on client.json is required, not cosmetic: the registrar rejects
+     any group/other permission on the config file or the token.
+
+     state_dir and token_file must be these absolute paths, with <home> spelled
+     out literally; the probe compares them after expanding the account home.
 
   2. As an administrator, register that user (quote the name; registration is
      root-only and does not start the client):
 
-       sudo $PROGRAM/runtime/bin/python3 -I -B \\
+       sudo {program}/runtime/bin/python3 -I -B \\
          -m device_runtime.client_macos_register register \\
          --user '<user>' --confirm-legacy-clients-disabled
 
@@ -816,7 +827,7 @@ def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
                 status_file=COMMIT_STATUS_FILE,
                 upgrade_entry=f"{UPGRADE_ROOT}/{UPGRADE_ENTRY}",
                 registration=REGISTRATION_FILE,
-                epilogue=SHIPPING_EPILOGUE if mode == "shipping" else "",
+                epilogue=SHIPPING_EPILOGUE.format(program=program) if mode == "shipping" else "",
             )
         )
     postinstall.chmod(0o755)

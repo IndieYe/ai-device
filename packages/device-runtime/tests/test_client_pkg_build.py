@@ -854,10 +854,32 @@ def test_shipping_postinstall_names_the_outstanding_configuration(builder, tree,
     # the operator somewhere that refuses them.
     assert "Library/Application Support/ai-device-client/client.json" in postinstall
     assert "client_macos_register register" in postinstall
-    # The heredoc must be unquoted, or $PROGRAM prints literally and the
-    # operator is handed a command that cannot run.
-    assert "<<'OUTSTANDING'" not in postinstall
-    assert "cat >&2 <<OUTSTANDING" in postinstall
+    # The heredoc must be QUOTED and the program path inlined at build time.
+    # postinstall runs as root, so an unquoted heredoc would expand $HOME and
+    # $(id -u) against /var/root and print instructions aimed at an account
+    # that does not exist, for a user whose own shell must run them.
+    assert "<<'OUTSTANDING'" in postinstall
+    assert "cat >&2 <<OUTSTANDING" not in postinstall
+    # Inlined, not left as a shell variable or a literal placeholder.
+    assert "The client program is installed at /opt/ai-device-client," in postinstall
+    # Scope the leakage checks to the notice itself: $PROGRAM is a legitimate
+    # shell variable elsewhere in postinstall, but inside this quoted heredoc it
+    # would reach the operator as literal text.
+    notice = postinstall[postinstall.index("AI_DEVICE_CLIENT_INSTALLED_NOT_REGISTERED_V1"):]
+    notice = notice[:notice.index("\nOUTSTANDING\n")]
+    assert "$PROGRAM" not in notice
+    assert "{program}" not in notice
+    # $HOME and $(id -u) must survive as literal text for the user to expand.
+    assert "\"$HOME/Library/LaunchAgents/local.ai-device.client.plist\"" in postinstall
+    assert "gui/$(id -u)" in postinstall
+    # 0600, not 0644: the registrar rejects any group/other bit on the config
+    # file, so a notice that says 0644 sends the operator into a refusal.
+    assert "ai-device-client/client.json  (0600)" in postinstall
+    assert "client.json  (0644)" not in postinstall
+    # A non-loopback host requires wss://; naming only "<centre url>" leaves the
+    # operator free to paste a ws:// URL that device_url() refuses.
+    assert '"server_url": "wss://' in postinstall
+    assert "non-loopback host requires wss://" in postinstall
     # The registrar reads these two keys literally and refuses any other path,
     # so the notice has to name them; a bare "server_url and device_id" leaves
     # the operator with a config that is rejected as "unexpected client paths".
