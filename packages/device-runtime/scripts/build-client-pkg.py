@@ -757,6 +757,56 @@ def validate_bom(text):
             raise ValueError("package payload ownership is not root:wheel")
 
 
+def verify_native_snapshot(tree, native):
+    """The tree's native sources and the repo's must be the same build inputs.
+
+    The upgrade entry is compiled from `native/` in this repository, but the
+    tree carries its own snapshot of the same sources and that snapshot is part
+    of build_id. Nothing used to compare them, so a stale tree plus newer
+    sources produced an installer whose behaviour the tree's build_id does not
+    describe: the runtime would report one identity and run code built from
+    another. Rebuilding the tree is the fix; guessing is not.
+
+    Both directions are errors. A file only in the repo means the entry is
+    built from source the tree never recorded. A file only in the tree means
+    the tree was built from something this checkout no longer has, so the
+    embedded inventory and the entry would disagree about what shipped.
+    """
+    snapshot = Path(tree) / "native"
+    if not snapshot.is_dir():
+        raise ValueError(
+            f"client tree has no native snapshot at {snapshot}; rebuild the tree "
+            "with build-client-tree.py"
+        )
+    suffixes = {".c", ".h", ".m"}
+    staged = {p.name: p for p in snapshot.iterdir()
+              if p.is_file() and p.suffix in suffixes}
+    source = {
+        p.name: p for p in Path(native).iterdir()
+        if p.is_file() and not p.is_symlink() and p.suffix in suffixes
+    }
+    if not staged:
+        raise ValueError(f"client tree native snapshot {snapshot} is empty")
+    missing = sorted(set(source) - set(staged))
+    extra = sorted(set(staged) - set(source))
+    if missing or extra:
+        raise ValueError(
+            "client tree native snapshot does not match this checkout; "
+            "rebuild the tree. Missing from tree: "
+            f"{missing or 'none'}. Not in repo: {extra or 'none'}."
+        )
+    differing = sorted(
+        name for name, path in source.items()
+        if path.read_bytes() != staged[name].read_bytes()
+    )
+    if differing:
+        raise ValueError(
+            "client tree native sources differ from this checkout; rebuild the "
+            f"tree. Differing: {differing}"
+        )
+    return len(source)
+
+
 def stage_upgrade_entry(tree, root, build_directory, *, run=None):
     """Compile the upgrade entry, embedding the inventory of `tree`.
 
@@ -781,6 +831,10 @@ def stage_upgrade_entry(tree, root, build_directory, *, run=None):
     native = Path(__file__).resolve().parents[1] / "native"
     build_directory = Path(build_directory)
     build_directory.mkdir(parents=True, exist_ok=True)
+    # The entry is compiled from this checkout; the tree carries the snapshot
+    # that build_id covers. Compiling one against the other would ship code the
+    # tree's identity does not describe.
+    verify_native_snapshot(tree, native)
     # `client-macos-installer.m` reaches resource-check.c through writer-probe.c,
     # which includes a generated resource-table.h. It is built from the tree this
     # package stages, so the embedded inventory describes exactly that payload.

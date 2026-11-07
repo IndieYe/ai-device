@@ -36,7 +36,107 @@ def tree(tmp_path):
     (path / "build-manifest.json").write_text(
         json.dumps({"schema_version": 1, "platform": "darwin-arm64"})
     )
+    stage_native_snapshot(path)
     return path
+
+
+def stage_native_snapshot(path):
+    """Copy the real native sources into a fixture tree, as a real tree has them.
+
+    The builder refuses a tree whose snapshot disagrees with the checkout it
+    compiles the entry from, so a fixture without one would test that refusal
+    rather than the packaging path.
+    """
+    native = Path(__file__).parents[1] / "native"
+    destination = path / "native"
+    destination.mkdir()
+    for source in native.iterdir():
+        if source.is_file() and source.suffix in {".c", ".h", ".m"}:
+            (destination / source.name).write_bytes(source.read_bytes())
+
+
+def test_snapshot_with_a_newer_source_is_refused(builder, tree):
+    """A file in the repo but not in the tree means the entry is newer.
+
+    The entry is compiled from the checkout, but build_id covers the tree's
+    snapshot. Without this check a stale tree plus newer sources produced an
+    installer whose behaviour the tree's identity does not describe.
+    """
+    (tree / "native" / "client-macos-new-thing.h").write_text("new\n")
+    with pytest.raises(ValueError, match="does not match this checkout"):
+        builder.verify_native_snapshot(tree, builder.Path(__file__).parents[1] / "native")
+
+
+def test_snapshot_missing_a_repo_source_is_refused(builder, tree):
+    """A file in the tree but not in the repo means the tree came from elsewhere."""
+    victim = next((tree / "native").glob("*.h"))
+    victim.unlink()
+    with pytest.raises(ValueError, match="does not match this checkout"):
+        builder.verify_native_snapshot(tree, builder.Path(__file__).parents[1] / "native")
+
+
+def test_snapshot_with_different_bytes_is_refused(builder, tree):
+    """Same names, different content is the case a name-only check would miss.
+
+    Editing a header in the checkout without rebuilding the tree changes what
+    the entry compiles to while leaving every file name intact.
+    """
+    victim = next((tree / "native").glob("*.h"))
+    victim.write_text(victim.read_text() + "\n/* drift */\n")
+    with pytest.raises(ValueError, match="differ from this checkout"):
+        builder.verify_native_snapshot(tree, builder.Path(__file__).parents[1] / "native")
+
+
+def test_snapshot_absent_is_refused(builder, tree):
+    """A tree built before snapshots existed cannot be vouched for."""
+    import shutil
+
+    shutil.rmtree(tree / "native")
+    with pytest.raises(ValueError, match="no native snapshot"):
+        builder.verify_native_snapshot(tree, builder.Path(__file__).parents[1] / "native")
+
+
+def test_snapshot_of_only_comments_is_not_accepted_as_present(builder, tmp_path):
+    """An empty snapshot must fail rather than pass with nothing to compare."""
+    snapshot_tree = tmp_path / "empty"
+    (snapshot_tree / "native").mkdir(parents=True)
+    with pytest.raises(ValueError, match="snapshot.*is empty"):
+        builder.verify_native_snapshot(
+            snapshot_tree, builder.Path(__file__).parents[1] / "native"
+        )
+
+
+def test_matching_snapshot_is_accepted_and_counted(builder, tree):
+    """The ordinary case passes and reports how many sources were compared."""
+    native = builder.Path(__file__).parents[1] / "native"
+    count = builder.verify_native_snapshot(tree, native)
+    expected = sum(
+        1 for p in native.iterdir()
+        if p.is_file() and p.suffix in {".c", ".h", ".m"}
+    )
+    assert count == expected > 0
+
+
+def test_upgrade_entry_compilation_refuses_a_stale_tree(builder, tree, tmp_path):
+    """The check must run on the real path, not only when called directly.
+
+    Asserting verify_native_snapshot in isolation leaves the call site free to
+    drop it, which is the whole failure being fixed. This drives
+    stage_upgrade_entry itself and requires the refusal before any compiler
+    runs.
+    """
+    (tree / "native" / "client-macos-launchctl-probe.h").write_text("stale\n")
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="")
+
+    with pytest.raises(ValueError, match="does not match this checkout|differ from"):
+        builder.stage_upgrade_entry(
+            tree, tmp_path / "root", tmp_path / "build", run=run
+        )
+    assert calls == [], "no compiler runs once the snapshot is known stale"
 
 
 def test_build_only_calls_packagers(builder, tree, tmp_path):
