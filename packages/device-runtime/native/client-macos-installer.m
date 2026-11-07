@@ -46,6 +46,7 @@
 #include "client-macos-upgrade-entry.h"
 #include "client-macos-repair-entry.h"
 #include "client-macos-program-commit-entry.h"
+#include "client-macos-uninstall-entry.h"
 #include "client-macos-program-verbs.h"
 
 int main(int argc,char **argv) {
@@ -62,6 +63,8 @@ int main(int argc,char **argv) {
             return upgrade_registered_entry(argc,argv);
         if (argc>1 && !strcmp(argv[1],"repair-registered-program"))
             return repair_registered_entry(argc,argv);
+        if (argc>1 && !strcmp(argv[1],"uninstall-registered-program"))
+            return uninstall_registered_entry(argc,argv);
         if (argc>1 && !strcmp(argv[1],PROGRAM_VERB_COMMIT))
             return program_commit_entry(argc,argv);
         return first_install_entry(argc,argv);
