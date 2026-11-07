@@ -63,8 +63,11 @@ MODES = ("inspection", "verification", "stage_only", "shipping")
 # construction removes that failure mode without depending on cleanup at all.
 STAGE_ROOT = "/opt/ai-device-client-stage"
 # Build identity, written into the tree by build-client-tree.py. It covers the
-# Python sources only, so it distinguishes two trees built from different client
-# code; the package version in front of it distinguishes package builds.
+# Python sources, the native executables the tree ships, and the native sources
+# they and the upgrade entry are compiled from, so it distinguishes two trees
+# built from different client code -- including a change that only reaches the
+# out-of-tree entry. The package version in front of it distinguishes package
+# builds.
 IDENTITY_FILE = "client-identity.json"
 # Standalone commit executable, built into the tree. Not the launcher (a fixed
 # exec wrapper that ignores argv) and not client-macos-installer.m (which embeds
@@ -105,8 +108,9 @@ def stage_for(version: str, identity_build_id: str) -> str:
       The client identity's version is the *application* version (for example
       0.3.4) and stays fixed across package rebuilds, so it cannot make the
       path unique on its own.
-    - `build_id` changes only when the client Python sources change, so it
-      distinguishes two trees shipped under the same package version.
+    - `build_id` changes when the client Python sources, the shipped native
+      executables, or the native sources behind them change, so it distinguishes
+      two trees shipped under the same package version.
 
     The build id is stored as `sha256:<hex>`; the prefix is dropped because a
     colon in a path is legal but awkward in shell, logs and `ls` output.
