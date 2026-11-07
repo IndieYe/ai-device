@@ -268,6 +268,63 @@ def test_program_removal_happens_last(tmp_path):
     )
 
 
+def _compile_status_probe(tmp_path, name):
+    """Compile the real mapping predicate on its own.
+
+    The uninstall harness substitutes launchctl_job_loaded wholesale, so the
+    exit-code mapping was never executed by any test -- which is how the
+    fail-open survived. This compiles the real header and calls the pure
+    predicate with synthesised waitpid statuses.
+    """
+    native = Path(__file__).parents[1] / "native"
+    source = tmp_path / f"{name}.m"
+    source.write_text(
+        "#include <stdio.h>\n"
+        "#include <sys/wait.h>\n"
+        "#define UNINSTALL_HAVE_JOB_PROBE 0\n"
+        + f'#include "{native}/client-macos-launchctl-probe.h"\n'
+        + "int main(void){"
+          "int codes[]={0,113,112,64,127,1,2,70,3};"
+          "for(unsigned i=0;i<sizeof(codes)/sizeof(codes[0]);i++)"
+          'printf("%d=%d\\n",codes[i],'
+          "launchctl_job_state_from_status((codes[i]&0xff)<<8));"
+          # A signalled child reports no exit status at all.
+          'printf("SIG=%d\\n",launchctl_job_state_from_status(9));'
+          "return 0;}\n"
+    )
+    binary = tmp_path / name
+    compiled = subprocess.run(
+        ["/usr/bin/xcrun", "clang", "-Wall", "-Wextra", "-Werror",
+         str(source), "-o", str(binary)],
+        check=False, capture_output=True, text=True,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+    result = subprocess.run([str(binary)], check=False, capture_output=True,
+                            text=True, timeout=5)
+    assert result.returncode == 0, result.stderr
+    seen = {}
+    for line in result.stdout.splitlines():
+        key, value = line.split("=")
+        seen[key] = int(value)
+    return seen
+
+
+def test_job_state_mapping_treats_only_absence_as_not_loaded(tmp_path):
+    """Exit 113 means the service is absent; every other failure is unknown.
+
+    Regression: the original probe returned 0 for ANY nonzero exit, so a
+    missing domain (112), a malformed target (64) or our own exec failure (127)
+    all read as "not loaded", and the entry went on to delete the program tree
+    without ever booting the job out -- while the client could still be running.
+    """
+    seen = _compile_status_probe(tmp_path, "job-state")
+    assert seen["0"] == 1, "exit 0 is the only 'loaded' answer"
+    assert seen["113"] == 0, "113 is the only 'absent' answer"
+    for unknown in ("112", "64", "127", "1", "2", "70", "3"):
+        assert seen[unknown] == -1, f"exit {unknown} must be unknown, not 'not loaded'"
+    assert seen["SIG"] == -1, "a signalled probe never reports a state"
+
+
 def test_already_stopped_service_is_uninstalled_without_bootout(tmp_path):
     """A service the operator already stopped must still uninstall.
 
@@ -297,6 +354,24 @@ def test_unreadable_job_state_is_refused(tmp_path):
     assert "UNLOADS=0" in result.stdout
     assert program.exists() and plist.exists()
     assert (management / "registration.json").exists()
+
+
+def test_unknown_state_refuses_before_removing_anything(tmp_path):
+    """Pins the fail-closed ordering: the probe runs before the first delete.
+
+    With an unknown job state the entry must refuse while the definition,
+    registration and program are all still present. Deleting the plist and then
+    discovering the client was still running would leave a process with no
+    definition to boot out against.
+    """
+    result, program, plist, management, runtime = compile_harness(
+        tmp_path, job_loaded=-1, name="uninstall-unknown-order"
+    )
+    assert rc_of(result) == 70
+    assert program.exists(), "program untouched when the state is unknown"
+    assert plist.exists(), "definition untouched when the state is unknown"
+    assert (management / "registration.json").exists()
+    assert (runtime / "token").read_text() == "secret\n"
 
 
 def test_loaded_service_is_booted_out_before_removal(tmp_path):

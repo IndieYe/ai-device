@@ -37,6 +37,9 @@
 /* fd-relative recursive removal that never follows a symlink. Shared with the
  * stage-cleanup path rather than reimplemented here. */
 #include "client-macos-stage-cleanup.h"
+/* Three-state "is the job loaded". Kept separate so the exit-code mapping can
+ * be tested on its own; this file's harness substitutes the probe wholesale. */
+#include "client-macos-launchctl-probe.h"
 
 #define UNINSTALL_UNLOADED "AI_DEVICE_UNINSTALL_SERVICE_REMOVED_V1"
 
@@ -59,31 +62,6 @@
 #define UNINSTALL_MANAGEMENT_OWNER 0
 #endif
 
-/* 1 loaded, 0 not loaded, -1 could not tell. Read-only; changes nothing. */
-#ifndef UNINSTALL_HAVE_JOB_PROBE
-#define UNINSTALL_HAVE_JOB_PROBE 1
-static int launchctl_job_loaded(const char *target) {
-    if (!target || !*target) return -1;
-    pid_t child = fork();
-    if (child < 0) return -1;
-    if (child == 0) {
-        int null = open("/dev/null", O_RDWR);
-        if (null >= 0) {
-            dup2(null, STDOUT_FILENO);
-            dup2(null, STDERR_FILENO);
-            if (null > STDERR_FILENO) close(null);
-        }
-        execl("/bin/launchctl", "launchctl", "print", target, (char *)NULL);
-        _exit(127);
-    }
-    int status = 0;
-    while (waitpid(child, &status, 0) < 0) {
-        if (errno != EINTR) return -1;
-    }
-    if (!WIFEXITED(status)) return -1;
-    return WEXITSTATUS(status) == 0 ? 1 : 0;
-}
-#endif
 
 static int uninstall_remove_file(const char *path, const char *parent,
                                  uid_t owner, int require_owner) {
@@ -155,8 +133,10 @@ static int uninstall_registered_entry(int argc, char **argv) {
      * the state they were told to create.
      *
      * `launchctl print` on the registered target answers "is it loaded"
-     * without changing anything: 0 when loaded, nonzero when not. Only 0 leads
-     * to bootout; a failure to read the state refuses rather than assuming.
+     * without changing anything: exit 0 means loaded, exit 113 means the
+     * service is absent. Any other status (missing domain, malformed target,
+     * exec failure) is an unknown outcome and refuses rather than assuming the
+     * job is gone. Only a known-loaded job leads to bootout.
      */
     int loaded = launchctl_job_loaded([paths[@"service"] fileSystemRepresentation]);
     if (loaded < 0) {
