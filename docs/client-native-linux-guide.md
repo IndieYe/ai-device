@@ -1,7 +1,8 @@
 # Linux 客户端安装升级指南（Ubuntu 24.04 amd64）
 
-> 适用版本：客户端包 `ai-device-client` 0.4.x，运行时 0.3.5
+> 适用版本：客户端包 `ai-device-client` 0.4.x，运行时 0.3.6
 > 支持范围：**仅 Ubuntu 24.04 amd64**。不支持其他发行版、其他架构、降级安装。
+> 包版本与运行时版本相互独立，见第 5 节。
 > 本文是操作说明；实施细节与验收证据见 [`client-native-linux-development.md`](client-native-linux-development.md)，权威需求见 [`../doc/requirements/client-native-install-upgrade.md`](../doc/requirements/client-native-install-upgrade.md)。
 
 ## 1. 它是什么
@@ -146,8 +147,22 @@ systemctl show ai-device-client --property=MainPID --value
 版本 JSON 示例：
 
 ```json
-{"version": "0.3.5", "build_id": "sha256:1deefe4b25cf..."}
+{"version": "0.3.6", "build_id": "sha256:6d0d29e8073b..."}
 ```
+
+### 包版本与运行时版本是两件事
+
+`dpkg -l` 看到的是**包版本**（发行号），`--version` 看到的是**运行时版本**。两者独立演进，不要求前缀相同：
+
+| 名称 | 示例 | 含义 |
+| --- | --- | --- |
+| 包版本 | `0.4.2` | 制品发行号，反映打包、依赖、安装脚本的变化 |
+| 运行时版本 | `0.3.6` | 客户端程序自身版本，反映业务代码变化 |
+| build_id | `sha256:6d0d29e8...` | 精确实现身份，同版本不同构建也不同 |
+
+所以 `dpkg -l` 显示 0.4.2 而 `--version` 显示 0.3.6 是**正常的**，不代表装错包。这与 Ubuntu（发行号 24.04 / 内核 6.8）或 Android（Android 14 / 内核 6.1）的做法一致。
+
+判断升级是否成功，看的是**运行时版本 + build_id**，不是包版本前缀。中心侧显示的设备版本也是运行时版本和 build_id。
 
 > **服务 PID 存在不等于设备在线。** 中心是否看到本设备，以中心侧的 `/v1/devices` 为准；本机就绪与连接成功是两件事。
 
@@ -167,7 +182,7 @@ installed; client locally ready
 
 `locally ready` 是安装器停止旧进程、替换程序、重新启动并确认新版本就绪后的结论。
 
-实测（0.4.0 → 0.4.1）：主进程 PID 从 133 变为 232，运行时 0.3.4 → 0.3.5，配置与凭证保留。
+实测（0.4.1 → 0.4.2，ali-jp）：主进程 PID 由 125460 变为 131140（旧进程退出，新进程拉起），运行时 0.3.5 → 0.3.6，build_id 更新为 `6d0d29e8...`，`client.json` 与 `token` 的 SHA256 逐字节未变，操作日志 SQLite 保留，无残留 stage 目录。中心侧随后显示该设备 online，运行时版本与 build_id 与安装包一致。
 
 ### 升级时的行为
 
@@ -186,7 +201,19 @@ installed; client locally ready
 client is busy with active tasks; retry when tasks finish; service kept running
 ```
 
-看到这条说明**任务仍在跑，服务没被动过**。等任务完成后再执行同一条 `dpkg -i` 即可，不需要额外操作。
+看到这条说明**任务仍在跑，服务没被动过**。等任务完成后再执行同一条 `dpkg -i` 即可。
+
+> **但要注意包状态会停在 `ri`。** prerm 以非零退出后，dpkg 保留包的"待删除"意图，`dpkg -l` 显示 `ri` 而不是 `ii`。这不会影响正在运行的服务，也不会被 `apt upgrade`、`dist-upgrade`、`autoremove`、`install -f` 自动处理；但之后显式执行 `apt remove ai-device-client` 会直接删除，不再就此处的 busy 情况询问。
+>
+> 任务结束后重装同版本即可回到 `ii`：
+>
+> ```bash
+> sudo dpkg -i ai-device-client_<version>_amd64.deb
+> ```
+>
+> 重装会正常停服、替换、再启动，配置与业务数据保留。不要用 `dpkg --purge --force-all` 之类的方式绕过，那会连配置和凭证一起删掉。
+>
+> 上述 `ri` 行为在 `dpkg -r`（卸载）路径实测确认。升级路径（`dpkg -i` 遭遇 busy）复用同一个 prerm 与相同的非零退出，预期一致，但尚未单独做真机实验验证。
 
 ### 关于降级
 
@@ -217,7 +244,17 @@ sudo dpkg --purge ai-device-client
 
 实测结果：程序、配置目录一并删除；`/var/lib/ai-device-client/` 下的业务数据（操作日志 SQLite）**仍然保留**。
 
-> 凭证在 purge 时随 `/etc/ai-device-client/` 一起删除。若设备已退役，建议同时手动清理 `/var/lib/ai-device-client/`。
+> **purge 会直接删除凭证，没有备份也没有二次确认。**
+>
+> `dpkg --purge` 会执行 `rm -rf /etc/ai-device-client`，`token` 和 `client.json` 一并消失。这个动作用户不可恢复：
+>
+> - 设备侧凭证只此一份，删掉后设备无法再用原身份连回中心。
+> - 中心保存着设备 token（`/etc/device-runtime/center.env` 的 `DEVICE_RUNTIME_DEVICE_TOKENS`），可从中心取回该设备的 token 重新写入。这是唯一的恢复路径。
+> - 若中心也丢失（环境重建、未备份），该设备只能以新身份重新注册，原设备记录成为孤儿。
+>
+> 因此 purge 前先确认两件事：设备是否确定退役；中心侧 token 是否已确认可取回。只想重置配置请用「保留数据的卸载」后重新配置，不要 purge。
+>
+> 另外，`/var/lib/ai-device-client/` 下的业务数据（操作日志 SQLite）**purge 也不会删**，这是有意设计。若设备确实退役，这部分需手动清理。
 
 ## 8. 故障处理
 
@@ -299,10 +336,10 @@ journalctl -u ai-device-client -n 50
 
 ## 10. 验收证据来源
 
-本文命令均在隔离 Ubuntu 24.04 amd64 容器中实测。
+本文命令均在隔离 Ubuntu 24.04 amd64 环境实测（容器与独立云主机）。
 
-- 包：`ai-device-client` 0.4.0（运行时 0.3.4）、0.4.1（运行时 0.3.5）
-- 覆盖：干净目标安装、首次配置、注册、启动、A→B 升级、普通卸载、purge、损坏修复、普通用户运行、用户切换
+- 包：`ai-device-client` 0.4.0（运行时 0.3.4）、0.4.1（运行时 0.3.5）、0.4.2（运行时 0.3.6）
+- 覆盖：干净目标安装、首次配置、注册、启动、A→B 升级、普通卸载、purge、损坏修复、普通用户运行、用户切换、**busy 时拒绝卸载及恢复**、**包版本与运行时版本解耦**
 - 未覆盖：真实网络故障、真实系统 halt/断电、跨大版本状态迁移、真实硬件性能
 
 详细证据与历史迭代记录见 [`client-native-linux-development.md`](client-native-linux-development.md)。
