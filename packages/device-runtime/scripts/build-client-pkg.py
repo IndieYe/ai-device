@@ -131,17 +131,26 @@ def stage_for(version: str, identity_build_id: str) -> str:
     return f"{STAGE_ROOT}-{version}-{digest[:12]}"
 
 
-def read_client_identity(tree: Path, version: str) -> str:
-    """Read and cross-check the tree's client identity before staging it.
+def read_client_identity(tree: Path) -> str:
+    """Read the tree's client identity before staging it.
 
     Strict: a tree without an identity file is refused. The stage path is the
     only thing standing between two builds and a merged payload, so silently
     falling back to a weaker name would reintroduce exactly the bug this
     replaces.
 
-    The package version must extend the application version (0.3.4.12 extends
-    0.3.4). That catches a package built from a different tree than the one it
-    claims, without pretending the two numbers are the same thing.
+    The package version and the application version are independent numbers.
+    This used to require the package version to extend the application version
+    (0.3.4.12 extends 0.3.4), which made the release number unable to move
+    independently of the runtime it happened to embed: a 1.0.0 release could not
+    ship the 0.3.6 runtime without either renaming the release or lying about
+    the runtime. The numbers answer different questions -- what was released to
+    users versus what code is running -- so neither may constrain the other.
+
+    What actually catches a package built from the wrong tree is the native
+    snapshot check in build-client-tree.py, plus the build id carried into the
+    stage path: two different trees under one package version still land in
+    different stage directories.
     """
     path = tree / IDENTITY_FILE
     if not path.is_file():
@@ -150,10 +159,6 @@ def read_client_identity(tree: Path, version: str) -> str:
     application = identity.get("version")
     if not isinstance(application, str) or not application:
         raise ValueError(f"{IDENTITY_FILE} has no version")
-    if version != application and not version.startswith(application + "."):
-        raise ValueError(
-            f"package version {version!r} does not extend client version {application!r}"
-        )
     return identity.get("build_id")
 
 
@@ -991,7 +996,7 @@ def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
     # Default is derived per build; an explicit stage stays supported so the
     # separation checks below can be exercised with arbitrary layouts.
     if stage is None:
-        stage = stage_for(version, read_client_identity(tree, version))
+        stage = stage_for(version, read_client_identity(tree))
     # The payload must never land on the live path: that is the whole point of
     # staging it, so refuse a configuration that would reintroduce the write
     # window the atomic commit exists to remove.

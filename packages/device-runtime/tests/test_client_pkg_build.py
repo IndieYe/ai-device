@@ -472,19 +472,30 @@ def test_tree_without_identity_is_refused(builder, tree, tmp_path):
     assert not (tmp_path / "package").exists()
 
 
-def test_package_version_must_extend_client_version(builder, tree, tmp_path):
-    """A package version unrelated to the tree's client version is refused.
+def test_package_version_is_independent_of_client_version(builder, tree, tmp_path):
+    """A package version unrelated to the tree's client version must be accepted.
 
-    The two numbers are not the same thing (application 0.3.4, package
-    0.3.4.12), so equality is the wrong test; containment is the real contract.
+    The two numbers answer different questions: which release users got, and
+    which runtime code it carries. Constraining one by the other makes the
+    release number unable to move independently -- a 1.0.0 release could not
+    ship the 0.3.6 runtime without renaming the release or misreporting the
+    runtime.
     """
+    calls = []
 
     def run(argv, **kwargs):
-        raise AssertionError("packaging must not start for a mismatched version")
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout=".\t40755\t0/0\n")
 
-    with pytest.raises(ValueError, match="does not extend"):
-        builder.build(tree, tmp_path / "package", "9.9.9", run=run)
-    assert not (tmp_path / "package").exists()
+    # 9.9.9 shares no prefix with the tree's 0.3.4 client version.
+    builder.build(tree, tmp_path / "package", "9.9.9", run=run)
+    assert (tmp_path / "package").exists()
+    assert calls
+
+    # The stage path still carries the client build id, so two different trees
+    # under one package version cannot merge into the same stage directory.
+    stage = Path(builder.stage_for("9.9.9", "sha256:" + "a" * 64)).name
+    assert stage.startswith("ai-device-client-stage-9.9.9-")
 
 
 def test_identity_build_id_must_be_a_sha256_digest(builder, tree, tmp_path):
