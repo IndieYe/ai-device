@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 
 from packaging.requirements import Requirement
 
-from .bundle import COMPONENTS, ROLES, inspect_bundle, with_dependencies
+from .bundle import COMPONENTS, ROLES, STATE_FORMAT, inspect_bundle, with_dependencies
 from .entrypoint import LAUNCHER, POINTER, RUNNER, RUNNER_BODY
 from .management_lock import management_lease
 
@@ -169,7 +169,7 @@ def _lifecycle_binding(root, active):
         "identity": json.loads((root / "instance.json").read_text()),
         "identity_sha256": _file_sha256(root / "instance.json"),
         "config_sha256": _file_sha256(root / "config" / "roles.json"),
-        "state_format": 1,
+        "state_format": STATE_FORMAT,
     }
 
 

@@ -191,6 +191,24 @@ python3 packages/device-runtime/scripts/build-client-deb.py \
 
 进一步按函数审阅 `307b8cd..HEAD` 的installation差异：主要为锁定私有解释器准备/迁移与重建、平台要求检查、入口参数及launchd管理。journal/tasks存储格式未改；现有共享私有runtime、重建与备份恢复回归通过。尚未进行跨全部历史版本数据样本的迁移实测，不将该静态审阅及当前测试等同于0.3.4人工兼容批准。
 
+#### 该门禁已改为按格式审计（上述版本登记问题已关闭）
+
+上面的失败源于 `STATE_COMPATIBILITY` 按**版本号**记录人工审核结果：每升一次 `__version__` 就要求重新登记，哪怕持久化数据一个字都没变。0.3.4 之后 0.3.5、0.3.6 都未登记，门禁长期挂起。
+
+审计版本号本身是错位的：升版本号并不说明磁盘上的字节还能不能读。真正会破坏升级的是**数据格式**变化，而格式已由 release manifest 的 `state_format` 声明并在 `_compatible` 中校验。
+
+现改为：
+
+- 删除按版本的 `STATE_COMPATIBILITY`，改用 `lifecycle.AUDITED_STATE_FORMATS`——已人工审阅过数据契约的格式号清单。
+- `STATE_FORMAT` 收敛到最底层模块 `bundle.py` 单点定义，installation/lifecycle 均引用；不再在各处写 `"state_format": 1` 字面量。
+- 根级两个测试分别保证：当前 `STATE_FORMAT` 必须已登记；包内除定义处外不得出现该字段的字面量（防止升格式时只改一半）。
+
+效果：改版本号不再触发失败（已模拟 0.3.7 验证）；真改数据格式仍必须显式登记新格式号，人工确认点没有丢，只是落到了正确的位置。
+
+实测：根级 `uv run --no-sync pytest tests -q` **111 passed**（此前 110 passed/1 failed）；device-runtime 全量 **2156 passed/20 skipped**；ruff 通过。
+
+需要说明的边界：0.3.4→0.3.6 之间 `journal.py`、`tasks.py`、`output_store.py` 均无改动，`STATE_FORMAT` 与 `OUTPUT_MAP_FORMAT` 未变，因此格式仍为 1 有据。但本次并未做跨全部历史版本的数据样本迁移实测，上述结论建立在格式常量与存储代码未变之上。
+
 ### dev17 服务归属一致性审核
 
 安装/卸载shell钩子从解释器路径前缀匹配改为完整客户端ExecStart行的固定字符串整行匹配，与Python激活校验一致。dev17仅钩子变化，复用已验证dev16运行树，不重复构建runtime。真实隔离unit同解释器但改为无关模块后安装在停止前拒绝、非零PID保持，unit已恢复；生成postrm在隔离路径执行，确认拒绝且未调用disable、未删除unit。Device全量922通过，日志 `/tmp/device-ses14497-runtime-tests-dev17.log`。SHA256：`ac6d10817bb3c58bd2e56b74b0b6b61594016c2f3efab7978c615134be876737`。
