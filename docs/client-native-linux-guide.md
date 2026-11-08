@@ -213,7 +213,24 @@ client is busy with active tasks; retry when tasks finish; service kept running
 >
 > 重装会正常停服、替换、再启动，配置与业务数据保留。不要用 `dpkg --purge --force-all` 之类的方式绕过，那会连配置和凭证一起删掉。
 >
-> 上述 `ri` 行为在 `dpkg -r`（卸载）路径实测确认。升级路径（`dpkg -i` 遭遇 busy）复用同一个 prerm 与相同的非零退出，预期一致，但尚未单独做真机实验验证。
+> **升级路径不会留下 `ri`，与卸载不同。** `ri` 只在 `dpkg -r` 时出现；`dpkg -i` 遇 busy 时包状态**保持 `ii`**。
+>
+> 原因是 dpkg 的行为不同：卸载时旧包 prerm 以非零退出，dpkg 保留删除意图；升级时旧包 prerm 失败后，dpkg 会打印 `trying script from the new package instead` 并改用新包的 prerm 重试，新旧脚本都因 busy 拒绝后以 rc=1 结束，但包状态不变。
+>
+> 实测（ali-jp, 0.4.2 同版本重装, 任务进行中）：
+>
+> ```
+> client is busy with active tasks; retry when tasks finish; service kept running
+> dpkg: warning: old ai-device-client package pre-removal script subprocess returned error exit status 1
+> dpkg: trying script from the new package instead ...
+> dpkg: ... it looks like that went OK
+> note: stopping the client; ...
+> client is busy with active tasks; retry when tasks finish; service kept running
+> dpkg: error processing archive (--install):
+>  new ai-device-client package pre-installation script subprocess returned error exit status 1
+> ```
+>
+> 被拒后核对：包状态仍为 `ii`，服务与主进程未变，运行中的任务继续，配置与凭证 SHA256 不变，新发起的任务立即成功（准入保持）。任务结束后再执行同一条 `dpkg -i` 正常完成。
 
 ### 关于降级
 
@@ -339,7 +356,7 @@ journalctl -u ai-device-client -n 50
 本文命令均在隔离 Ubuntu 24.04 amd64 环境实测（容器与独立云主机）。
 
 - 包：`ai-device-client` 0.4.0（运行时 0.3.4）、0.4.1（运行时 0.3.5）、0.4.2（运行时 0.3.6）
-- 覆盖：干净目标安装、首次配置、注册、启动、A→B 升级、普通卸载、purge、损坏修复、普通用户运行、用户切换、**busy 时拒绝卸载及恢复**、**包版本与运行时版本解耦**
+- 覆盖：干净目标安装、首次配置、注册、启动、A→B 升级、普通卸载、purge、损坏修复、普通用户运行、用户切换、**busy 时拒绝卸载及恢复**、**busy 时拒绝升级（状态保持 ii）**、**包版本与运行时版本解耦**
 - 未覆盖：真实网络故障、真实系统 halt/断电、跨大版本状态迁移、真实硬件性能
 
 详细证据与历史迭代记录见 [`client-native-linux-development.md`](client-native-linux-development.md)。
