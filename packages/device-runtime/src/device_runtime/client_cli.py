@@ -94,6 +94,13 @@ def main(argv=None, *, lease_exit=False):
     else:
         add_arguments(parser)
     args = parser.parse_args(arguments)
+    # The package manager enforces the declared floor, but the installed
+    # service is started from an absolute path without consulting it. Refuse a
+    # too-old host here so the failure names the real cause instead of surfacing
+    # as a dynamic-loader error inside the first message.
+    from .client_host_glibc import UnsupportedHostError, check_host
+
+    check_host()
     try:
         if configured:
             from .client_config import load
@@ -109,6 +116,10 @@ def main(argv=None, *, lease_exit=False):
             run(args)
     except KeyboardInterrupt:
         pass
+    except UnsupportedHostError as exc:
+        # The message states the required and detected glibc; it carries no
+        # configuration, so show it rather than the generic unavailable text.
+        parser.exit(2, f"device-runtime client: {exc}\n")
     except (ValueError, RuntimeError, ImportError, OSError) as exc:
         parser.exit(
             2,

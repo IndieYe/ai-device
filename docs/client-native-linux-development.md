@@ -76,6 +76,14 @@ sudo apt remove ai-device-client
 
 在独立目标平台构建环境执行，不在承载实际客户端的主机上构建或启动测试实例。
 
+### 宿主 glibc 基线
+
+包的 libc 依赖声明由 `scripts/build-client-deb.py` 的 `MINIMUM_GLIBC` 决定，值为 **2.17**。这个数字不是构建机的版本，而是包内二进制的真实需求：解包现有制品解析全部 ELF 的 `.gnu.version_r`，最高需求为 `GLIBC_2.17`（由 `libpython3.13.so.1.0`、`python3.13`、`_dbm`、`liblzma` 引入），其余库不高于 2.12；依赖锁 `native/dependency-lock.json` 的 target 也声明 `glibc: 2.17`，13 个 wheel 全部为 `manylinux_2_17` 或更低。
+
+曾长期写成 `2.39`（Ubuntu 24.04 构建机的版本），后果是 `dpkg` 在解包前拒绝所有低于 2.39 的主机，包括实际能跑 2.17 基线的机器。修改基线时需同时更新 `device_runtime.dependencies.MINIMUM_GLIBC`、`client_host_glibc.MINIMUM_GLIBC` 与构建脚本字面量；`test_declared_glibc_floor_matches_the_runtime_requirement` 会拦住只改一处的情况。
+
+客户端启动时会再次核对宿主 glibc（`device_runtime/client_host_glibc.py`）：低于基线则给出含所需/检测版本的明确错误并退出；探测不到（如 musl）不阻断，交由动态链接器报错。之所以要这一层，是因为新客户端由 systemd 用绝对路径直接启动，从不经过包管理器，仅靠 `Depends` 无法覆盖手工启动与服务重启路径。
+
 1. 当前源码用 `uv build --all-packages --wheel --out-dir <inputs>/wheels` 构建三个业务 wheel。
 2. 准备 `<inputs>/python.tar.gz`、`uv.whl`、`dependencies/*.whl`。来自仓库 `native/runtime-lock.json`、`tool-lock.json`、`dependency-lock.json` 的准确输入；脚本会校验大小与 SHA256。不要把旧业务 wheel 当成当前源码产物。
 3. 在 Linux amd64 构建容器执行：

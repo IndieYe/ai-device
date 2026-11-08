@@ -49,6 +49,14 @@
 
 macOS 最低系统版本须在构建前依据所选 Python 与原生依赖的实际支持范围确定并记录，不臆造支持范围；安装前拒绝不支持的系统。Linux 如确需扩大范围，先报告需求变化，不悄悄增加 RPM 或其他架构。
 
+**Linux 平台兼容扩展（2026-11-08 起，分三阶段推进）：** 上表 Linux 行描述的是首发验收环境，不是运行时的最低要求。包内运行时实际只需 **glibc 2.17**，DEB 的依赖声明已据此从 2.39 下调（详见 `docs/client-native-linux-development.md` 的「宿主 glibc 基线」）。进一步扩大 cgroup v1 与 RPM 支持的三个完整阶段见：
+
+- `client-linux-platform-compat-phase1-glibc217.md`
+- `client-linux-platform-compat-phase2-cgroup-v1.md`
+- `client-linux-platform-compat-phase3-rpm.md`
+
+各阶段完成前不得声称对应能力已交付；glibc 2.17 满足不等于系统受支持，cgroup 与 systemd 版本另有要求。
+
 ### 3.2 本次不做
 
 - 中心下发升级、设备群批量更新、远程更新协议、自动检查更新。

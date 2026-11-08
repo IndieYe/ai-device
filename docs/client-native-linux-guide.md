@@ -37,7 +37,11 @@ installed; configuration and service registration required
 
 此时服务尚未配置，`systemctl status ai-device-client` 会显示 `not-found`，这是正常的——服务单元还没创建。
 
-> 若目标机缺少 `systemd`、`libc6 (>= 2.39)`、`ca-certificates` 或 `util-linux`，`dpkg` 会在解包前拒绝。Ubuntu 24.04 默认已满足。
+> 若目标机缺少 `systemd`、`libc6 (>= 2.17)`、`ca-certificates` 或 `util-linux`，`dpkg` 会在解包前拒绝。Ubuntu 24.04 默认已满足。
+>
+> 最低 glibc 是 2.17，来自包内 CPython 与全部 wheel 的实际构建基线（均为 manylinux_2_17 或更低），不是构建机的版本。客户端启动时也会自行核对一次：低于 2.17 会给出明确的版本提示后退出，而不是在动态链接阶段报错。
+>
+> glibc 满足不等于系统受支持：还需 systemd 与 cgroup 版本符合要求，见 `docs/client-native-linux-development.md`。
 
 ## 3. 首次配置
 

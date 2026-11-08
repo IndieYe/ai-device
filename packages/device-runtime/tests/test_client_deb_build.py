@@ -183,3 +183,37 @@ def test_postrm_prunes_only_empty_directories(tmp_path, monkeypatch):
     assert result.returncode == 0, result.stderr
     assert not cache_only.exists(), "cache-only directory must be pruned"
     assert (kept / "tasks.py").is_file(), "contents must never be removed"
+
+
+def test_depends_declares_the_real_glibc_floor(tmp_path, monkeypatch):
+    """The declared floor must match what the tree actually needs.
+
+    Shipping the build host's glibc here silently rejects every older host that
+    can run the package, so the declaration is checked explicitly.
+    """
+    tree = tmp_path / "tree"
+    binary = tree / "runtime/bin/python3"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("fixture")
+    monkeypatch.setattr(module.subprocess, "run", lambda argv, **kwargs: None)
+
+    module.build(tree, tmp_path / "build", "0.4.2")
+    control = (tmp_path / "build/root/DEBIAN/control").read_text()
+
+    assert f"libc6 (>= {module.MINIMUM_GLIBC})" in control
+    # Guards against reintroducing the build host's version as the floor.
+    assert "libc6 (>= 2.39)" not in control
+    assert control.count("libc6 (>= ") == 1
+
+
+def test_declared_glibc_floor_matches_the_runtime_requirement():
+    """Builders declare a literal so they can run without importing the package.
+
+    That duplication is only safe if something checks it, which is this test.
+    """
+    from device_runtime import dependencies
+    from device_runtime.client_host_glibc import MINIMUM_GLIBC as CLIENT_FLOOR
+
+    assert module.MINIMUM_GLIBC == dependencies.MINIMUM_GLIBC == CLIENT_FLOOR
+    assert module.MINIMUM_GLIBC == dependencies.TARGET["glibc"]
+    assert module.MINIMUM_GLIBC in dependencies.SUPPORTED_GLIBC

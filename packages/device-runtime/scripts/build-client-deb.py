@@ -5,6 +5,14 @@ import shutil
 import subprocess
 from pathlib import Path
 
+# Minimum host glibc for the packaged runtime. The tree ships a CPython build
+# whose binaries were measured to need at most GLIBC_2.17, and every locked
+# wheel is tagged manylinux_2_17 or lower, so declare what is actually
+# required rather than the build host's version. A higher floor silently
+# rejects hosts that can run the package. Keep in step with
+# device_runtime.dependencies:MINIMUM_GLIBC (enforced by tests).
+MINIMUM_GLIBC = "2.17"
+
 STOP = r"""set -eu
 unit=ai-device-client.service
 if [ -e /etc/systemd/system/$unit ] || [ -L /etc/systemd/system/$unit ]; then
@@ -107,7 +115,7 @@ def build(tree, output, version):
 Version: {version}
 Architecture: amd64
 Maintainer: AI Device developers
-Depends: systemd, libc6 (>= 2.39), ca-certificates, util-linux
+Depends: systemd, libc6 (>= {MINIMUM_GLIBC}), ca-certificates, util-linux
 Description: Self-contained AI Device client
  Includes private Python and client dependencies; configuration is kept separately.
 """)
