@@ -62,15 +62,22 @@ def _source_fingerprint():
             marker = relative.encode()
             digest.update(len(marker).to_bytes(8, "big") + marker)
             binary = (tree / relative) if tree else None
-            content = b""
-            if binary is not None:
-                try:
-                    content = binary.read_bytes()
-                except FileNotFoundError:
-                    content = b""
-            digest.update(len(content).to_bytes(8, "big") + content)
+            try:
+                content = binary.read_bytes() if binary is not None else None
+            except FileNotFoundError:
+                content = None
+            # Presence is part of the identity. Without this byte, an absent
+            # executable and one present with zero bytes hash identically, so a
+            # tree missing a required binary would claim a valid build's id.
+            if content is None:
+                digest.update(b"\x00")
+            else:
+                digest.update(b"\x01" + len(content).to_bytes(8, "big") + content)
         sources = (tree / NATIVE_IDENTITY_SOURCES) if tree else None
+        # Directory presence is distinguished the same way. A Linux tree has no
+        # native sources at all; that must not read as an empty source set.
         if sources is not None and sources.is_dir():
+            digest.update(b"\x01")
             for path in sorted(sources.iterdir()):
                 if path.suffix not in NATIVE_IDENTITY_SUFFIXES or not path.is_file():
                     continue
@@ -78,6 +85,8 @@ def _source_fingerprint():
                 content = path.read_bytes()
                 digest.update(len(name).to_bytes(8, "big") + name)
                 digest.update(len(content).to_bytes(8, "big") + content)
+        else:
+            digest.update(b"\x00")
         return "sha256:" + digest.hexdigest()
     except OSError:
         return None

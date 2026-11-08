@@ -160,18 +160,29 @@ def write_client_identity(output):
         marker = relative.encode()
         digest.update(len(marker).to_bytes(8, "big") + marker)
         binary = output / relative
-        content = binary.read_bytes() if binary.is_file() else b""
-        digest.update(len(content).to_bytes(8, "big") + content)
+        content = binary.read_bytes() if binary.is_file() else None
+        # MUST match version.py: presence is part of the identity, so an absent
+        # executable cannot hash the same as one that is present but empty.
+        if content is None:
+            digest.update(b"\x00")
+        else:
+            digest.update(b"\x01" + len(content).to_bytes(8, "big") + content)
     sources = output / NATIVE_IDENTITY_SOURCES
-    for path in sorted(sources.iterdir()) if sources.is_dir() else ():
-        if path.suffix not in NATIVE_IDENTITY_SUFFIXES:
-            continue
-        if not path.is_file():
-            raise ValueError("staged native source is not a regular file")
-        name = path.relative_to(output).as_posix().encode()
-        content = path.read_bytes()
-        digest.update(len(name).to_bytes(8, "big") + name)
-        digest.update(len(content).to_bytes(8, "big") + content)
+    # MUST match version.py: a tree with no native sources directory (Linux) is
+    # distinct from one that has an empty one.
+    if sources.is_dir():
+        digest.update(b"\x01")
+        for path in sorted(sources.iterdir()):
+            if path.suffix not in NATIVE_IDENTITY_SUFFIXES:
+                continue
+            if not path.is_file():
+                raise ValueError("staged native source is not a regular file")
+            name = path.relative_to(output).as_posix().encode()
+            content = path.read_bytes()
+            digest.update(len(name).to_bytes(8, "big") + name)
+            digest.update(len(content).to_bytes(8, "big") + content)
+    else:
+        digest.update(b"\x00")
     identity = {"version": versions[0], "build_id": "sha256:" + digest.hexdigest()}
     with (output / "client-identity.json").open("x") as stream:
         stream.write(json.dumps(identity, separators=(",", ":")) + "\n")

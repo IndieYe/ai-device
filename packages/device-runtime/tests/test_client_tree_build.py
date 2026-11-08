@@ -310,3 +310,70 @@ def test_absent_native_sources_differ_from_present_ones(tmp_path):
     present = module.write_client_identity(with_sources)["build_id"]
     absent = module.write_client_identity(_identity_tree(tmp_path / "without"))["build_id"]
     assert present != absent
+
+
+def test_absent_native_binary_differs_from_present_but_empty(tmp_path):
+    """Missing must not collide with present-but-empty.
+
+    The earlier missing-binary test compared absent against a tree whose
+    launcher had real bytes, which differs for the obvious reason and would
+    pass even though absence hashed as an empty string. A tree that lost its
+    launcher would then carry the same identity as one shipping a zero-byte
+    launcher, so readiness could accept a broken install.
+    """
+    present_empty = _identity_tree(tmp_path / "present_empty", launcher=b"")
+    absent = _identity_tree(tmp_path / "absent")
+    (absent / "bin/ai-device-client-launcher").unlink()
+
+    empty_id = module.write_client_identity(present_empty)["build_id"]
+    absent_id = module.write_client_identity(absent)["build_id"]
+    assert empty_id != absent_id
+
+
+def test_no_native_source_directory_differs_from_empty_one(tmp_path):
+    """A Linux tree has no native/ at all; that is not an empty source set.
+
+    Both used to contribute nothing to the digest, so a tree stripped of its
+    sources was indistinguishable from one that legitimately ships none.
+    """
+    without = _identity_tree(tmp_path / "without")
+    with_empty = _identity_tree(tmp_path / "with_empty")
+    (with_empty / "native").mkdir()
+
+    assert module.write_client_identity(without)["build_id"] != module.write_client_identity(
+        with_empty
+    )["build_id"]
+
+
+def test_runtime_and_builder_agree_on_empty_native_source_directory(tmp_path):
+    """The two fingerprints must stay in step for the no-source layout too.
+
+    Linux trees ship no native sources, so this branch runs on every Linux
+    build. Drift here would make every Linux upgrade fail readiness.
+    """
+    import subprocess
+    import sys
+
+    tree = _identity_tree(tmp_path)
+    (tree / "native").mkdir()
+    identity = module.write_client_identity(tree)
+
+    version_source = Path(__file__).parents[1] / "src/device_runtime/version.py"
+    code = """import ast, pathlib, sys
+source=ast.parse(pathlib.Path(sys.argv[1]).read_text())
+native=next(n for n in source.body if isinstance(n,ast.Assign) and any(getattr(t,"id",None)=="NATIVE_IDENTITY_FILES" for t in n.targets))
+sources=next(n for n in source.body if isinstance(n,ast.Assign) and any(getattr(t,"id",None)=="NATIVE_IDENTITY_SOURCES" for t in n.targets))
+suffixes=next(n for n in source.body if isinstance(n,ast.Assign) and any(getattr(t,"id",None)=="NATIVE_IDENTITY_SUFFIXES" for t in n.targets))
+function=next(n for n in source.body if isinstance(n,ast.FunctionDef) and n.name=="_source_fingerprint")
+ns={"Path":pathlib.Path,"__file__":sys.argv[2],"hashlib":__import__("hashlib")}
+exec(compile(ast.Module(body=[native,sources,suffixes,function],type_ignores=[]),"fingerprint","exec"),ns)
+print(ns["_source_fingerprint"]())
+"""
+    package = tree / "runtime/lib/python3.13/site-packages/device_runtime"
+    result = subprocess.run(
+        [sys.executable, "-I", "-B", "-c", code, str(version_source), str(package / "version.py")],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert identity["build_id"] == result.stdout.strip()

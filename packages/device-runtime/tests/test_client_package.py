@@ -118,3 +118,51 @@ def test_conflict_blocks_activation_before_start(configured, monkeypatch):
     with pytest.raises(ClientConflict):
         module.activate(service=service)
     assert calls == []
+
+
+@pytest.mark.parametrize(
+    "build_id",
+    [None, "", "sha256:abc", "md5:" + "a" * 64, "sha256:" + "A" * 64],
+)
+def test_unidentifiable_build_id_is_not_ready(configured, monkeypatch, build_id):
+    """An uncomputable identity must not pass as a verified one.
+
+    version.py falls back to build_id=None when it cannot fingerprint its own
+    sources, and a missing or null field deserializes the same way. Comparing
+    two such values as equal would report readiness for a build whose identity
+    is unknown.
+    """
+    service, _ = configured
+    monkeypatch.setattr(
+        module,
+        "request",
+        lambda *a, **k: {
+            "ready": True,
+            "runtime_version": {"version": "0.3.6", "build_id": build_id},
+        },
+    )
+    with pytest.raises(RuntimeError, match="verification failed"):
+        module.activate(service=service, timeout=0.01)
+
+
+def test_unknown_local_identity_fails_before_polling(configured, monkeypatch):
+    """If this process cannot identify itself, there is nothing to compare.
+
+    The service has already been started at this point, as with every other
+    post-start verification failure; what must not happen is polling for a
+    match that could only succeed by matching two unknown identities.
+    """
+    service, calls = configured
+    monkeypatch.setattr(
+        module, "runtime_version", lambda: {"version": "0.3.6", "build_id": None}
+    )
+    monkeypatch.setattr(module, "request", lambda *a, **k: pytest.fail("must not poll"))
+    with pytest.raises(RuntimeError, match="build identity is unknown"):
+        module.activate(service=service)
+    assert calls == ["start"]
+
+
+def test_known_identity_accepts_a_well_formed_pair():
+    assert module._known_identity({"version": "0.3.6", "build_id": "sha256:" + "a" * 64})
+    assert not module._known_identity({"version": "", "build_id": "sha256:" + "a" * 64})
+    assert not module._known_identity(None)

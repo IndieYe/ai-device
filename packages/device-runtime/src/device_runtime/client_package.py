@@ -1,6 +1,7 @@
 """Native package lifecycle for the configured single Linux client."""
 
 import argparse
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -34,15 +35,43 @@ def activate(*, service=None, timeout=15):
     service.start()
     deadline = time.monotonic() + timeout
     expected = runtime_version()
+    if not _known_identity(expected):
+        # The running client could not fingerprint its own sources (OSError in
+        # version.py). Reporting "unknown identity" as a match would let two
+        # unidentifiable builds pass as the same ready target.
+        raise RuntimeError(
+            "client build identity is unknown; cannot verify readiness; inspect client.log"
+        )
     while time.monotonic() < deadline:
         try:
             result = request(SOCKET, "status", "package_ready", timeout=1)
+            # expected is already known to be fully specified, so an equal
+            # response needs no separate build_id check.
             if result.get("ready") and result.get("runtime_version") == expected:
                 return "installed; client locally ready"
         except (OSError, ValueError, TimeoutError):
             pass
         time.sleep(0.1)
     raise RuntimeError("client readiness/version verification failed; inspect client.log")
+
+
+def _known_identity(value):
+    """True only for a fully specified version and build identity.
+
+    Missing and null both deserialize to build_id=None, and comparing two of
+    those as equal would treat an uncomputable identity as a verified one.
+    The header parser stays permissive on purpose: it is diagnostics, and an
+    older device legitimately omits the field.
+    """
+    if not isinstance(value, dict):
+        return False
+    version, build_id = value.get("version"), value.get("build_id")
+    return (
+        isinstance(version, str)
+        and bool(version)
+        and isinstance(build_id, str)
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", build_id) is not None
+    )
 
 
 def main(argv=None):
