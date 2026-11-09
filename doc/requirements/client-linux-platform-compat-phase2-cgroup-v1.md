@@ -411,10 +411,37 @@ ali-sh 实测 `systemd 239`。当前 unit 用了这些指令（`client_service.p
 
 **一处语义收紧（相对上一版）**：目录存在但 `cgroup.procs` 缺失或不可读时，现在**拒绝**而非放行。v1 下每个 cgroup 目录都带 `cgroup.procs`；目录存在却读不到说明挂载视图与 systemd 描述不一致，答案未知。把未知当空会替换掉看不见的进程正在使用的文件。若 controller 挂载根本不包含该 unit，则目录不存在，走「无需验证」分支。
 
-**未完成（影响门禁）**：
+**门禁已于 2026-11-09 在 ali-sh 上闭合**（下文保留当时记录）：
 
-- 未在 v1 机器上完成安装 + 升级 + 忙拒绝的端到端验收。ali-sh 跑着 0.2.3 现网实例，本轮只做只读探测与临时 unit 加载（已全部清理），未在其上安装新客户端。
-- 需要一台**可自由安装**的 cgroup v1 机器才能真正闭合本阶段门禁。
+最初写这段时 ali-sh 还跑着 0.2.3 现网实例，不能在上面装新客户端。后来用户明确
+"0.2.3 现网客户端可以先卸载，目前 device 客户端都还没正式用起来"，旧的
+device-managed 实例已卸载并备份到 `/root/ali-sh-legacy-0.2.3-20261109-131715`，
+之后在该机完成了完整的 v1 端到端验收。
+
+ali-sh 环境确认：`cgroup.controllers` 不存在、`/sys/fs/cgroup/systemd` 存在 →
+cgroup v1；systemd 239、kernel 5.10、glibc 2.32。客户端 ControlGroup 为
+`/system.slice/ai-device-client.service`，其 `cgroup.procs` 能读到 PID，
+即 §10.1 修复的那条路径真实生效。
+
+三条路径实测（包为 0.4.9，从当前源码构建）：
+
+```
+1. 安装 + 同版重装
+   client confirmed stopped
+   installed; client locally ready      RC=0
+
+2. A→B 升级 0.4.8→0.4.9
+   client confirmed stopped
+   installed; client locally ready
+   config / token 哈希不变
+
+3. 忙拒绝（中心下发真实后台命令制造占用）
+   client is busy with active tasks; retry when tasks finish; service kept running
+   error: %prein(...) scriptlet failed, exit status 1
+   拒绝后 state=active、PID 未变、业务进程继续运行
+```
+
+**仍未闭合**：停止超时后进程组仍非空的拒绝路径只有单测，没有真机证据。
 
 ## 11. 安全与授权边界
 
