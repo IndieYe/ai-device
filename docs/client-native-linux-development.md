@@ -625,5 +625,33 @@ SQLite 的 `-shm`/`-wal` 在连接关闭时被清理、下次打开又重建，�
 这是当前设计而不是缺陷；但 `%preun` 删 unit 与 `%postun` 再删一次的职责
 有重叠，值得在后续整理。
 
-**仍未覆盖**：busy 客户端下的卸载拒绝、`%preun` 停止超时后进程组仍非空
-的拒绝路径，这两条只在 unit 层单测覆盖，没有真机证据。
+### busy 客户端下的卸载拒绝（真机，0.4.8）
+
+真实占用不是桩造出来的：通过中心给设备下发 `sleep 180` 后台命令，客户端
+`requests` 或 `tasks.active_count()` 非零，然后执行 `rpm -e`：
+
+```
+note: stopping the client; ...
+client is busy with active tasks; retry when tasks finish; service kept running
+error: %preun(ai-device-client-0.4.8-1.x86_64) scriptlet failed, exit status 1
+error: ai-device-client-0.4.8-1.x86_64: erase failed
+RC=1
+```
+
+拒绝之后准入没有被破坏：包仍为 0.4.8、服务 active、PID 未变、unit 与
+`/opt` 都在、业务进程 `sleep 180` 继续运行。这是需求要的"立即拒绝且保持
+准入"，而不是停掉再报错。
+
+任务自然结束后（中心回执 `succeeded`、`exit_code=0`、输出 `done`）再执行
+同一个 `rpm -e`：
+
+```
+client confirmed stopped
+RC=0
+pkg 已卸载  state=inactive  procs=0  unit 与 /opt 均已删除
+config 哈希不变  token 哈希不变
+```
+
+两次对照说明拒绝是临时的、由真实任务状态驱动，不是永久性阻断。
+
+**仍未覆盖**：`%preun` 停止超时后进程组仍非空的拒绝路径，目前只有 unit 层单测。
