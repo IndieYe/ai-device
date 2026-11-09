@@ -1,4 +1,5 @@
 import importlib.util
+import os
 import subprocess
 from pathlib import Path
 
@@ -241,6 +242,23 @@ def _run_stop(tmp_path, cgroup_root, group="/system.slice/client.service", state
     )
 
 
+def _pseudo_file(path, content):
+    """Create a file that stat reports as zero bytes, like the kernel's cgroup
+    pseudo-files.
+
+    `cgroup.procs` and `cgroup.events` are generated on read; their st_size is 0
+    even when they list processes. A regular temporary file has a real size, so
+    a test built on one cannot tell a content check from a size check. A FIFO
+    reproduces the property that matters: stat size 0, content available on
+    read. A writer opens it in the background so the guard's `cat` sees content
+    instead of blocking.
+    """
+    os.mkfifo(path)
+    # Hold the writer's stdin from the FIFO's open until the guard reads it.
+    subprocess.Popen(["sh", "-c", "printf '%s' \"$0\" > \"$1\"", content, str(path)])
+    return path
+
+
 def test_stop_refuses_when_v1_group_has_processes(tmp_path):
     """Legacy hierarchy: a live process must block replacement.
 
@@ -254,6 +272,33 @@ def test_stop_refuses_when_v1_group_has_processes(tmp_path):
     result = _run_stop(tmp_path, root)
     assert result.returncode == 1
     assert "live processes" in result.stderr
+
+
+def test_stop_refuses_when_v1_pseudo_file_lists_a_pid(tmp_path):
+    """The real kernel case: st_size is 0 but the file lists a process.
+
+    This is the case the previous implementation missed. `-s` tests st_size,
+    which is always 0 for cgroup.procs, so a guard written as `[ -s ... ]`
+    passed on every populated group. Only reading the content can tell.
+    """
+    root = tmp_path / "cg"
+    unit = root / "systemd/system.slice/client.service"
+    unit.mkdir(parents=True)
+    _pseudo_file(unit / "cgroup.procs", "4242\n")
+    result = _run_stop(tmp_path, root)
+    assert result.returncode == 1
+    assert "live processes" in result.stderr
+
+
+def test_stop_allows_empty_v1_pseudo_file(tmp_path):
+    """An empty group reads as empty, not as unreadable."""
+    root = tmp_path / "cg"
+    unit = root / "systemd/system.slice/client.service"
+    unit.mkdir(parents=True)
+    _pseudo_file(unit / "cgroup.procs", "")
+    result = _run_stop(tmp_path, root)
+    assert result.returncode == 0
+    assert "unreadable" not in result.stderr
 
 
 def test_stop_allows_empty_v1_group(tmp_path):
@@ -296,27 +341,41 @@ def test_stop_warns_when_hierarchy_is_unrecognisable(tmp_path):
     assert "cannot determine the cgroup hierarchy" in result.stderr
 
 
-def test_missing_procs_file_does_not_claim_live_processes(tmp_path):
-    """An absent cgroup.procs must not be read as evidence of live processes.
+def test_unreadable_procs_refuses(tmp_path):
+    """An unreadable file is not an empty one.
 
-    `-s` already reports a missing file as empty, so this is not a mutation
-    target; the test pins the intended outcome rather than the -f guard, which
-    is defensive only. Blocking here would strand upgrades on hosts whose
-    controller mount does not carry the unit.
+The requirement is explicit: a read failure must not be treated as an empty
+    group. Refusing keeps the failure visible; passing would replace files under
+    processes that are still running.
+    """
+    root = tmp_path / "cg"
+    unit = root / "systemd/system.slice/client.service"
+    unit.mkdir(parents=True)
+    (unit / "cgroup.procs").mkdir()
+    result = _run_stop(tmp_path, root)
+    assert result.returncode == 1
+    assert "unreadable" in result.stderr
+
+
+def test_missing_procs_file_refuses_rather_than_assuming_empty(tmp_path):
+    """A directory without cgroup.procs is abnormal, not an empty group.
+
+    Under v1 every cgroup directory carries cgroup.procs. Its absence means the
+    mount does not show this unit the way systemd describes it, so the answer is
+    unknown. Treating unknown as empty would replace files under processes we
+    could not see. A host whose controller mount does not carry the unit at all
+    has no directory, which is handled separately as "nothing to verify".
     """
     root = tmp_path / "cg"
     (root / "systemd/system.slice/client.service").mkdir(parents=True)
     result = _run_stop(tmp_path, root)
-    assert result.returncode == 0
+    assert result.returncode == 1
+    assert "unreadable" in result.stderr
     assert "live processes" not in result.stderr
 
 
 def test_stop_reads_procs_content_not_just_presence(tmp_path):
-    """Zero-byte cgroup.procs is empty; a pid in it is not.
-
-    The kernel writes nothing at all for an empty group, so `-s` is the right
-    test here. Anything with bytes in it counts as a live member.
-    """
+    """A pid in cgroup.procs means a live member; nothing there means empty."""
     root = tmp_path / "cg"
     unit = root / "systemd/system.slice/client.service"
     unit.mkdir(parents=True)

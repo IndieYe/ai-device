@@ -212,13 +212,27 @@ v1 实测：`/sys/fs/cgroup/systemd/system.slice/sshd.service/cgroup.procs` 返�
 2. v2 → 现有逻辑
 3. v1 → 路径加 `systemd/` 前缀，判定改为 `cgroup.procs` 是否为空
 
-shell 里判定「文件为空」要小心：
+shell 里判定「文件为空」要小心。**`-s` 在这里是错的**，不能用：
 
 ```sh
-[ -s "/sys/fs/cgroup/systemd$group/cgroup.procs" ] || ...   # -s 为 false 表示文件为空或不存在
+# 错：cgroup.procs 是内核伪文件，stat 大小恒为 0，-s 永远 false
+[ -s "/sys/fs/cgroup/systemd$group/cgroup.procs" ]
 ```
 
-**注意 `-s` 无法区分「空文件」和「文件不存在」**。需要先确认文件存在（`-f`），再判断 `-s`。两者都要处理，不能只用 `-s`。
+实测（ali-sh，cgroup v1）：文件内容为 `1499236`，但 `stat` 报 0 字节，`-s` 判定为空。若用 `-s`，有活进程的组会被当作空组放行——与本次要修的缺陷同一后果。
+
+正确做法是**读内容**，并把读取失败与「空」区分开：
+
+```sh
+procs=$(cat "$groupdir/cgroup.procs") || {
+    echo 'client process group is unreadable; refusing replacement' >&2; exit 1;
+}
+if [ -n "$procs" ]; then
+    echo 'client process group still has live processes; refusing replacement' >&2; exit 1
+fi
+```
+
+v2 的 `cgroup.events` 同样是伪文件，但那里用 `grep` 读内容，不受此问题影响。
 
 4. `set -eu` 下，`grep -q` 返回 1 会因 `||` 分支正常处理，但要确认整个判断链不会因 `set -e` 提前退出。
 
@@ -393,7 +407,9 @@ ali-sh 实测 `systemd 239`。当前 unit 用了这些指令（`client_service.p
 
 **变异验证**（均被抓）：v1 路径解析回退到 v2 写法、`cgroup.procs` 缺失当作空组、shell 去掉 v1 分支、unrecognisable 不告警。
 
-**一处已知冗余（如实记录）**：shell 里 `[ -f ... ] && [ -s ... ]` 中的 `-f` 并非必需——`-s` 对不存在的文件已返回 false，去掉 `-f` 测试也不会挂。保留它只为让意图更明确，不是安全关键路径，已在代码注释中说明。
+**测试方法（重要）**：用 `write_text("4242\n")` 造普通临时文件**测不出这个 bug**——普通文件有真实大小，`-s` 能通过。必须用 st_size 为 0 但内容非空的载体。测试里用 FIFO（`os.mkfifo`）复现该性质：stat 报 0 字节，后台写入内容后 `cat` 可读。见 `test_stop_refuses_when_v1_pseudo_file_lists_a_pid`。
+
+**一处语义收紧（相对上一版）**：目录存在但 `cgroup.procs` 缺失或不可读时，现在**拒绝**而非放行。v1 下每个 cgroup 目录都带 `cgroup.procs`；目录存在却读不到说明挂载视图与 systemd 描述不一致，答案未知。把未知当空会替换掉看不见的进程正在使用的文件。若 controller 挂载根本不包含该 unit，则目录不存在，走「无需验证」分支。
 
 **未完成（影响门禁）**：
 

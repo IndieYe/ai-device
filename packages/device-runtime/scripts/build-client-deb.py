@@ -79,10 +79,13 @@ if [ -n "$group" ]; then
     elif [ -d "$cgroup_root/systemd" ]; then
         groupdir="$cgroup_root/systemd$group"
         if [ -d "$groupdir" ]; then
-            # The kernel writes a zero-byte file for an empty group. -s alone
-            # already reports a missing file as empty, so -f is defensive only:
-            # it keeps the intent explicit for a reader and costs one stat.
-            if [ -f "$groupdir/cgroup.procs" ] && [ -s "$groupdir/cgroup.procs" ]; then
+            # cgroup.procs is a kernel pseudo-file: stat reports size 0 whether
+            # it lists processes or not, so -s can never detect membership.
+            # Read it. An unreadable file is not an empty one.
+            procs=$(cat "$groupdir/cgroup.procs") || {
+                echo 'client process group is unreadable; refusing replacement' >&2; exit 1;
+            }
+            if [ -n "$procs" ]; then
                 echo 'client process group still has live processes; refusing replacement' >&2
                 exit 1
             fi
