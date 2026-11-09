@@ -144,6 +144,21 @@ def test_spec_does_not_turn_bundled_libraries_into_host_requires():
     assert "Requires: util-linux" in text
 
 
+def test_install_normalises_payload_permissions():
+    """Measured on alinux3: client_host_glibc.py arrived in the tree as 0600.
+    The service runs as an unprivileged user and imports that module right after
+    parsing, so the service exited 1 with PermissionError, and rpm's %post then
+    failed the readiness check. Mode bits from a hand-assembled tree cannot be
+    trusted into the payload."""
+    text = _spec_text()
+    install = text.split("%install\n", 1)[1].split("%files\n", 1)[0]
+    assert "-type d -exec chmod 0755" in install
+    assert "-type f -exec chmod 0644" in install
+    assert "-perm -u+x -exec chmod 0755" in install
+    # The executable pass must come after the blanket 0644 or it is a no-op.
+    assert install.index("chmod 0644") < install.index("-perm -u+x -exec chmod 0755")
+
+
 def test_generated_scriptlets_are_shell_valid(tmp_path):
     """Each scriptlet body must survive sh -n. This runs the real interpreter;
     a monkeypatched subprocess.run would prove nothing."""

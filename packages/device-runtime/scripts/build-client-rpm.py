@@ -89,6 +89,14 @@ plain erase.
 rm -rf %{{buildroot}}
 mkdir -p %{{buildroot}}/opt
 cp -a {tree}/. %{{buildroot}}/opt/ai-device-client/
+# The tree is assembled by hand and can carry an unusable mode: measured on
+# alinux3, client_host_glibc.py arrived as 0600 and the service user got
+# PermissionError for that module (client_host_glibc.py" is imported right
+# after parsing, so the service exited 1 and rpm's %post then failed on
+# readiness). Shipping the tree's modes verbatim would do the same.
+find %{{buildroot}}/opt/ai-device-client -type d -exec chmod 0755 {{}} +
+find %{{buildroot}}/opt/ai-device-client -type f -exec chmod 0644 {{}} +
+find %{{buildroot}}/opt/ai-device-client -type f -perm -u+x -exec chmod 0755 {{}} +
 mkdir -p %{{buildroot}}/usr/bin
 printf '#!/bin/sh\\nexec /opt/ai-device-client/runtime/bin/python3 -I -B -m device_runtime.client_cli "$@"\\n' > %{{buildroot}}/usr/bin/ai-device-client
 printf '#!/bin/sh\\nexec /opt/ai-device-client/runtime/bin/python3 -I -B -m device_runtime.client_register_cli "$@"\\n' > %{{buildroot}}/usr/bin/ai-device-client-register
@@ -106,7 +114,7 @@ find %{{buildroot}}/opt/ai-device-client -type d -name __pycache__ -prune -exec 
 
 %post
 set -eu
-/opt/ai-device-client/runtime/bin/python3 -I -B -m device_runtime.client_package activate
+/opt/ai-device-client/runtime/bin/python3 -I -B -m device_runtime.client_package activate --from-package-script
 
 %preun
 set -eu

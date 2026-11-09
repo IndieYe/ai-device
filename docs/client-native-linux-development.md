@@ -495,3 +495,56 @@ AppleDouble 文件，第一次构建的包里占了近一半文件。已在 ali-
    （cgroup v1）、`b62f99c` 等新修复。包的 `%pre`/`%preun` 脚本是新的，payload 是旧的。
    这不是最新源码的完整可信构建。
 3. 树本身缺 `httpx`、`yaml`（原树就缺，非打包问题）——旧 0.4.2 树的既有状态。
+
+### 首次真实机器安装（2026-11-09，ali-sh 替换 0.2.3）
+
+用户确认 0.2.3 未正式使用后，卸载旧客户端并安装 0.4.3/0.4.4 RPM。**这一步暴露了三个
+容器与纯构建阶段都看不到的缺陷。**
+
+**卸载旧实例**：旧客户端由 `/etc/systemd/system/device-ali-sh.service` 拉起
+（`ExecStart=... /var/lib/device-managed/ali-sh/run client`）。先 `cp -a` 整个
+`/var/lib/device-managed/ali-sh`（47M，含 state）到 `/root/ali-sh-legacy-0.2.3-20261109-131715`，
+再 `systemctl disable --now`、`kill -TERM` supervisor（2 秒内干净退出，未强杀），
+最后删除目录与 unit 文件。
+
+**缺陷一：`client_management` 硬编码 dpkg 锁。**
+`management_lock()` 无条件打开 `/var/lib/dpkg/lock-frontend`，RPM 宿主没有该文件，
+于是 `FileNotFoundError` —— `activate` 和 `register` 在 alinux3 上**根本跑不起来**，
+`%post` 只能静默失败。改法：按 `package_manager()` 探测（dpkg 锁存在 → dpkg；
+`/var/lib/rpm` 存在 → rpm），rpm 侧不再取 dpkg 锁（rpm 事务本身已持锁）。
+
+**缺陷二：rpm scriptlet 里没有任何 `RPM_*` 环境变量。**
+用探针包实测 `%post` 的完整环境：只有 `HOME/PATH/PWD/USER` 等，**没有** `RPM_INSTALL_PREFIX`、
+`RPM_SCRIPTLET`。原来的 `in_package_script()` 只看 `DPKG_MAINTSCRIPT_*`，在 rpm 下恒为
+False，于是试图去取不存在的 dpkg 锁。改法：
+- 包脚本显式传 `--from-package-script`（DEB 与 RPM 都传）
+- fallback 用 `/proc/<ppid>/comm == "rpm"`（实测 scriptlet 的父进程就是 rpm）
+
+**缺陷三：tree 里 `client_host_glibc.py` 是 0600。**
+服务以 `device-client` 运行，导入该模块时 `PermissionError`，服务 exit 1，
+`%post` 的 readiness 检查随之超时失败。构建 tree 里只有这一个文件是 0600。
+改法：`%install` 里统一规范化权限（目录 0755、文件 0644、原本可执行的 0755）。
+
+**其他安装期问题**（操作层面，非代码缺陷）：
+- `client.json` 的 `state_dir` 必须恰好是 `/var/lib/ai-device-client`——`validate_config`
+  里硬断言该路径，写成 `.../state` 会被判为配置不可用。
+- token 文件属主必须与服务用户一致且 0600；以 root 建完要 `chown device-client`。
+- `/var/lib/ai-device-client/state` 需要预先存在，缺了会在 `maintenance.start()` 抛
+  `FileNotFoundError`。
+- 旧 unit `device-ali-sh.service` 未删除时，`register` 会报
+  "another client service detected"。
+
+**已验证成功**：`rpm -U` 升级 0.4.3→0.4.4 完成，服务 `active`，进程正常，
+与中心 `124.221.130.149:443` 建立 ESTAB 连接。
+
+**已验证的忙拒绝**：服务运行中（PID 2175657，`cgroup.procs` 含该 PID）执行
+`rpm -U --replacepkgs`，`%pre` 报 "client process group still has live processes"、
+rc=1、旧包 `erase skipped`；**PID 未变、python3.13 的 md5 未变、服务仍 active**。
+这是 cgroup v1 检查在真实 v1 主机（kernel 5.10 + cgroup v1）上第一次真正生效。
+
+**尚未验证**：A→B 真实升级（当前两个版本 payload 相同）、ready 检查在 `%post`
+内成功、`%post` 失败后服务留在 `inactive` 的恢复路径、卸载后配置保留。
+
+**一处重要教训**：升级时 `%post` 停掉客户端后失败，服务留在 `inactive`。
+这正是之前实测的「`%post` 失败 rpm 仍返回 0」的后果——调用方以为成功，实际服务没起来。
+ready 必须由包外复核，这一点在真实安装中已经发生，不再是理论风险。

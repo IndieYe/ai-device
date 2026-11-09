@@ -72,7 +72,7 @@ Description: Self-contained AI Device client
         "postinst": """#!/bin/sh
 set -eu
 [ "${1:-}" = configure ] || exit 0
-/opt/ai-device-client/runtime/bin/python3 -I -B -m device_runtime.client_package activate
+/opt/ai-device-client/runtime/bin/python3 -I -B -m device_runtime.client_package activate --from-package-script
 """,
         "postrm": """#!/bin/sh
 set -eu

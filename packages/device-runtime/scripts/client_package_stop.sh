@@ -40,7 +40,7 @@ case "$state:$main:$control" in
         if [ "$sigkill:$killmode" != no:control-group ]; then
             echo 'unsafe client shutdown policy; refusing package operation' >&2; exit 1
         fi
-        /opt/ai-device-client/runtime/bin/python3 -I -B -m device_runtime.client_package stop
+        /opt/ai-device-client/runtime/bin/python3 -I -B -m device_runtime.client_package stop --from-package-script
         ;;
     *) echo 'client state unknown; refusing package replacement' >&2; exit 1 ;;
 esac

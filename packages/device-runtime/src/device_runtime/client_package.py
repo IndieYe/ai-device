@@ -77,9 +77,19 @@ def _known_identity(value):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("stop", "activate"))
+    # The package scripts pass this explicitly. Detecting the context by
+    # environment does not work for rpm: measured on alinux3, an rpm scriptlet
+    # sees no RPM_* variables at all, so an env-based check reported "manual"
+    # and then tried to open dpkg locks that do not exist on that host.
+    parser.add_argument(
+        "--from-package-script",
+        action="store_true",
+        help="run inside a package manager scriptlet; the manager already holds its lock",
+    )
     args = parser.parse_args(argv)
+    in_script = args.from_package_script or in_package_script()
     try:
-        with management_lock(package_script=in_package_script()):
+        with management_lock(package_script=in_script):
             if args.action == "stop":
                 service = SystemdClient()
                 if service.state() == "running":
