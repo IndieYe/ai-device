@@ -246,6 +246,45 @@ Depends: systemd, libc6 (>= 2.17), ca-certificates, util-linux
 5. 真实机器验收记录（含命令、输出、SHA256、平台版本）。
 6. 实现提交。
 
+## 10.1 实施与验收结果（2026-11-09）
+
+代码提交 `6034ee6`。制品 `ai-device-client_0.4.3_amd64.deb`，SHA256 `140b4e58fc4ebce0e9ff19e0d4fa5d15078e42d29dcd900f672e030d382725af`，在 tencent-sh 上用真实 `dpkg-deb` 构建。
+
+**声明验证**（真实 dpkg 产出）：`Depends: systemd, libc6 (>= 2.17), ca-certificates, util-linux`。
+
+**关键对比实验**（Debian 10，glibc 2.28，真实 `dpkg -i`）：同一宿主、只改声明，结果不同。
+
+| 声明 | 真实安装结果 |
+| --- | --- |
+| `libc6 (>= 2.17)` | **rc=0**，`Setting up` 成功 |
+| `libc6 (>= 2.39)` | **rc=1**，`dependency problems - leaving unconfigured` |
+
+这证明修复前那种包在 glibc 2.28 上会被拒绝，而该机实际能跑。
+
+**重要方法结论**：`dpkg --dry-run` **不校验依赖**——两种声明都返回 rc=0，只有真实 `dpkg -i` 才能测出差异。后续阶段验收不要用 dry-run 代替真实安装。
+
+**真实 glibc 2.17 运行验证**（CentOS 7.9 / glibc 2.17，从真实 DEB 解出 payload）：
+
+```
+包内 Python              → Python 3.13.17
+前检                     → detected: (2,17) / PASS 放行
+核心依赖导入             → device_runtime.client, mcp_server_bash.core,
+                           mcp_server_fs.core, psutil, pydantic,
+                           websockets, PIL.Image 全部正常
+图像编解码               → PNG/JPEG/WEBP 全部 ok (32,24)
+client_cli 入口          → --help 正常
+前检拒绝路径（模拟 2.12）→ 拒绝并给出所需/检测版本
+```
+
+**生产环境安全**：tencent-sh 生产客户端全程未受影响（`ii 0.4.2`、active、MainPID 2393177 前后一致），只执行 dry-run 未安装；CentOS7/Debian10 均为一次性容器。
+
+**本轮仍未验证**（不得据此声称阶段一全部完成）：
+
+- 真实 systemd 服务生命周期（装 unit、启动、就绪、升级、卸载）。CentOS7 容器无 systemd；alinux3 无 dpkg 且 `/tmp` 仅 944M(tmpfs)。该层与 cgroup 紧密相关，实质上属于阶段二验收范围。
+- glibc 2.32 真机安装（ali-sh 缺 dpkg 与磁盘空间）。
+
+容器与真实发行版在 systemd/cgroup 上存在差异，上述结果不覆盖服务层。
+
 ## 11. 安全与授权边界
 
 - 不停止真实服务；重启真实服务需用户针对本次操作明确确认。
