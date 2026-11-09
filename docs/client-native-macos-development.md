@@ -635,3 +635,72 @@ stage 自动清理、PID 更新。同一命令因真实任务状态而结果不�
 - 未验证卸载（`uninstall-registered-program`）的真实执行与配置保留
 - 未验证多用户、并发安装与非管理员路径
 - 包未签名未公证：图形界面双击会被 Gatekeeper 拦下，只能用 `sudo installer`
+
+
+## 真机验收：卸载与重新注册（2026-11-09，macminim6）
+
+入口是 `installer-inspection uninstall-registered-program --confirm-service-not-running`，
+先由调用者显式确认服务已停（`launchctl bootout` 后核对无进程），再执行。
+
+### 删除与保留
+
+```
+$ installer-inspection uninstall-registered-program --confirm-service-not-running
+AI_DEVICE_UNINSTALL_SERVICE_REMOVED_V1     RC=0
+```
+
+被删除（全部复核确认不存在）：
+
+| 项 | 结果 |
+| --- | --- |
+| LaunchAgent plist | 已删除 |
+| launchd job | `launchctl print` 返回 Bad request |
+| `/opt/ai-device-client` | 已删除 |
+| `registration.json` | 已删除 |
+| 进程 | 0 |
+
+被保留（哈希与基线逐字节一致）：
+
+| 项 | 结果 |
+| --- | --- |
+| `client.json` | `270f7466…` 不变 |
+| `token` | `23e04901…` 不变 |
+| `state/operations.sqlite3` | integrity ok，13 条记录 |
+| `state/tasks.sqlite3` | integrity ok，13 条记录 |
+| `state/output/` | 13 个文件 |
+| pkg receipt | 仍为 0.4.0 |
+
+符合需求 8：普通卸载移除服务与程序，保留配置、凭证与业务数据。
+
+### 重装与重新注册
+
+卸载后重装同一 PKG：`The upgrade was successful`、`install-status=0`，
+但**不自动注册** —— plist 不存在、无进程。这是设计要求，不是失败。
+
+注册命令有两个容易踩的点：
+
+1. **必须 root**。用 `sudo -u <user>` 降权会得到
+   `ValueError: macOS registration requires administrator privileges`，
+   而 CLI 只把它包成一句 `macOS registration refused or incomplete`，
+   看不到原因——`_refusal_detail` 只对预置诊断给细节，这个异常不在其中。
+2. **参数齐全**：`register --user <name> --confirm-legacy-clients-disabled`，
+   action 与确认标志都是 required。
+
+```
+$ sudo python3 -m device_runtime.client_macos_register register     --user indieye --confirm-legacy-clients-disabled
+{"registered": true, "started": false, "uid": 501, "plist": "..."}
+```
+
+`started:false` 表示注册不负责启动，需要再 `launchctl bootstrap`。启动后
+PID 6248、`state=running`、`never exited`、TCP 连中心；中心侧 `device_id`
+仍为 `macminim6`、`build_id` 仍为 `eaf47863`，身份没有因为卸载而丢失
+（它来自 `client.json`，而卸载不碰该文件）。
+
+**注意**：`AI_DEVICE_UNINSTALL_SERVICE_REMOVED_V1` 这个名字容易被读成
+"仅移除服务"，实际它还删了程序树与 registration。仅移除服务不成立——
+`registration.json` 被删是刻意的，否则会留下"已注册但无定义"的状态，
+后续每次安装都要人工诊断。
+
+### 仍未覆盖
+
+登录/登出生命周期（有失联风险，本轮未做）、多用户、并发安装、签名公证。
