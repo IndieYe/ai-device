@@ -379,7 +379,21 @@ macOS 已配置用户已登录时，升级必须正确卸载/加载该用户服�
 
 ### 阶段二：完整 macOS arm64 交付与最终清理
 
-**当前进度（2026-11-06）：** 代码层已完成（构建器含 `shipping` 模式、一份树布局、四个原生 verb、首装门禁接线、AFTER_UNLOAD 恢复修复）；未完成：**真实 PKG 首装与 A→B 验收**、需求与用户指南同步、旧路径最终清理。全量单元测试绿不等于本节完成。
+**当前进度（2026-11-09）：** 真机验收已完成四项，代码层与构建链闭合：
+
+- **A→B 升级**：0.3.6→0.4.0，identity `84f64def`→`eaf47863`，config/token 哈希不变，中心侧 build_id 与安装树一致
+- **忙拒绝**：中心下发真实后台任务后 `AI_DEVICE_UPGRADE_REFUSED_V1`（exit 70），拒绝后包/PID/live 树/连接/业务任务全部保持；任务结束后同包重装成功
+- **卸载与重新注册**：`AI_DEVICE_UNINSTALL_SERVICE_REMOVED_V1`，删除 plist/job/程序树/registration，保留 config/token/state（两个 sqlite integrity ok）
+- **登录/登出生命周期**：登出 `EXITED code=0`、`job state=removed`、无孤儿；登录后 `RunAtLoad` 自动拉起
+
+**仍未完成：**
+
+- **macOS 用户指南**：目前只有开发/设计文档，没有面向使用者的安装、升级、卸载、故障处理指南（交付物 2）
+- **登录后约 63 秒空窗**：launchd 在 `on-demand-only` 下延迟 `WILL_SPAWN`，即登录后约一分钟设备不可用。属产品行为决策，未优化
+- **旧路径最终清理**：清单见 `docs/client-native-legacy-inventory.md`，删除动作未执行
+- 多用户、并发安装、非管理员路径、签名与公证
+
+全量单元测试绿不等于本节完成；上述遗留项闭合后才算阶段二结束。
 
 - 复用阶段一已稳定的配置语义、客户端运行与最小本机协调，不照搬 systemd 的平台实现。
 - 新增 arm64 构建、PKG、指定用户配置及 LaunchAgent 安装升级卸载。
