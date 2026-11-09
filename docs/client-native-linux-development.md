@@ -368,3 +368,66 @@ warning: %post(aiprobe-2-1) scriptlet failed, exit status 1
 DEB 的 `postinst` 失败会让 dpkg 返回非零，行为不同。这是移植时必须显式决定的产品取舍，不能默认「照搬即可」。
 
 **环境说明**：Apple container，`rockylinux:9` 镜像（未固定 digest），容器内 `dnf install rpm-build` 获得 4.16.1.3。样本包为纯 `noarch`，不涉及真实 payload、systemd 或客户端进程。这是脚本语义证据，不是产品包验收。
+
+### RPM 构建与事务验收（2026-11-09）
+
+`packages/device-runtime/scripts/build-client-rpm.py`。`STOP` 与 DEB 共用
+`scripts/client_package_stop.sh` —— 两份安全逻辑分开维护就会漂移，本轮已经因为
+复制式修改出过一次错（`-s` 判断），所以改成单一来源，由测试钉住两者相等。
+
+**spec 与 dpkg 版一致的部分**：payload 布局（`/opt/ai-device-client`、两个 `/usr/bin`
+入口）、`ca-certificates`/`util-linux` 依赖、卸载保留配置与 state、`__pycache__` 清理。
+
+**必须不同的部分**：
+
+| 动作 | DEB | RPM | 原因 |
+| --- | --- | --- | --- |
+| 停止客户端 | `preinst` + `prerm` | 只在 `%pre` | `%preun` 运行时新 payload 已解包、`%post` 已启动新版本 |
+| 首次安装 | `preinst` 无条件跑 | `%pre` 在 `$1 = 1` 时直接 `exit 0` | 首次安装没有已装 payload，`client_package stop` 会 127 失败并中止安装 |
+| 启动客户端 | `postinst configure` | `%post` | — |
+| 删除配置 | `purge` 动词 | **无对应物** | `%postun` 只在 `$1 = 0` 时清理 unit 与空目录，不删 `/etc/ai-device-client` |
+
+**首次安装必须跳过守卫**：`%pre` 在解包之前运行，`STOP` 里调的是
+`/opt/ai-device-client/runtime/bin/python3`（**已安装**的那份）。首次安装时它不存在，
+实测报 `No such file or directory`、退出 127、整个 `rpm -i` 失败。加 `$1 = 1` 早退后正常。
+
+**容器端到端结果**（rockylinux:9，aarch64 构建，systemctl 与 python3 为桩）：
+
+```
+### 首次安装
+ver=0.4.3
+calls=client_package activate
+
+### 忙拒绝（cgroup.procs 有 PID）
+client process group still has live processes; refusing replacement
+error: %prein(...0.4.4...) scriptlet failed, exit status 1
+error: ...0.4.3...: erase skipped
+ver=0.4.3          ← 版本未变
+marker=none        ← payload 未被替换
+calls=client_package stop   ← 只有停止尝试，无 activate
+
+### 清空 procs 后重试
+ver=0.4.4  marker=v2        ← payload 正确替换
+calls=client_package stop | client_package activate
+
+### 卸载
+payload=gone
+```
+
+忙拒绝发生在解包前，旧包保持 `0.4.3` 且未被擦除，这与 §「RPM 脚本语义实测」的
+`%pre` 拒绝实验一致。`rpm -V` 在各阶段均干净。
+
+**已验证的边界**：
+
+- 依赖声明生效：容器缺 systemd 时 `rpm -i` 报 `Failed dependencies` 并拒绝，装上后才可安装
+- 同版本 `rpm -U --replacepkgs` 重装成功，`%post` 再次执行 activate
+- 空 cgroup 组放行；有 PID 拒绝 —— 与 DEB 侧同一 `STOP` 文本
+
+**未验证 / 已知限制**（不可据此声明阶段三完成）：
+
+1. 全程在**容器**内，systemctl 与客户端 python3 都是桩。没有真实 systemd、没有真实客户端进程、没有真实中心连接。
+2. 构建用 `--buildarch aarch64`（容器是 arm64）。产品目标是 amd64，**尚未产出 amd64 RPM**。
+3. 树是 `runtime/bin/python3` 一个假文件的**最小 tree**，不是真实客户端树，因此没有验证真实 payload 体积、真实 python 启动、`__pycache__` 清理的实际效果。
+4. 未测：`%pre` 与 `%pretrans` 的交互、依赖不满足时的解包时机、`rpm -V` 对真实整树的报缺（历史风险见需求文档 §11）。
+5. `%post` 失败仍使 `rpm -U` 返回 0（见上一节实测）。当前 `%post` 只调 activate，activate 失败不会让 rpm 报错——**ready 必须由包外复核**，这一点尚未在 rpm 路径上落实。
+6. 未在真实 alinux3 / Rocky 机器上验收。ali-sh 有 rpm 但无 rpmbuild、无容器，且跑着现网 0.2.3 实例。
