@@ -575,3 +575,63 @@ build-client-tree.py在Darwin arm64分支编译bin/ai-device-client-launcher，�
 ## 首次配置中断后的显式续接（2026-11-05）
 
 现有 `device_runtime.client_setup` 支持 `--resume`，与首次配置使用相同的URL、device ID、绝对配置/state目录及凭证输入。仅在确认目录归属且输入与已存文件匹配后使用；凭证继续通过交互或 `--token-stdin`，不要写入命令行。该选项只补缺失文件，不覆盖token/client.json，不注册或启动服务。空私有目录、仅完整token、已完整匹配配置可续接；截断、权限异常、额外文件、链接或输入不匹配会拒绝，保留现场供显式检查。普通初始化失败也保留已创建文件，避免并发resume成功后被清理破坏。不得将此功能当作任意坏配置自动修复；当前历史包不含这次源码更新。
+
+
+## 真机验收：首装、A→B 与忙拒绝（2026-11-09，macminim6）
+
+设备：macminim6（Mac18,5、arm64、macOS 27.0.1、`user indieye` uid 501），
+隔离机，非线上 macmini。构建从 `6489304` 干净工作区出发：`uv build` 生成三个
+业务 wheel，按 `runtime-lock`/`tool-lock`/`dependency-lock` 的 darwin-arm64
+target 校验 `python.tar.gz`（`8dc60610`）、`uv.whl`（`a42c85fa`）与 13 个依赖
+wheel 全部通过，tree 装配后 identity 为 `eaf47863`。
+
+### A→B 升级（0.3.6 → 0.4.0）
+
+```
+installer: Upgrading at base path /
+installer: The upgrade was successful.        RC=0
+identity: 84f64def → eaf47863                ← payload 真的换了
+PID: 2070 → 5158 → (重装后) 5964
+launchd: state=running, last exit "never exited"
+TCP → 124.221.130.149:443 ESTABLISHED
+config/token SHA-256 与原值完全相同
+中心侧 runtime_version.build_id = eaf47863   ← 与安装树一致
+```
+
+### 忙拒绝（中心下发真实后台任务，非桩）
+
+用 `device-ops bash` 下发 `sleep 240` 制造真实占用，然后执行同一个 installer：
+
+```
+installer: The upgrade failed. (运行软件包脚本时出错)
+install-status (root 可读) = 70
+/opt/ai-device-client-upgrade/installer-inspection upgrade-registered-program   --confirm-idle-instance-exits <stage>   →  AI_DEVICE_UPGRADE_REFUSED_V1, exit 70
+```
+
+拒绝之后准入完全保持：包仍 0.4.0、PID 5158 未变、live 树 mtime 未变、
+launchd running、TCP 连接在、`sleep 240` 继续运行、config/token 哈希不变。
+
+对照：任务自然结束后再装同一个包 → `The upgrade was successful`、`status=0`、
+stage 自动清理、PID 更新。同一命令因真实任务状态而结果不同，证明拒绝是临时的。
+
+**诊断要点**：`installer` 只显示"脚本出错"并丢弃脚本 stderr，真实原因只能从两处取：
+`/Library/Application Support/ai-device-client-management/install-status`（数字退出码，
+70 = 升级协调器拒绝/未知）和 `install-note`（人可读恢复步骤）。手动复跑协调器时
+要注意分支：有 registration 走 `upgrade-registered-program`，无 registration 才走
+`commit`；跑错分支会得到看似成功的结果（`PROGRAM_COMMITTED_V1`）却什么也没换。
+
+**`ls` 与目标目录**：`/Library/Application Support/ai-device-client-management` 是
+`0700 root:wheel`，非 root 用户 `ls` 只会看到空目录，容易误判"状态文件不存在"。
+
+### 残留 stage 的处理
+
+失败路径会在 `/opt/ai-device-client-stage-<version>-<identity>` 留下 payload 副本；
+`preinstall` 见到同名 stage 会以 `PROGRAM_COMMIT_REFUSED_V1` 拒绝下一次安装，
+掩盖真实原因。确认残留与 live 树内容一致后可删除再重试，否则先查明来源。
+
+### 仍未覆盖
+
+- 未验证登录/登出生命周期（LaunchAgent 在 GUI 会话重建时的行为）
+- 未验证卸载（`uninstall-registered-program`）的真实执行与配置保留
+- 未验证多用户、并发安装与非管理员路径
+- 包未签名未公证：图形界面双击会被 Gatekeeper 拦下，只能用 `sudo installer`
