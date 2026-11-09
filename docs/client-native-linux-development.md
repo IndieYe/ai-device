@@ -584,4 +584,46 @@ payload 删除之后。改为在 `%preun` 的 erase 分支里 `systemctl stop`�
 **卸载其余行为正确**：payload 删除、unit 与 enable 链接删除、配置文件、
 token、state 目录全部保留。
 
-**尚未验证**：`%preun` 修复本身还没在真机上跑过（本轮末尾修改，未重建验证）。
+### 卸载修复的真机复验（0.4.8）
+
+第一版 `%preun` 写的是 `systemctl stop ... || true`。`|| true` 会吞掉三类拒绝：
+busy 客户端、不安全关机策略、进程组非空 —— 也就是说客户端还活着时卸载仍然
+报成功，孤儿进程问题换个形式又回来了。改为在 erase 分支里复用 `%pre`
+同一份 `client_package_stop.sh`，erase 时 payload 还在，这些检查都能真正执行。
+
+0.4.7 → 0.4.8 升级，观察顺序确认升级分支没有误停：
+
+```
+note: stopping the client; ...      ← %pre
+client confirmed stopped
+Updating / installing... 0.4.8
+installed; client locally ready     ← %post
+Cleaning up / removing... 0.4.7     ← 旧 %preun 未干扰
+pid=2246975  state=active  NRestarts=0
+```
+
+`rpm -e` 卸载：
+
+```
+note: stopping the client; ...      ← %preun 真的在停
+client confirmed stopped
+Removed /etc/systemd/system/multi-user.target.wants/ai-device-client.service
+RC=0
+
+卸载后：state=inactive  procs=0  unit 不存在  /opt 不存在
+       config 哈希不变  token 哈希不变
+       operations.sqlite3 integrity ok、mtime 未被改写
+```
+
+进程数 0、unit 与 payload 均已删除、配置凭证状态保留，孤儿进程不再出现。
+
+**注意**：`/var/lib/ai-device-client` 的目录项数会在 4 和 6 之间浮动，这是
+SQLite 的 `-shm`/`-wal` 在连接关闭时被清理、下次打开又重建，不是数据丢失。
+判断是否保留应该看主库文件、`PRAGMA integrity_check` 和 mtime，不要看 `ls | wc -l`。
+
+**遗留**：删除 unit 后重装需要重新 `register`（`%preun` 会删 unit），
+这是当前设计而不是缺陷；但 `%preun` 删 unit 与 `%postun` 再删一次的职责
+有重叠，值得在后续整理。
+
+**仍未覆盖**：busy 客户端下的卸载拒绝、`%preun` 停止超时后进程组仍非空
+的拒绝路径，这两条只在 unit 层单测覆盖，没有真机证据。
