@@ -26,6 +26,7 @@
 | 旧 Linux 监督器 | `upgrade_supervisor.Systemd` 执行适配器；`templates/upgrade-stage1/{client,supervisor}.service.in`、`scripts/render_upgrade_adoption.py` 及专属测试 |
 | 旧签名/验收脚本 | 绑定旧多树包格式的签名脚本与 `accept-native-*.py/sh` |
 | 旧 Linux 客户端实例入口 | 已收窄关闭，新安装不走该路径 |
+| 旧 macOS LaunchAgent 部署链 | `launchd_deploy.py`（230 行，`com.device-runtime.*` 标签 + `start.sh` 包装）、其专属测试（135 行）、`installation.py` 中 `instance launchd` 子命令（52 行）。当前客户端用 `client_macos_layout`/`client_macos_service_job`，不经过它 |
 
 退役后 Device 测试数量下降来自明确删除旧测试，**不是覆盖率提高**。
 
@@ -62,7 +63,15 @@
 
 ### 3.4 Mac 侧
 
-Mac 旧路径在阶段二闭合，当前保留。**不得永久双实现。**
+Mac 旧部署路径已在阶段二闭合并删除（`launchd_deploy.py` / `instance launchd`，见第 2 节）。
+新客户端走 `client_macos_*` 一组模块，无新旧双实现。
+
+仍需保留的旧 Mac 痕迹只有一处：`upgrade_supervisor._runner_bound` 仍会读
+`launchd/com.device-runtime.*.plist` 判断旧实例的 runner 绑定。该函数上半段服务
+Linux（解析 systemd `ExecStart`）、下半段服务 macOS，且被 4 处 `@legacy_operation`
+入口调用，不在本次删除范围。它保留的是**旧包部署的未受管实例仍可走旧升级器**这一场景，
+待旧实例全部退役后可单独评估。逐项核对过程见
+[`client-native-legacy-deletion-review.md`](client-native-legacy-deletion-review.md)。
 
 ### 3.5 历史文档
 
