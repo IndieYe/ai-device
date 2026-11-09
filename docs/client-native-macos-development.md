@@ -4,20 +4,37 @@
 
 ## 当前状态
 
-**阶段二进行中，尚未交付 PKG 安装升级路径，不可用于真实设备部署。**
+**PKG 安装升级路径已在真机验收通过，可用于本地隔离环境部署；尚不具备公开分发条件（未签名未公证）。**
 
-Mac 侧代码已提交（`e2c4a70` 起），包含 13 个 `client_macos_*.py` 模块、`scripts/build-client-pkg.py` 构建器、105 个测试文件；本节下方各节记录了演进过程，其中“改动未提交”类描述均已过时。
+Mac 侧代码包含 13 个 `client_macos_*.py` 模块、`scripts/build-client-pkg.py` 构建器；
+本节下方各节记录了演进过程，其中“改动未提交”“未接入生产路径”类描述均已过时，
+实时状态以 [需求文档阶段二](../doc/requirements/client-native-install-upgrade.md) 为准。
 
-阻塞交付的未解项：
+已完成的真机验收（macminim6，Apple Silicon，macOS 27.0.1）：
 
-1. 生产停止证明（launchd TERM 超时后发 KILL 的竞态）仅验证候选方案，未接入生产启动路径。
-2. Installer 写入期互斥未完成。
-3. 登录/退出/未登录更新生命周期未验收。
+1. **A→B 升级**：0.3.6→0.4.0，identity `84f64def`→`eaf47863`，config/token 哈希不变。
+2. **忙拒绝**：真实后台任务期间返回 `AI_DEVICE_UPGRADE_REFUSED_V1`（exit 70），包/PID/连接均保持；
+   任务结束后同包重装成功。
+3. **卸载与重新注册**：`AI_DEVICE_UNINSTALL_SERVICE_REMOVED_V1`，删除 plist/job/程序树/registration，
+   保留 config/token/state。
+4. **登录/登出生命周期**：登出 `EXITED code=0` 无孤儿；登录后 `RunAtLoad` 自动拉起
+   （登录后约 60 秒延迟属 launchd 域级节流，非缺陷，见用户指南第 8 节）。
+
+仍未闭合的项：
+
+1. **Installer 写入期并发互斥**：preinstall 与 postinstall 是独立进程，脚本锁无法跨越 payload
+   写入窗口。真机并发安装两次时一成一败，失败方报模糊的“脚本执行出错”，`/opt` 下残留两个 stage。
+   当前结构靠“安装器写 stage 路径、postinstall 一次 rename”让运行路径不被写入，见
+   [`client-native-macos-installer-write-mutex.md`](client-native-macos-installer-write-mutex.md)。
+2. **多用户、非管理员路径、并发安装**未验证。
+3. **签名与公证**未完成，不能公开发布。
 
 > `pkgbuild` 的 5 条 `write: Permission denied` 已查明为固有 stderr 噪音，不再是阻塞项，
 > 见下文“pkgbuild 权限警告已定位”。
 
-权威需求为 `doc/requirements/client-native-install-upgrade.md`；Linux 侧使用者指南见 `client-native-linux-guide.md`。
+权威需求为 `doc/requirements/client-native-install-upgrade.md`；使用者操作说明见
+[`client-native-macos-guide.md`](client-native-macos-guide.md)；Linux 侧见
+[`client-native-linux-guide.md`](client-native-linux-guide.md)。
 
 已完成构建准备：平台锁选择、arm64 uv 工具锁、离线预装运行树。
 `build/client-native/mac-tree1` 是本阶段早期构建，不包含后续新增 Mac 布局模块。

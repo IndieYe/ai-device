@@ -1,11 +1,16 @@
 # PKG 写入期互斥：让运行路径不进入写入窗口
 
-> 版本：2（2026-11-05）｜状态：结构已离线验证；**真实 PKG 安装未实测，postinstall 从未被执行过**
+> 版本：3（2026-11-09）｜状态：结构已离线验证；**真实 PKG 安装与升级已实测通过**，见第四节第 4 条
 
 > 版本 2 修正：上一版称写入期“已消除”、并称结构“已实现”。独立审核
 > （ses-14548）证明当时的 postinstall 调用了一个二进制不接受的动词，即真实
 > 安装不可能成功；因此“已实现”不成立。本版按代码实际能力重写。
-> 当前 inspection 包的 preinstall 仍直接 `exit 1`，所以上述路径尚未在真机上跑通。
+
+> 版本 3 修正：版本 2 第三行称“当前 inspection 包的 preinstall 仍直接 `exit 1`，
+> 所以上述路径尚未在真机上跑通”。这句已过时。`exit 1` 属于
+> `build-client-nopayload-inspection.py` 的专用禁安装产物，不是 shipping 包；
+> `build-client-pkg.py` 产出的包已在 macminim6 完成四项真机验收，postinstall 与
+> `RENAME_SWAP` 已多次实际执行。
 
 ## 一、问题
 
@@ -100,8 +105,14 @@ root 身份检查 → 一次调用 → 输出 token（`PROGRAM_COMMITTED_V1` / `
 2. **命令行参数可能出现在进程列表中。** 路径本身不是凭证，但这是可观察性事实。
 3. **并发安装器未被排除。** 原子发布保证"要么旧树要么新树"，不保证两次并发安装的结果顺序。
    真正的串行化仍需安装器/包管理器层面或管理锁，而那需要能跨进程持锁的调用方。
-4. **未实测。** 未运行真实 `installer -pkg`，PKG 仍是 inspection-only（preinstall 直接 `exit 1`）。
-   本文描述的 payload/postinstall 结构只在构建脚本与离线测试中验证。
+   实测（macminim6）：并发安装两次一成一败，失败方报“脚本执行出错”而非明确的“已有安装器在运行”，
+   `/opt` 下残留两个 stage 且程序树 `build_id` 属更早的包。即并发下状态会乱且失败原因不可读，
+   仍是未闭合项。
+4. **已实测（版本 3 修正）。** shipping PKG（`build-client-pkg.py`）已在 macminim6 完成
+   A→B 升级、忙碌拒绝、卸载重装与登录生命周期四项真机验收，postinstall 与
+   `RENAME_SWAP` 均实际执行过。inspection-only 包（`build-client-nopayload-inspection.py`）
+   的 preinstall `exit 1` 是那个产物的设计行为，与本节结论无关。
+   未覆盖：无配置的全新首装、多用户、并发。
 5. **正向不可证。** 入口无法证明"stage 里就是期望的版本"，只有构建清单能证明；这里只做负向否决。
 
 ## 六、测试

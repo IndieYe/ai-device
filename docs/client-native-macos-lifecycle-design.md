@@ -949,4 +949,10 @@ ses-14536/msg-1135567 completed/drained限定通过：源码/wheel/新树/展开
 
 **验证**：Device 全量 **1970 passed, 20 skipped**；`packages/bash` 184、`packages/fs` 116；`ruff check src tests` 通过；installer 以 `-Werror` 干净编译，实测修复入口拒绝路径 64/64/64/70。
 
-**仍未完成**：Installer 写入期互斥（unknown）、`job`/`peer`/`bootout` 影响范围许可、管理 fd 不证 flock 持有、relay 真实父子进程验证、重建 wheel/tree/PKG、真实 GUI 生命周期与 A→B。
+**仍未完成**：Installer 写入期互斥（unknown）、`job`/`peer`/`bootout` 影响范围许可、管理 fd 不证 flock 持有、relay 真实父子进程验证、重建 wheel/tree/PKG。
+
+**后续进展（2026-11-09，本文以上正文保留原文不动）**：原列最后一项“真实 GUI 生命周期与 A→B”
+已在 macminim6 完成。连同忙碌拒绝、卸载重装，四项真机验收均已通过；
+用户操作说明见 `client-native-macos-guide.md`，实时状态见需求文档阶段二。
+写入期互斥仍为未闭合项，且真机并发安装实测出现状态错乱，见
+`client-native-macos-installer-write-mutex.md` 第四节第 3 条。
