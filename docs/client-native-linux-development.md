@@ -548,3 +548,40 @@ rc=1、旧包 `erase skipped`；**PID 未变、python3.13 的 md5 未变、服�
 **一处重要教训**：升级时 `%post` 停掉客户端后失败，服务留在 `inactive`。
 这正是之前实测的「`%post` 失败 rpm 仍返回 0」的后果——调用方以为成功，实际服务没起来。
 ready 必须由包外复核，这一点在真实安装中已经发生，不再是理论风险。
+
+### A→B 升级与卸载验收（2026-11-09，ali-sh）
+
+**A→B 成功**（0.4.6 → 0.4.7）：
+
+```
+note: stopping the client; if unpacking then fails it stays stopped — ...
+client confirmed stopped            ← %pre 停止旧客户端
+installed; client locally ready     ← %post 成功，无 warning
+pkg=0.4.7  state=active  NRestarts=0
+config 保持: YES   token 保持: YES
+```
+
+这是 `%post` ready 路径第一次走通。之前三次失败依次是：dpkg 锁硬编码、
+scriptlet 无 `RPM_*` 变量导致取错锁、`client_host_glibc.py` 是 0600。
+
+**权限规范化的顺序陷阱**（新发现）：第一版 `%install` 写成
+
+```sh
+find ... -type f -exec chmod 0644 {} +
+find ... -type f -perm -u+x -exec chmod 0755 {} +
+```
+
+`chmod 0644` 把可执行位清掉后，第二个 `-perm -u+x` 匹配不到任何文件，
+`python3.13` 变成 0644，之后所有 scriptlet 报 `Permission denied`（退出 126）。
+必须先用 `-perm /111` 捕获原本可执行的文件，再对剩余文件设 0644。
+
+**卸载残留进程**（本轮的 bug）：`%preun` 在 `$1=0` 时分支为空，什么都没做。
+`rpm -e` 删掉 unit 文件后，客户端进程仍在跑，systemd 显示为
+`not-found` 但 `active (running)` —— 成了孤儿。`%postun` 救不了，它跑在
+payload 删除之后。改为在 `%preun` 的 erase 分支里 `systemctl stop`。
+升级分支（`$1=1`）仍必须什么都不做，否则会停掉 `%post` 刚启动的新版本。
+
+**卸载其余行为正确**：payload 删除、unit 与 enable 链接删除、配置文件、
+token、state 目录全部保留。
+
+**尚未验证**：`%preun` 修复本身还没在真机上跑过（本轮末尾修改，未重建验证）。

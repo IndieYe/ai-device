@@ -20,7 +20,7 @@ def _spec_text(version="0.4.3", tree="/TREE"):
         buildarch="x86_64",
         PRE_GUARD=module.PRE_GUARD,
         stop=module.STOP,
-        preun_stop='case "${1:-}" in\n    0) ;;\n    *) exit 0 ;;\nesac\n',
+        preun_stop=module.PREUN_STOP,
     )
 
 
@@ -64,13 +64,27 @@ def test_spec_stops_the_client_before_unpacking():
     assert "client_package stop" not in preun
 
 
-def test_preun_does_not_stop_on_upgrade():
-    """An upgrade leaves one instance behind, so $1 is 1 and %preun must do
-    nothing. Only a full erase ($1 = 0) proceeds."""
+def test_preun_stops_the_service_on_full_erase():
+    """Measured on alinux3: with an empty erase branch the client kept running
+    after rpm -e deleted its unit file, leaving an orphan that systemd showed as
+    a not-found unit which was still active. %postun cannot help -- it runs
+    after the payload is gone."""
     text = _spec_text()
     preun = text.split("%preun\n", 1)[1].split("%postun\n", 1)[0]
-    assert 'case "${1:-}" in' in preun
-    assert "*) exit 0 ;;" in preun
+    assert 'if [ "${1:-0}" -eq 0 ]; then' in preun
+    assert "systemctl stop ai-device-client.service" in preun
+
+
+def test_preun_does_not_stop_during_upgrade():
+    """An upgrade leaves one instance behind ($1 = 1). %pre already stopped the
+    old client before unpacking, so %preun must not stop the new version that
+    %post just started."""
+    text = _spec_text()
+    preun = text.split("%preun\n", 1)[1].split("%postun\n", 1)[0]
+    assert "-eq 0" in preun
+    # The stop is inside the erase branch only.
+    branch = preun.split('if [ "${1:-0}" -eq 0 ]; then', 1)[1]
+    assert "systemctl stop" in branch
 
 
 def test_spec_has_no_dpkg_only_verbs():
@@ -153,10 +167,16 @@ def test_install_normalises_payload_permissions():
     text = _spec_text()
     install = text.split("%install\n", 1)[1].split("%files\n", 1)[0]
     assert "-type d -exec chmod 0755" in install
-    assert "-type f -exec chmod 0644" in install
-    assert "-perm -u+x -exec chmod 0755" in install
-    # The executable pass must come after the blanket 0644 or it is a no-op.
-    assert install.index("chmod 0644") < install.index("-perm -u+x -exec chmod 0755")
+    # Executables are selected with -perm /111, not -perm -u+x: the blanket
+    # 0644 below clears the execute bits, so any test that runs after it
+    # matches nothing. Measured on alinux3 -- doing it in the wrong order
+    # turned python3.13 into 0644 and every following scriptlet died with
+    # "Permission denied" (exit 126).
+    assert "-perm /111 -exec chmod 0755" in install
+    assert "! -perm /111 -exec chmod 0644" in install
+    assert install.index("-perm /111 -exec chmod 0755") < install.index(
+        "! -perm /111 -exec chmod 0644"
+    )
 
 
 def test_generated_scriptlets_are_shell_valid(tmp_path):

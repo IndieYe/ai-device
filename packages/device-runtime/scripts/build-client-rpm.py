@@ -43,6 +43,18 @@ if [ "${1:-0}" -eq 1 ]; then
 fi
 """
 
+# On a full erase the unit is about to be removed and %postun runs after the
+# payload is gone, so %preun is the last chance to stop the service. Measured on
+# alinux3: with this branch empty, rpm -e left the client running as an orphan
+# while systemd reported a not-found unit that was still active.
+# On upgrade ($1 = 1) it must do nothing: %pre already stopped the old client
+# before unpacking, and stopping here would kill what %post just started.
+PREUN_STOP = (
+    'if [ "${1:-0}" -eq 0 ]; then\n'
+    '    systemctl stop ai-device-client.service 2>/dev/null || true\n'
+    'fi\n'
+)
+
 SPEC = """Name: ai-device-client
 Version: {version}
 Release: 1
@@ -91,12 +103,16 @@ mkdir -p %{{buildroot}}/opt
 cp -a {tree}/. %{{buildroot}}/opt/ai-device-client/
 # The tree is assembled by hand and can carry an unusable mode: measured on
 # alinux3, client_host_glibc.py arrived as 0600 and the service user got
-# PermissionError for that module (client_host_glibc.py" is imported right
-# after parsing, so the service exited 1 and rpm's %post then failed on
-# readiness). Shipping the tree's modes verbatim would do the same.
+# PermissionError for that module (imported right after parsing, so the service
+# exited 1 and rpm's %post then failed on readiness). Ship readable files.
+#
+# Executables must be captured BEFORE the blanket 0644: chmod 0644 clears the
+# execute bits, so a later "-perm -u+x" test matches nothing. Measured: doing it
+# in the wrong order turned python3.13 into 0644 and every scriptlet after it
+# died with "Permission denied".
 find %{{buildroot}}/opt/ai-device-client -type d -exec chmod 0755 {{}} +
-find %{{buildroot}}/opt/ai-device-client -type f -exec chmod 0644 {{}} +
-find %{{buildroot}}/opt/ai-device-client -type f -perm -u+x -exec chmod 0755 {{}} +
+find %{{buildroot}}/opt/ai-device-client -type f -perm /111 -exec chmod 0755 {{}} +
+find %{{buildroot}}/opt/ai-device-client -type f ! -perm /111 -exec chmod 0644 {{}} +
 mkdir -p %{{buildroot}}/usr/bin
 printf '#!/bin/sh\\nexec /opt/ai-device-client/runtime/bin/python3 -I -B -m device_runtime.client_cli "$@"\\n' > %{{buildroot}}/usr/bin/ai-device-client
 printf '#!/bin/sh\\nexec /opt/ai-device-client/runtime/bin/python3 -I -B -m device_runtime.client_register_cli "$@"\\n' > %{{buildroot}}/usr/bin/ai-device-client-register
@@ -170,12 +186,7 @@ def build(tree, output, version, buildarch="x86_64"):
         buildarch=buildarch,
         PRE_GUARD=PRE_GUARD,
         stop=STOP,
-        preun_stop=(
-            'case "${1:-}" in\n'
-            '    0) ;;\n'  # full erase: the payload is about to go away
-            '    *) exit 0 ;;\n'  # upgrade: %pre already handled the running client
-            "esac\n"
-        ),
+        preun_stop=PREUN_STOP,
     )
     spec_path = topdir / "SPECS/ai-device-client.spec"
     spec_path.write_text(spec)
