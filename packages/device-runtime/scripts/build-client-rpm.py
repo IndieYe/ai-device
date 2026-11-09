@@ -55,6 +55,30 @@ Requires: ca-certificates
 Requires: util-linux
 %global __brp_python_bytecompile %{{nil}}
 %global debug_package %{{nil}}
+# rpm's brp scripts rewrite shebangs in the payload and abort on ambiguous ones.
+# Both are wrong for a self-contained client: the tree ships its own Python, and
+# the recorded interpreter must stay whatever the build produced. Measured on
+# alinux3/RPM 4.14: the build failed outright on a "#!/usr/bin/env python" file
+# and, before that, silently repointed python3 scripts at
+# /usr/libexec/platform-python -- a host interpreter the package does not own.
+%global __brp_mangle_shebangs %{{nil}}
+%global __brp_mangle_shebangs_exclude_from .*
+%global __brp_check_shebang %{{nil}}
+# rpm adds a Requires for every shared object it finds in the payload. The tree
+# carries its own libpng/libavif/libtiff/libzstd and its own libpython, so those
+# are satisfied by files the package installs, not by the host. Left on, the
+# build emitted 67 soname Requires -- including libtcl9.0.so, which is not a
+# system library at all -- and no RPM host could ever satisfy them. Dependency
+# discovery is off; the four real host dependencies are declared explicitly.
+%global __requires_exclude .*
+%global __provides_exclude .*
+# rpm strips and re-links ELF files in the payload. That rewrote the bundled
+# python3.13 and libpython (2,051,694 differing bytes) and left a binary that
+# aborts with "undefined symbol" -- the tree runs fine before packaging. The
+# tree is a prebuilt, already stripped artifact that must ship byte for byte.
+%global __os_install_post %{{nil}}
+%global __strip /bin/true
+AutoReqProv: no
 
 %description
 Self-contained AI Device client with a private Python runtime. Configuration,
@@ -62,6 +86,7 @@ credentials and state are kept outside the package and survive upgrades and a
 plain erase.
 
 %install
+rm -rf %{{buildroot}}
 mkdir -p %{{buildroot}}/opt
 cp -a {tree}/. %{{buildroot}}/opt/ai-device-client/
 mkdir -p %{{buildroot}}/usr/bin

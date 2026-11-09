@@ -431,3 +431,67 @@ payload=gone
 4. 未测：`%pre` 与 `%pretrans` 的交互、依赖不满足时的解包时机、`rpm -V` 对真实整树的报缺（历史风险见需求文档 §11）。
 5. `%post` 失败仍使 `rpm -U` 返回 0（见上一节实测）。当前 `%post` 只调 activate，activate 失败不会让 rpm 报错——**ready 必须由包外复核**，这一点尚未在 rpm 路径上落实。
 6. 未在真实 alinux3 / Rocky 机器上验收。ali-sh 有 rpm 但无 rpmbuild、无容器，且跑着现网 0.2.3 实例。
+
+### amd64 RPM 真实构建（2026-11-09，ali-sh / alinux3 / RPM 4.14.3）
+
+ali-sh 装 `rpm-build` 后，用 0.4.2 真实 tree 构建 amd64 包。**构建过程中暴露三个
+容器阶段没暴露的缺陷**，前两个会让包直接不可用。
+
+**产物**：`ai-device-client-0.4.3-1.x86_64.rpm`，38,360,228 字节，
+sha256 `5415bff7580e5cebaed7820960f3c3817d76d884fe2c50833fd0838d66ef1768`，
+5301 个文件，`/root/rpmbuild-work/out/`。
+
+**缺陷一：shebang 被改写。**
+rpm 的 brp 脚本遍历 payload 改写解释器行。实测输出：
+
+```
+mangling shebang in .../timeit.py from /usr/bin/env python3 to #!/usr/libexec/platform-python
+*** ERROR: ambiguous python shebang in .../rot_13.py: #!/usr/bin/env python
+error: Bad exit status from ... (%install)
+```
+
+`platform-python` 是宿主解释器，不是包里自带的那份；而且含糊 shebang 直接让构建失败。
+自含运行时的包必须原样交付树内容，关掉 `__brp_mangle_shebangs` / `__brp_check_shebang`。
+
+**缺陷二：strip 改坏了带符号的二进制。**
+`__os_install_post` 默认 strip 并重链 ELF。实测对比同一文件打包前后：
+
+```
+原树 python3.13: 31624264 字节，运行 OK 3.13.17
+包内 python3.13: 31624808 字节，2,051,694 字节差异
+运行时: symbol lookup error: undefined symbol
+```
+
+**注意方向**：是打包把能跑的树改坏了，不是树本身有问题。关掉 `__os_install_post`
+与 `__strip` 后，`cmp` 确认 python3.13 与 libpython3.13.so.1.0 逐字节一致，
+解包后直接 `./runtime/bin/python3` 输出 `python 3.13.17`，`import device_runtime` 正常。
+
+**缺陷三：自动依赖把包内私有库当成系统依赖。**
+依赖发现扫出 payload 里的 libpng/libavif/libtiff/libzstd 等，生成 **67 个 soname
+Requires**，其中包含 `libtcl9.0.so` —— 这根本不是系统库。任何 RPM 宿主都无法满足。
+这些库本来就在包内（`pillow.libs/`）。改为 `AutoReqProv: no` 并保留四个显式依赖后，
+Requires 降到 8 条（4 条是 rpm 自己加的 `/bin/sh` 脚本解释器）：
+
+```
+ca-certificates
+glibc >= 2.17
+systemd
+util-linux
+```
+
+**验证方式**：`rpm -i --test` 返回 0（依赖全部满足，未解包、未改系统）；
+`rpm2cpio | cpio -idm` 解包到 `/root/payload-check` 后验证二进制一致性与 import。
+
+**传输污染（非产品问题，但会毁掉验收）**：macOS 打包上传时带出 5298 个 `._*`
+AppleDouble 文件，第一次构建的包里占了近一半文件。已在 ali-sh 侧清理后重建。
+后续从 macOS 往 Linux 传目录必须排除 `._*` 与 `.DS_Store`。
+
+**尚未做的**：
+
+1. **没有实际安装到 ali-sh**。ali-sh 跑着 0.2.3 现网客户端（PID 1569203/1569204），
+   本轮授权是「装 rpm-build 来构建」，不含安装产品包。因此忙拒绝、A→B 升级、
+   真实 systemd 启停、ready、中心业务连通**全部未在真实机器验证**。
+2. 树是 0.4.2 时期产物，不含 `6034ee6`（glibc 2.17 声明）、`974a5a1`/`0e4edd3`
+   （cgroup v1）、`b62f99c` 等新修复。包的 `%pre`/`%preun` 脚本是新的，payload 是旧的。
+   这不是最新源码的完整可信构建。
+3. 树本身缺 `httpx`、`yaml`（原树就缺，非打包问题）——旧 0.4.2 树的既有状态。

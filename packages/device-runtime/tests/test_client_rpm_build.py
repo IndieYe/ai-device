@@ -114,6 +114,36 @@ def test_pre_stops_the_client_when_upgrading():
     assert "client_package stop" in pre
 
 
+def test_spec_does_not_let_rpm_rewrite_the_prebuilt_payload():
+    """The tree ships a prebuilt python and its libraries. rpm's post-install
+    steps rewrote them: measured on alinux3, python3.13 differed in 2,051,694
+    bytes after packaging and then aborted with "undefined symbol", while the
+    same file ran fine before. Shebang mangling also repointed python3 scripts
+    at the host's /usr/libexec/platform-python, an interpreter the package does
+    not own.
+    """
+    text = _spec_text()
+    assert "%global __os_install_post %{nil}" in text
+    assert "%global __strip /bin/true" in text
+    assert "%global __brp_mangle_shebangs %{nil}" in text
+    assert "%global __brp_check_shebang %{nil}" in text
+
+
+def test_spec_does_not_turn_bundled_libraries_into_host_requires():
+    """Dependency discovery found the payload's own libpng/libavif/libtiff and
+    emitted 67 soname Requires, including libtcl9.0.so which is not a system
+    library. No host could satisfy those. Only the four real host dependencies
+    may remain."""
+    text = _spec_text()
+    assert "AutoReqProv: no" in text
+    assert "%global __requires_exclude .*" in text
+    # The real dependencies are still declared explicitly.
+    assert "Requires: systemd" in text
+    assert f"Requires: glibc >= {module.MINIMUM_GLIBC}" in text
+    assert "Requires: ca-certificates" in text
+    assert "Requires: util-linux" in text
+
+
 def test_generated_scriptlets_are_shell_valid(tmp_path):
     """Each scriptlet body must survive sh -n. This runs the real interpreter;
     a monkeypatched subprocess.run would prove nothing."""
