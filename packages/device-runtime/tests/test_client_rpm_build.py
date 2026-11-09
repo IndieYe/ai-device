@@ -61,7 +61,9 @@ def test_spec_stops_the_client_before_unpacking():
     preun = text.split("%preun\n", 1)[1].split("%postun\n", 1)[0]
 
     assert "client_package stop" in pre
-    assert "client_package stop" not in preun
+    preun = preun.replace("%preun\n", "", 1)
+    # No stop at all outside the erase branch.
+    assert preun.count("client_package stop") <= 1
 
 
 def test_preun_stops_the_service_on_full_erase():
@@ -72,7 +74,12 @@ def test_preun_stops_the_service_on_full_erase():
     text = _spec_text()
     preun = text.split("%preun\n", 1)[1].split("%postun\n", 1)[0]
     assert 'if [ "${1:-0}" -eq 0 ]; then' in preun
-    assert "systemctl stop ai-device-client.service" in preun
+    # The full shared guard, not a bare "systemctl stop": a bare stop skips the
+    # busy refusal, the unsafe-shutdown-policy refusal and the process-group
+    # check, and reports success even when the client is still running.
+    assert "client_package stop --from-package-script" in preun
+    assert "refusing package operation" in preun
+    assert "refusing package replacement" in preun
 
 
 def test_preun_does_not_stop_during_upgrade():
@@ -84,7 +91,11 @@ def test_preun_does_not_stop_during_upgrade():
     assert "-eq 0" in preun
     # The stop is inside the erase branch only.
     branch = preun.split('if [ "${1:-0}" -eq 0 ]; then', 1)[1]
-    assert "systemctl stop" in branch
+    assert "client_package stop" in branch
+    # %pre already stopped the old client; a stop here would kill the new one
+    # that %post just started and told the operator was locally ready.
+    outside = preun.split('if [ "${1:-0}" -eq 0 ]; then', 1)[0]
+    assert "client_package stop" not in outside
 
 
 def test_spec_has_no_dpkg_only_verbs():

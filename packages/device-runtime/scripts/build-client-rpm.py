@@ -26,8 +26,6 @@ from pathlib import Path
 # device_runtime.dependencies:MINIMUM_GLIBC (enforced by tests).
 MINIMUM_GLIBC = "2.17"
 
-STOP = (Path(__file__).parent / "client_package_stop.sh").read_text()
-
 # Shared with the DEB builder. Plain POSIX sh, no % characters, so it is valid
 # verbatim as an RPM scriptlet body.
 STOP = (Path(__file__).parent / "client_package_stop.sh").read_text()
@@ -49,11 +47,11 @@ fi
 # while systemd reported a not-found unit that was still active.
 # On upgrade ($1 = 1) it must do nothing: %pre already stopped the old client
 # before unpacking, and stopping here would kill what %post just started.
-PREUN_STOP = (
-    'if [ "${1:-0}" -eq 0 ]; then\n'
-    '    systemctl stop ai-device-client.service 2>/dev/null || true\n'
-    'fi\n'
-)
+# On erase the payload is still present, so the full shared guard applies: it
+# refuses busy clients, refuses unsafe shutdown policies and refuses a non-empty
+# process group instead of stopping anyway. `|| true` here would have hidden
+# every one of those, which is why the bare systemctl stop was not enough.
+PREUN_STOP = 'if [ "${1:-0}" -eq 0 ]; then\n' + STOP + 'fi\n'
 
 SPEC = """Name: ai-device-client
 Version: {version}
