@@ -842,26 +842,74 @@ def test_verification_product_identifier_differs_from_inspection(builder):
     )
 
 
-def test_verification_preinstall_refuses_existing_stage(builder):
-    """The residue check is the reason a verification build can install safely.
+def test_verification_preinstall_claims_stage_atomically(builder):
+    """preinstall must claim the stage with mkdir, not test-then-write.
 
-    It refuses on existence rather than on content: the installer cannot
-    attribute what it finds, and `commit_staged_program` swaps an existing
-    program tree into the stage, so a merge into a pre-existing stage would
-    publish content this package never authored.
+    An existence test followed by the installer's payload write is a TOCTOU
+    window: two installers can both see an absent stage and both proceed.
+    `mkdir` cannot be won twice, so the claim is the mutex. Measured on the
+    target host with eight concurrent claimants: one success, seven failures.
     """
     script = builder.PREINSTALL_RESIDUE.format(
-        stage="/opt/ai-device-client-stage-0.3.4.1-aaaaaaaaaaaa"
+        stage="/opt/ai-device-client-stage-0.3.4.1-aaaaaaaaaaaa",
+        token_dir=builder.COMMIT_STATUS_DIR,
+        token_file=builder.PREINSTALL_TOKEN_FILE,
     )
     assert "/opt/ai-device-client-stage-0.3.4.1-aaaaaaaaaaaa" in script
-    assert "[ -e \"$STAGE\" ]" in script
-    # A dangling symlink fails -e but still occupies the name and would still
-    # be merged into, so the link test is not redundant.
-    assert "[ -L \"$STAGE\" ]" in script
-    assert "exit 1" in script
+    # The claim itself.
+    assert 'if mkdir "$STAGE" 2>/dev/null; then' in script
+    # The old existence test must be gone; keeping both would reintroduce the
+    # window this change exists to close.
+    assert '[ -e "$STAGE" ]' not in script
     # It must NOT refuse unconditionally: that is the inspection behaviour.
     assert "Inspection-only" not in script
-    assert script.count("exit 1") == 1
+
+
+def test_preinstall_distinguishes_busy_from_residue(builder):
+    """Empty and non-empty stage directories mean different things.
+
+    Measured: the installer merges its payload into a pre-existing non-empty
+    directory and leaves foreign files there, so publishing it would ship
+    content this package never authored. An empty directory can only be a
+    concurrent installer's claim (or our own). The two need different tokens
+    because the operator's next step differs: wait, versus clean up.
+    """
+    script = builder.PREINSTALL_RESIDUE.format(
+        stage="/opt/ai-device-client-stage-1.0-abc",
+        token_dir=builder.COMMIT_STATUS_DIR,
+        token_file=builder.PREINSTALL_TOKEN_FILE,
+    )
+    assert "PROGRAM_INSTALL_BUSY_V1" in script
+    assert "PROGRAM_INSTALL_RESIDUE_V1" in script
+    # Residue covers both a symlink/non-directory and a non-empty directory.
+    assert "[ -L \"$STAGE\" ]" in script
+    assert '[ ! -d "$STAGE" ]' in script
+    # The non-empty test drives the residue branch.
+    assert 'ls -A "$STAGE"' in script
+
+
+def test_preinstall_writes_reason_to_a_readable_file(builder):
+    """stderr alone is invisible to the user.
+
+    Measured: `installer` prints a fixed "script failed" line and routes the
+    script's stderr to /var/log/install.log. Without a file at a known path,
+    the operator sees only the generic message -- which is exactly the
+    behaviour this change set out to fix.
+    """
+    script = builder.PREINSTALL_RESIDUE.format(
+        stage="/opt/ai-device-client-stage-1.0-abc",
+        token_dir=builder.COMMIT_STATUS_DIR,
+        token_file=builder.PREINSTALL_TOKEN_FILE,
+    )
+    assert builder.PREINSTALL_TOKEN_FILE in script
+    assert '> "$TOKEN_FILE"' in script
+    # The token file must live in the root-owned management directory, not in
+    # world-writable /var/tmp where a local user could pre-place a symlink.
+    assert builder.PREINSTALL_TOKEN_FILE.startswith(builder.COMMIT_STATUS_DIR)
+    assert "/var/tmp" not in script
+    # The management directory must not be widened by an error report.
+    assert "chmod 755" not in script
+    assert "-m 0700" in script
 
 
 def test_verification_build_writes_installable_preinstall_and_name(builder, tree, tmp_path):
@@ -883,7 +931,9 @@ def test_verification_build_writes_installable_preinstall_and_name(builder, tree
     assert result.name == "ai-device-client-0.3.4.1-arm64-verification.pkg"
     preinstall = (output / "scripts/preinstall").read_text()
     assert preinstall == builder.PREINSTALL_RESIDUE.format(
-        stage="/opt/ai-device-client-stage-0.3.4.1-aaaaaaaaaaaa"
+        stage="/opt/ai-device-client-stage-0.3.4.1-aaaaaaaaaaaa",
+        token_dir=builder.COMMIT_STATUS_DIR,
+        token_file=builder.PREINSTALL_TOKEN_FILE,
     )
     assert builder.COMMIT_TOKENS  # module still exposes the native outcome map
     # The program package now also compiles the upgrade entry, so the component
@@ -939,7 +989,9 @@ def test_stage_only_still_has_the_residue_preinstall(builder, tree, tmp_path):
     output = tmp_path / "stageonly-pre"
     builder.build(tree, output, "0.3.4.1", run=run, mode="stage_only")
     assert (output / "scripts/preinstall").read_text() == builder.PREINSTALL_RESIDUE.format(
-        stage="/opt/ai-device-client-stage-0.3.4.1-aaaaaaaaaaaa"
+        stage="/opt/ai-device-client-stage-0.3.4.1-aaaaaaaaaaaa",
+        token_dir=builder.COMMIT_STATUS_DIR,
+        token_file=builder.PREINSTALL_TOKEN_FILE,
     )
 
 

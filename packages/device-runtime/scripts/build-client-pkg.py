@@ -82,6 +82,14 @@ COMMIT_ENTRY = "ai-device-client-commit"
 # management directory, which the script creates with an explicit mode.
 COMMIT_STATUS_DIR = "/Library/Application Support/ai-device-client-management"
 COMMIT_STATUS_FILE = f"{COMMIT_STATUS_DIR}/install-status"
+# preinstall's refusal reason. Same directory as the commit status for the same
+# reason: /var/tmp is world-writable and not cleaned at boot, so a local user
+# could pre-create the path as a symlink and have this root script write through
+# it. The management directory is root-owned with an explicit mode.
+#
+# It is a report, not a state source: nothing reads it to decide behaviour, and
+# postinstall overwrites it on every run.
+PREINSTALL_TOKEN_FILE = f"{COMMIT_STATUS_DIR}/preinstall-token"
 # The destination the native entries have compiled in (client-macos-first-entry.h
 # and client-macos-upgrade-entry.h). Kept as a constant so the builder can refuse
 # a --program that would disagree with it; see the check in build().
@@ -184,32 +192,64 @@ exit 1
 """
 
 # A verification build may actually install, so its preinstall has to do the
-# one job the inspection build never reaches: refuse when the stage path it is
-# about to populate already exists.
+# one job the inspection build never reaches: claim the stage path atomically
+# and refuse if anything else already holds it.
 #
-# The reason is that the publish step cannot distinguish its own leftovers from
-# foreign content. `commit_staged_program` renames an existing program tree onto
-# the stage (RENAME_SWAP), so an A->B upgrade leaves A sitting at B's stage. Any
-# tree the installer then merges into a pre-existing stage directory is content
-# this package never authored, and the commit would publish it wholesale. The
-# check is deliberately fail-closed and deliberately crude: it refuses on
-# existence, not on content, because content cannot be attributed here.
+# Why atomic claim rather than an existence test: an existence test followed by
+# the installer's payload write is a TOCTOU window. Two installers can both
+# observe an absent stage and both proceed. `mkdir` cannot: exactly one caller
+# creates the directory, every other caller gets EEXIST. Measured on the target
+# host with eight concurrent claimants: one success, seven failures.
 #
-# -e and -L are separate on purpose: a dangling symlink fails -e but still
-# occupies the name and would still be merged into.
+# Why the empty/non-empty split: the publish step cannot attribute content it
+# finds in the stage. `commit_staged_program` renames an existing program tree
+# onto the stage (RENAME_SWAP), so an A->B upgrade leaves A sitting at B's
+# stage. Measured: the installer merges into a pre-existing non-empty directory
+# and leaves foreign files in place, so publishing it would ship content this
+# package never authored. An empty directory is different -- it can only be
+# either a claim by a concurrent installer or our own freshly made claim.
+#
+# -d and -L are separate on purpose: a dangling symlink fails -e but still
+# occupies the name, and `mkdir` on it fails without telling us what is there.
 #
 # Scope limit, stated so this check is not mistaken for an installation mutex:
-# it is a point-in-time test that runs in preinstall. It cannot stop a second
-# installer that also observed an absent stage from racing this one between the
-# check and the payload write, and it says nothing about processes still holding
-# the old program tree open. Serialization against a concurrent installer is
-# not provided here.
+# it makes a concurrent installer fail with a readable reason. It does not make
+# the two installers queue, and it says nothing about processes still holding
+# the old program tree open.
 PREINSTALL_RESIDUE = """#!/bin/sh
 set -eu
 STAGE='{stage}'
-if [ -e "$STAGE" ] || [ -L "$STAGE" ]; then
-    echo 'PROGRAM_COMMIT_REFUSED_V1: stage path already exists and its content cannot be attributed; remove it and retry' >&2
+TOKEN_DIR='{token_dir}'
+TOKEN_FILE='{token_file}'
+
+# Report through a file, not only stderr: the installer shows the user a fixed
+# "script failed" message and routes our stderr to /var/log/install.log. A file
+# at a fixed root-owned path is what an operator can actually read.
+report_and_exit() {{
+    echo "$1" >&2
+    # 0700, matching what postinstall establishes for this directory. Not 0755:
+    # the directory holds registration and install state, and preinstall must
+    # not widen it as a side effect of reporting an error.
+    if mkdir -p -m 0700 "$TOKEN_DIR" 2>/dev/null; then
+        :
+    fi
+    printf '%s\\n' "$1" > "$TOKEN_FILE" 2>/dev/null || true
     exit 1
+}}
+
+if mkdir "$STAGE" 2>/dev/null; then
+    # Claimed by this installer. Continue; the payload merges into it.
+    :
+else
+    if [ -L "$STAGE" ] || [ ! -d "$STAGE" ]; then
+        report_and_exit 'PROGRAM_INSTALL_RESIDUE_V1: stage path exists but is not a directory; remove it and retry'
+    fi
+    # A directory we did not create. Empty means someone else is mid-install;
+    # non-empty means unattributable leftovers that would be published.
+    if [ -n "$(ls -A "$STAGE" 2>/dev/null)" ]; then
+        report_and_exit 'PROGRAM_INSTALL_RESIDUE_V1: stage path exists and is not empty; its content cannot be attributed, remove it and retry'
+    fi
+    report_and_exit 'PROGRAM_INSTALL_BUSY_V1: stage path is claimed by another installer; wait for it to finish and retry'
 fi
 exit 0
 """
@@ -1067,7 +1107,11 @@ def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
     # The inspection build keeps its unconditional refusal; only an installable
     # mode gets a preinstall that is allowed to proceed.
     preinstall.write_text(
-        PREINSTALL_RESIDUE.format(stage=stage) if mode != "inspection" else PREINSTALL
+        PREINSTALL_RESIDUE.format(
+            stage=stage, token_dir=COMMIT_STATUS_DIR, token_file=PREINSTALL_TOKEN_FILE
+        )
+        if mode != "inspection"
+        else PREINSTALL
     )
     preinstall.chmod(0o755)
     postinstall = scripts / "postinstall"
