@@ -704,3 +704,83 @@ PID 6248、`state=running`、`never exited`、TCP 连中心；中心侧 `device_
 ### 仍未覆盖
 
 登录/登出生命周期（有失联风险，本轮未做）、多用户、并发安装、签名公证。
+
+
+## 真机验收：登录/登出生命周期（2026-11-09，macminim6）
+
+用户在机器前真实执行"退出登录"，期间用系统级 LaunchDaemon（不是用户会话里的
+shell）每 5 秒采样一次 console 用户、客户端 PID 与到中心的连接数，避免观察
+动作本身受登出影响。
+
+### 登出
+
+```
+20:45:07  console=indieye  pid=[6248]  conn=1
+20:45:12  console=root     pid=[]      conn=0     ← 一个采样周期内完成
+```
+
+launchd 侧证据：
+
+```
+20:45:10  gui/501/local.ai-device.client [6248]: service state: exited
+          internal event: EXITED, code = 0
+          service inactive: local.ai-device.client
+          job state = removed
+```
+
+退出码 0，是正常终止而非崩溃；`job state = removed` 只表示 GUI 域销毁时
+负载被卸载，plist 与程序树都还在。登出期间全程 `pid=[]`、`conn=0`，
+**没有孤儿进程**。
+
+### 重新登录
+
+```
+20:48:11  console=root     pid=[]      conn=0
+20:48:16  console=indieye  pid=[]      conn=0     ← 登录完成
+...       （空窗约 63 秒）
+20:49:19  console=indieye  pid=[7692]  conn=1     ← 客户端拉起
+```
+
+launchd 侧：
+
+```
+20:48:15  pending spawn, domain in on-demand-only mode: local.ai-device.client
+20:49:15  internal event: WILL_SPAWN, code = 0
+          service state: spawning
+          xpcproxy spawned with pid 7692
+```
+
+拉起由 LaunchAgent 的 `RunAtLoad=true` 自动完成，无需人工干预。`runs=1`、
+`last exit code = (never exited)`、TCP 到中心重新建立，`client-identity.json`
+仍是 `eaf47863`，`client.json`/`token` 哈希与登出前完全一致。
+
+### 两个需要说明的现象
+
+**一、登录到拉起之间约 63 秒的空窗。** launchd 在 20:48:15 就判定
+`pending spawn`，但直到 20:49:15 才 `WILL_SPAWN`，中间的 60 秒是
+`on-demand-only mode` 下的延迟。这是登录后 GUI 域尚在初始化的正常行为，
+不是客户端启动慢：从 `SPAWNED` 到 `SOURCE_ATTACH` 只用了 19 毫秒。
+
+但这意味着**登录后约一分钟内设备不可用**。如果业务要求"用户一登录设备就绪"，
+这个空窗需要单独评估；本轮只记录现象，未做优化——把 LaunchAgent 改成
+`LaunchOnlyOnce` 或在登录项里提前拉起，都属于改变产品行为，需要单独决定。
+
+**二、登出后没有重连机制。** 登出即断（`job state = removed`、`conn=0`），
+这是 LaunchAgent 与"指定普通用户登录后运行"这一需求边界的直接结果，
+不是缺陷。但它意味着**登出期间设备在中心侧应为离线**，任何依赖设备常驻的
+运维假设都不成立。
+
+### 观察方法本身的经验
+
+第一次尝试把观察脚本放到 `/usr/local/bin`，那里在这台机器上不存在；改到
+`/var/tmp/aidev/`。关键是用 **LaunchDaemon（system 域）** 而不是任何
+`gui/501` 下的东西，否则观察器会和被测对象一起被登出杀掉——这正是之前
+不敢单独测登出的原因之一。
+
+另一处：最初通过 Tailscale 地址（`10.66.0.x`）连接，而 Tailscale 在 macOS
+是用户态进程，登出会一并断开；改用局域网地址（`192.168.1.x`，由系统级
+sshd 处理）后才能全程观察。**做登出类验收必须先确认观察通道不依赖用户会话。**
+
+### 仍未覆盖
+
+多用户、并发安装、非管理员路径、签名与公证。
