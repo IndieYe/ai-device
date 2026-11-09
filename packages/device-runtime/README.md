@@ -262,13 +262,24 @@ CLI 的 bash 使用 --command，script 支持 --script 或 --script-file；--std
 
 隔离跨阶段验收使用FakeModel驱动真实Agent→ServerPool→stdio Device MCP→HTTP中心→WebSocket客户端→真实Bash/FS，不调用付费模型。动态验证在macOS；Linux实机、远程TLS/异机、Windows/发布另行验收。
 
-## Linux 客户端完整包交付（重构中）
+## 客户端完整包交付（DEB / RPM / PKG）
 
-Ubuntu 24.04 amd64 客户端采用自带 Python/依赖的 DEB，构建时预装，目标机不再组装实例 venv。安装、重装、升级共用 apt/dpkg 路径；忙时拒绝、停止确认后替换，本机就绪与连接中心分别报告。
+三个平台均采用自带 Python 与依赖的完整包，目标机不再组装实例 venv。安装、重装、升级共用包管理器路径；忙时拒绝、停止确认后替换，本机就绪与连接中心分别报告。
 
-构建入口为 `scripts/build-client-tree.py` 和 `scripts/build-client-deb.py`，稳定客户端入口为 `ai-device-client`。旧 `build-native-linux.sh` 与旧 payload 组装脚本已退役，不再提供 RPM 构建或旧候选/helper 包主路径。
+| 平台 | 制品 | 构建入口 |
+| --- | --- | --- |
+| Ubuntu/Debian amd64 | DEB | `scripts/build-client-deb.py` |
+| RHEL 系 x86_64 | RPM | `scripts/build-client-rpm.py` |
+| macOS Apple Silicon arm64 | PKG | `scripts/build-client-pkg.py` |
 
-准确操作、制品与剩余门禁见 [Linux 完整包开发指南](../../docs/client-native-linux-development.md)。当前仍为未签名开发包、阶段未最终验收；Mac 新 PKG 尚未实现，中心/MCP 和共享旧实例能力没有因此删除。历史 Linux 指南不能代替新包验收。
+三者共用运行树构建入口 `scripts/build-client-tree.py`，稳定客户端入口为 `ai-device-client`。
+旧 `build-native-linux.sh`、旧 payload 组装脚本与旧 macOS `launchd_deploy` 部署链均已退役。
+
+包版本由构建时 `--version` 显式传入（如 `0.4.9`），与运行时 `__version__`（如 `0.3.6`）是两套体系，不可互相推导。
+
+准确操作、制品与验收证据见 [Linux 指南](../../docs/client-native-linux-guide.md)、[macOS 指南](../../docs/client-native-macos-guide.md) 与 [Linux 开发记录](../../docs/client-native-linux-development.md)。
+
+当前限制：本地隔离开发包未签名未公证，不满足公开分发条件；macOS 仅 Apple Silicon、需已登录 GUI 用户；多用户与并发安装未验证。历史指南不能代替新包验收。
 
 ## 低层 Bash 提交的短暂等待（非新版执行工具）
 

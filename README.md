@@ -31,10 +31,12 @@ Bash/FS 的 MCP 服务使用各自的 `[mcp]` extra；Device extras 为 client�
 
 ### 客户端安装升级
 
-- [Linux 客户端安装升级指南](docs/client-native-linux-guide.md)（Ubuntu 24.04 amd64，DEB/systemd）
-- [macOS 客户端开发记录](docs/client-native-macos-development.md)（阶段二进行中，尚未交付）
+- [Linux 客户端安装升级指南](docs/client-native-linux-guide.md)（Ubuntu/Debian amd64 DEB、RHEL 系 x86_64 RPM，systemd）
+- [macOS 客户端安装升级指南](docs/client-native-macos-guide.md)（Apple Silicon arm64，PKG/launchd）
 - [旧路径退役与保留清单](docs/client-native-legacy-inventory.md)
+- [旧路径删除核对记录](docs/client-native-legacy-deletion-review.md)
 - [Linux 客户端开发记录与验收证据](docs/client-native-linux-development.md)
+- [macOS 客户端开发记录](docs/client-native-macos-development.md)
 
 ### 其他
 

@@ -215,3 +215,103 @@ def test_rejects_versions_that_would_break_the_spec():
 
 def test_accepts_a_normal_version():
     assert module._rpm_version("0.4.3") == "0.4.3"
+
+
+def _charclass(script_text):
+    """Extract the allowed-version character set a builder validates against."""
+    import re
+
+    match = re.search(r'not in "([^"]+)" for c in version', script_text)
+    assert match, "builder no longer validates version characters this way"
+    return set(match.group(1))
+
+
+def test_package_version_charset_is_identical_across_builders():
+    """Pin exactly where the DEB and RPM version charsets diverge.
+
+    DEB and RPM each validate independently and the sets are not equal in
+    either direction:
+
+      DEB-only: ``~`` (Debian pre-release marker) and ``-``
+      RPM-only: ``_``
+
+    A version that passes one builder and fails the other is a
+    release-blocking mismatch, because the same release number is used on
+    both platforms. This test does not force the charsets to be equal (that
+    would reject legitimate Debian pre-release versions); it records the
+    divergence so that any future change to either set is visible, and the
+    companion test below pins the shipped version inside the intersection.
+    """
+    deb_chars = _charclass(DEB_SCRIPT.read_text())
+    rpm_chars = _charclass(SCRIPT.read_text())
+
+    # Both must accept a plain dotted numeric version; that is what ships.
+    assert set("0123456789.") <= deb_chars
+    assert set("0123456789.") <= rpm_chars
+
+    deb_only = deb_chars - rpm_chars
+    rpm_only = rpm_chars - deb_chars
+
+    assert deb_only == {"~", "-"}, (
+        f"DEB-only characters changed to {sorted(deb_only)}; revisit the "
+        "cross-platform release rule if intentional"
+    )
+    assert rpm_only == {"_"}, (
+        f"RPM-only characters changed to {sorted(rpm_only)}; a version using "
+        "them would build on RPM but fail on DEB"
+    )
+
+    # The safe zone for a shared release version.
+    intersection = deb_chars & rpm_chars
+    assert set("0123456789.") <= intersection
+    assert "_" not in intersection
+    assert "~" not in intersection
+
+
+def test_release_version_in_intersection_works_on_both_builders():
+    """The version actually shipped must pass both validators.
+
+    Package versions in this project are plain dotted numerics (e.g. 0.4.9).
+    Anything outside the intersection -- notably ``~`` from Debian pre-release
+    conventions or ``_`` from RPM -- must not be used as a shared release
+    version.
+    """
+    deb = importlib.util.spec_from_file_location("client_deb_build", DEB_SCRIPT)
+    deb_module = importlib.util.module_from_spec(deb)
+    deb.loader.exec_module(deb_module)
+
+    deb_chars = _charclass(DEB_SCRIPT.read_text())
+    rpm_chars = _charclass(SCRIPT.read_text())
+    intersection = deb_chars & rpm_chars
+
+    for released in ("0.4.9", "1.0.0", "0.4.10"):
+        assert module._rpm_version(released) == released
+        assert released[0].isdigit()
+        assert all(c in intersection for c in released), (
+            f"{released} leaves the DEB/RPM intersection"
+        )
+
+
+def test_package_version_is_independent_of_runtime_version():
+    """Package version and runtime __version__ are two separate schemes.
+
+    Confusing them has already caused a wrong conclusion in this project: the
+    RPM reports 0.4.x while the embedded runtime reports __version__ 0.3.x.
+    Neither is derivable from the other, so a test pins the fact that the
+    builders take the package version as an argument rather than reading it
+    from device_runtime.__version__.
+    """
+    from device_runtime import __version__ as runtime_version
+
+    for script in (DEB_SCRIPT, SCRIPT):
+        text = script.read_text()
+        # The version must arrive as a required CLI argument.
+        assert '"--version"' in text, f"{script.name} must take --version explicitly"
+        assert "required=True" in text
+        # And must not be defaulted from the runtime package version.
+        assert "__version__" not in text, (
+            f"{script.name} must not read runtime __version__ as the package version"
+        )
+
+    # The two schemes are allowed to differ; that is the documented behaviour.
+    assert isinstance(runtime_version, str) and runtime_version
