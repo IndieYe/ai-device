@@ -1,5 +1,7 @@
 # macOS arm64 客户端完整包开发记录
 
+> 面向使用者的安装、配置、升级、卸载操作说明见 [`client-native-macos-guide.md`](client-native-macos-guide.md)。本文是实现与验收记录。
+
 ## 当前状态
 
 **阶段二进行中，尚未交付 PKG 安装升级路径，不可用于真实设备部署。**

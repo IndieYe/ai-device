@@ -388,7 +388,7 @@ macOS 已配置用户已登录时，升级必须正确卸载/加载该用户服�
 
 **仍未完成：**
 
-- **macOS 用户指南**：目前只有开发/设计文档，没有面向使用者的安装、升级、卸载、故障处理指南（交付物 2）
+- ~~**macOS 用户指南**~~：已补 `docs/client-native-macos-guide.md`（交付物 2）
 - **登录后约 63 秒空窗**：launchd 在 `on-demand-only` 下延迟 `WILL_SPAWN`，即登录后约一分钟设备不可用。属产品行为决策，未优化
 - **旧路径最终清理**：清单见 `docs/client-native-legacy-inventory.md`，删除动作未执行
 - 多用户、并发安装、非管理员路径、签名与公证
