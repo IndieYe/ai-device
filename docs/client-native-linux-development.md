@@ -100,6 +100,46 @@ python3 packages/device-runtime/scripts/build-client-deb.py \
 
 开发包未签名，不代表已满足正式发布、许可审查和来源认证条件。
 
+### 用当前源码重建 tree 并验收（0.4.9）
+
+之前所有实验包的 tree 是 0.4.2 时期的复制品，再手工覆盖几个文件拼出来的，
+既不含 `6034ee6`（glibc 2.17 声明）、`974a5a1`/`0e4edd3`（cgroup v1 与
+`-s` 修复），也没有重新计算 identity。本次走完整流程重建：
+
+```
+本机 d99c407（工作区干净）
+  uv build --all-packages --wheel --out-dir <inputs>/wheels   → 3 个业务 wheel
+  → Linux x86_64 上用 build-client-tree.py 装配（按 runtime/tool/dependency
+    三个 lock 校验 python.tar.gz / uv.whl / 13 个依赖 wheel 的 size 与 sha256）
+  → 12 个包全部来自锁定的 wheel
+  → build-client-rpm.py 打包
+```
+
+结果：
+
+```
+identity: {"version":"0.3.6","build_id":"sha256:8de772ba..."}
+
+0.4.8 → 0.4.9 升级：
+  client confirmed stopped
+  installed; client locally ready
+  pkg=0.4.9  state=active  NRestarts=0
+  安装后 identity 与构建时一致（8de772ba...）
+  config / token 哈希不变
+```
+
+中心下发命令在设备上执行并返回同一个 identity，确认这是当前源码产物而不是拼接树。
+
+**版本号的两个体系容易混淆**：源码 `device_runtime.__version__` 是 `0.3.6`，
+RPM 的 `Version:` 是构建时通过 `--version` 另外传入的（本次 0.4.9）。所以中心
+上报 `runtime_version=0.3.6` 是正确行为，不是旧树残留。早先据此判断"树是旧产物"
+是错的；真正的证据是 `build_id` 和文件内容，不是包版本号。若要让两者对齐，需要
+在发布流程里把 RPM 版本与 `__version__` 绑定，这属于发布规范，未在本轮改动。
+
+**构建期注意**：`build-client-tree.py` 用了 `tarfile.extractall(filter="data")`，
+需要 Python 3.12+ 运行；ali-sh 系统 Python 3.10 会直接 TypeError。构建时使用输入中
+自带的 3.13 解释器，不要让系统 Python 运行构建脚本。
+
 ## 已知限制与未充分验证项
 
 以下为证据偏弱项，构造真实故障场景成本高，已记为已知限制而非宣称通过：
