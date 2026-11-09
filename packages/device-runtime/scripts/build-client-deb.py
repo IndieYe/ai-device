@@ -64,10 +64,31 @@ group=$(systemctl show "$unit" --property=ControlGroup --value) || exit 1
 if [ -n "$group" ]; then
     case "$group" in /*) ;; *) exit 1 ;; esac
     case "$group" in *..*) exit 1 ;; esac
-    if [ -d "/sys/fs/cgroup$group" ]; then
-        grep -qx 'populated 0' "/sys/fs/cgroup$group/cgroup.events" || {
-            echo 'client process group is not confirmed empty; refusing replacement' >&2; exit 1;
-        }
+    # systemd reports this path relative to the cgroup root in both layouts,
+    # but only the unified hierarchy mounts units there. The legacy hierarchy
+    # keeps unit membership under the systemd controller mount and has no
+    # cgroup.events file, so resolve the directory and read cgroup.procs.
+    cgroup_root=${AI_DEVICE_CGROUP_ROOT:-/sys/fs/cgroup}
+    if [ -f "$cgroup_root/cgroup.controllers" ]; then
+        groupdir="$cgroup_root$group"
+        if [ -d "$groupdir" ]; then
+            grep -qx 'populated 0' "$groupdir/cgroup.events" || {
+                echo 'client process group is not confirmed empty; refusing replacement' >&2; exit 1;
+            }
+        fi
+    elif [ -d "$cgroup_root/systemd" ]; then
+        groupdir="$cgroup_root/systemd$group"
+        if [ -d "$groupdir" ]; then
+            # The kernel writes a zero-byte file for an empty group. -s alone
+            # already reports a missing file as empty, so -f is defensive only:
+            # it keeps the intent explicit for a reader and costs one stat.
+            if [ -f "$groupdir/cgroup.procs" ] && [ -s "$groupdir/cgroup.procs" ]; then
+                echo 'client process group still has live processes; refusing replacement' >&2
+                exit 1
+            fi
+        fi
+    else
+        echo 'warning: cannot determine the cgroup hierarchy; process group not verified' >&2
     fi
 fi
 """

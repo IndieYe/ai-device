@@ -257,6 +257,15 @@ ali-sh 实测 `systemd 239`。当前 unit 用了这些指令（`client_service.p
 
 **若任何一项不成立**，需要在阶段内解决：改 unit 写法，或明确记录为不支持 systemd 239 并在安装前拒绝。
 
+### 实测结论（2026-11-09，systemd 239 / ali-sh）
+
+两项**均已通过**，上述担心不成立：
+
+1. **`StandardOutput=append:` 在 239 上可用**。真实加载 unit 后 `systemctl show` 返回 `StandardOutput=append`，`LoadState=loaded`，journalctl 无 parse 错误。对照实验：把值换成非法的 `nonsense-xyz:` 会报 `Failed to parse output specifier, ignoring`，而 `append:` 无此报错，说明语法被正确识别。
+2. **`SendSIGKILL=no` 生效**。用忽略 SIGTERM 的进程（`trap '' TERM`）配合 `TimeoutStopSec=3` 测试：超时后进程仍存活，未发生强杀。
+
+**踩过的坑**：第一次用 `/bin/sleep 300` 做探针，stop 后进程消失，误判为「239 发生强杀」。实际上 `sleep` 收到 SIGTERM 就会退出，那是正常停止。后续验证不强杀语义必须用**忽略 SIGTERM 的进程**。
+
 ### 6.4 测试要求
 
 现有 `test_client_service.py:233-252` 需要扩展：
@@ -357,6 +366,39 @@ ali-sh 实测 `systemd 239`。当前 unit 用了这些指令（`client_service.p
 4. 真实 v1 与 v2 机器验收记录。
 5. 同步后的文档。
 6. 实现提交。
+
+## 10.1 实施与验收结果（2026-11-09）
+
+**实现**（`client_service.py` + `build-client-deb.py` 的 `STOP`）：
+
+- `cgroup_v2()`：`cgroup.controllers` 存在 → v2；`systemd/` 目录存在 → v1；都无 → None。
+- `cgroup_unit_directory()`：v2 用 `CGROUP_ROOT/<group>`，v1 用 `CGROUP_ROOT/systemd/<group>`。
+- `cgroup_group_populated()`：v2 读 `cgroup.events` 的 `populated`，v1 读 `cgroup.procs` 是否非空；读取失败返回 None（区分「读不到」与「空」）。
+- `confirm_empty_group()` 按三态处理：无法识别层级→告警放行；目录缺失→告警放行；读取失败→报错；有进程→报错。
+- shell 侧同构，并抽出 `AI_DEVICE_CGROUP_ROOT`（默认 `/sys/fs/cgroup`）以便测试真实执行。
+
+**真实环境验证（ali-sh，cgroup v1 + systemd 239 + glibc 2.32）：**
+
+原始 bug 复现：
+```
+旧代码: /sys/fs/cgroup/system.slice/sshd.service -> exists()=False -> 静默 return
+实际:   /sys/fs/cgroup/systemd/system.slice/sshd.service -> cgroup.procs 8 字节（有活进程）
+```
+
+新逻辑：`cgroup_v2()` 返回 False，目录正确解析到 `systemd/` 下，正确检出有活进程。
+
+**systemd 239 unit 加载**：`LoadState=loaded`，`StandardOutput=append`、`SendSIGKILL=no`、`KillMode=control-group`、`StateDirectory`、`LogsDirectory` 均正确解析，无 parse 错误（详见 §6.3 实测结论）。
+
+**自动化测试**：device-runtime **2187 passed / 20 skipped**，ruff 通过。shell 侧测试改为**真实执行**生成的 guard 脚本（而非字符串匹配）——这一点很关键：最初只断言字符串存在，去掉整个 v1 分支仍能通过。
+
+**变异验证**（均被抓）：v1 路径解析回退到 v2 写法、`cgroup.procs` 缺失当作空组、shell 去掉 v1 分支、unrecognisable 不告警。
+
+**一处已知冗余（如实记录）**：shell 里 `[ -f ... ] && [ -s ... ]` 中的 `-f` 并非必需——`-s` 对不存在的文件已返回 false，去掉 `-f` 测试也不会挂。保留它只为让意图更明确，不是安全关键路径，已在代码注释中说明。
+
+**未完成（影响门禁）**：
+
+- 未在 v1 机器上完成安装 + 升级 + 忙拒绝的端到端验收。ali-sh 跑着 0.2.3 现网实例，本轮只做只读探测与临时 unit 加载（已全部清理），未在其上安装新客户端。
+- 需要一台**可自由安装**的 cgroup v1 机器才能真正闭合本阶段门禁。
 
 ## 11. 安全与授权边界
 

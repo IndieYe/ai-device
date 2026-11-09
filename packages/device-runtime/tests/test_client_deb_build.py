@@ -217,3 +217,123 @@ def test_declared_glibc_floor_matches_the_runtime_requirement():
     assert module.MINIMUM_GLIBC == dependencies.MINIMUM_GLIBC == CLIENT_FLOOR
     assert module.MINIMUM_GLIBC == dependencies.TARGET["glibc"]
     assert module.MINIMUM_GLIBC in dependencies.SUPPORTED_GLIBC
+
+
+def _run_stop(tmp_path, cgroup_root, group="/system.slice/client.service", state="failed"):
+    """Execute the generated cgroup guard against a synthetic hierarchy.
+
+    Only the cgroup section runs: the rest needs systemd. The script fragment is
+    extracted from STOP so the test exercises the shipped text, not a copy.
+    """
+    start = module.STOP.index("# Check descendants too")
+    fragment = module.STOP[start:]
+    harness = (
+        "set -eu\n"
+        "unit=ai-device-client.service\n"
+        f"systemctl() {{ printf '%s\\n' '{group}'; }}\n"
+        + fragment
+    )
+    script = tmp_path / "guard.sh"
+    script.write_text(harness)
+    env = {"PATH": "/usr/bin:/bin", "AI_DEVICE_CGROUP_ROOT": str(cgroup_root)}
+    return subprocess.run(
+        ["sh", str(script)], capture_output=True, text=True, env=env, check=False
+    )
+
+
+def test_stop_refuses_when_v1_group_has_processes(tmp_path):
+    """Legacy hierarchy: a live process must block replacement.
+
+    Under the old single-path check this directory was never found, so the
+    guard silently passed on every v1 host.
+    """
+    root = tmp_path / "cg"
+    unit = root / "systemd/system.slice/client.service"
+    unit.mkdir(parents=True)
+    (unit / "cgroup.procs").write_text("4242\n")
+    result = _run_stop(tmp_path, root)
+    assert result.returncode == 1
+    assert "live processes" in result.stderr
+
+
+def test_stop_allows_empty_v1_group(tmp_path):
+    root = tmp_path / "cg"
+    unit = root / "systemd/system.slice/client.service"
+    unit.mkdir(parents=True)
+    (unit / "cgroup.procs").write_text("")
+    result = _run_stop(tmp_path, root)
+    assert result.returncode == 0
+
+
+def test_stop_refuses_when_v2_group_is_populated(tmp_path):
+    root = tmp_path / "cg"
+    root.mkdir()
+    (root / "cgroup.controllers").write_text("cpu\n")
+    unit = root / "system.slice/client.service"
+    unit.mkdir(parents=True)
+    (unit / "cgroup.events").write_text("populated 1\nfrozen 0\n")
+    result = _run_stop(tmp_path, root)
+    assert result.returncode == 1
+    assert "not confirmed empty" in result.stderr
+
+
+def test_stop_allows_empty_v2_group(tmp_path):
+    root = tmp_path / "cg"
+    root.mkdir()
+    (root / "cgroup.controllers").write_text("cpu\n")
+    unit = root / "system.slice/client.service"
+    unit.mkdir(parents=True)
+    (unit / "cgroup.events").write_text("populated 0\nfrozen 0\n")
+    result = _run_stop(tmp_path, root)
+    assert result.returncode == 0
+
+
+def test_stop_warns_when_hierarchy_is_unrecognisable(tmp_path):
+    root = tmp_path / "cg"
+    root.mkdir()
+    result = _run_stop(tmp_path, root)
+    assert result.returncode == 0
+    assert "cannot determine the cgroup hierarchy" in result.stderr
+
+
+def test_missing_procs_file_does_not_claim_live_processes(tmp_path):
+    """An absent cgroup.procs must not be read as evidence of live processes.
+
+    `-s` already reports a missing file as empty, so this is not a mutation
+    target; the test pins the intended outcome rather than the -f guard, which
+    is defensive only. Blocking here would strand upgrades on hosts whose
+    controller mount does not carry the unit.
+    """
+    root = tmp_path / "cg"
+    (root / "systemd/system.slice/client.service").mkdir(parents=True)
+    result = _run_stop(tmp_path, root)
+    assert result.returncode == 0
+    assert "live processes" not in result.stderr
+
+
+def test_stop_reads_procs_content_not_just_presence(tmp_path):
+    """Zero-byte cgroup.procs is empty; a pid in it is not.
+
+    The kernel writes nothing at all for an empty group, so `-s` is the right
+    test here. Anything with bytes in it counts as a live member.
+    """
+    root = tmp_path / "cg"
+    unit = root / "systemd/system.slice/client.service"
+    unit.mkdir(parents=True)
+    (unit / "cgroup.procs").write_text("")
+    assert _run_stop(tmp_path, root).returncode == 0
+    (unit / "cgroup.procs").write_text("9999\n")
+    assert _run_stop(tmp_path, root).returncode == 1
+
+
+def test_generated_hooks_are_shell_valid(tmp_path, monkeypatch):
+    """All four script bodies must survive sh -n with the new branching."""
+    tree = tmp_path / "tree"
+    binary = tree / "runtime/bin/python3"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("fixture")
+    monkeypatch.setattr(module.subprocess, "run", lambda argv, **kwargs: None)
+    module.build(tree, tmp_path / "build", "0.4.3")
+    for name in ("preinst", "prerm", "postinst", "postrm"):
+        path = tmp_path / "build/root/DEBIAN" / name
+        subprocess.run(["sh", "-n", str(path)], check=True)
