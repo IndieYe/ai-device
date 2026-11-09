@@ -382,7 +382,58 @@ sudo cat "/Library/Application Support/ai-device-client-management/install-note"
 
 ### 用户登出后设备在中心侧显示离线
 
-预期行为。LaunchAgent 只在 GUI 登录会话中存在，登出即卸载。重新登录后约一分钟自动恢复。
+预期行为。LaunchAgent 只在 GUI 登录会话中存在，登出即卸载。
+
+### 重新登录后要等约一分钟客户端才起来
+
+**这是 macOS launchd 的行为，不是客户端故障，无需处理。**
+
+登录时 launchd 会把整个 `gui/<uid>` 用户域短暂置为 on-demand-only 模式，期间所有
+待启动的 job 一律挂起；约 60 秒后域退出该模式，挂起的 job 才集中拉起。客户端只是
+其中之一，同期 Apple 自家的 `usernoted`、`imagent`、Spotlight 索引进程同样被挂起。
+
+`RunAtLoad`、`KeepAlive`、`ProcessType` 都不改变这个行为——挂起发生在域一级，任何
+单个 job 的配置都绕不过。实测一次完整登录：
+
+```
+20:48:15.763  gui/501 entering bootstrap mode
+20:48:15.763  gui/501 entering ondemand mode
+20:48:15.765  pending spawn, domain in on-demand-only mode: ...（共 41 个 job）
+20:49:15.863  exiting ondemand mode                     ← 恰好 60 秒
+20:49:15.868  WILL_SPAWN → Successfully spawned ai-device-client-launcher[7692]
+```
+
+想确认当时确实处于这个状态，查 launchd 日志：
+
+```bash
+sudo log show --last 5m --predicate 'process == "launchd"' \
+  | grep -E 'ondemand mode|pending spawn.*ai-device|Successfully spawned ai-device'
+```
+
+看到 `domain in on-demand-only mode: local.ai-device.client` 就是本节描述的情况，
+等一分钟即可，不要重装或重新注册。
+
+> 如果超过两分钟仍未启动，那就不属于本节的正常延迟，按下一节排查。
+
+### 登录后等很久客户端仍不启动
+
+先排除上一节的正常延迟：确认登录已超过两分钟，且 launchd 日志里没有
+`domain in on-demand-only mode: local.ai-device.client`。之后按顺序查：
+
+```bash
+# 1. plist 是否存在（卸载后不会自动重建）
+ls -l ~/Library/LaunchAgents/local.ai-device.client.plist
+
+# 2. job 是否已加载，以及现在是什么状态
+launchctl print gui/$(id -u)/local.ai-device.client 2>&1 | head -20
+
+# 3. 注册记录是否还在
+sudo ls -l "/Library/Application Support/ai-device-client-management/"
+```
+
+- plist 不存在：曾执行过卸载，需重新安装并注册（第 2、4 节）。
+- `launchctl print` 报 `Could not find job`：plist 在但未加载，执行第 4 节的 `bootstrap`。
+- job 存在但反复起退：看 `installed` 与 `runs` 计数，再按"程序损坏"一节处理。
 
 ### 双击 PKG 没反应
 
