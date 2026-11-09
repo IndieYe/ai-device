@@ -292,3 +292,79 @@ python3 packages/device-runtime/scripts/build-client-deb.py \
 dev23 SHA256 `75b5bdcfa7bd685da69eb32f1a1925f67562067c4531627d3df4b034e9da55d9`；重新构建并在deb容器升级ready，PID4168。三目录逐一植入自定义旧run client服务定义，注册（含确认）和激活均拒绝、PID保持，试件清除后检查正常。实测日志 `/Users/kongkongye/.ai-assistant/logs/bash-output/20261104-144302-d21773.log`。全量926通过 `/tmp/device-ses14497-dev23-final-tests.log`；ruff/diff通过。
 
 原审核者ses-14507限定复核通过：原问题1按批准发现边界关闭，未发现直接回归。冻结 `/tmp/device-ses14497-conflict-review23-831a7x_f`，manifest SHA256 `8354f641b74f18cbdd7982c7e0d133fc5dcbc46c983c7065123ef08319f5195d`，8文件一致，仅两文件较前次变化；未独立重跑测试/验包。原问题2忙提示此前已关闭。不是Linux整体通过声明；任意离线自定义root仍需管理员确认，人工0.3.4登记、最终交付核对及提交集成仍未完成。无在途审核/后台任务，源码未提交，Mac未开始。clean仍dev22 PID450，不把其验收标成dev23。
+
+### RPM 脚本语义实测（2026-11-09，rockylinux:9 / RPM 4.16.1.3）
+
+阶段三需求文档要求先实测再实现，不能照抄 dpkg 语义。以下为实测输出，样本是 `noarch` 探针包，不是产品包。
+
+**调用顺序与参数**（`rpm -i` → `rpm -U` → `rpm -e`）：
+
+```
+### 首次安装
+PRE   v1 arg1=[1]
+POST  v1 arg1=[1]
+### 升级 1->2
+PRE   v2 arg1=[2]
+POST  v2 arg1=[2]
+PREUN v1 arg1=[1]
+POSTUN v1 arg1=[1]
+### 卸载
+PREUN v2 arg1=[0]
+POSTUN v2 arg1=[0]
+```
+
+`arg2` 在所有场景都未设置（脚本里的 `${2:-unset}` 始终输出 `unset`）。RPM 4.14/4.16 不传第二个参数，不要依据它判断。
+
+**`$1` 是实例计数，且升级时新包脚本看到的是升级后的总数：**
+
+| 场景 | `%pre` | `%post` | `%preun` | `%postun` |
+| --- | --- | --- | --- | --- |
+| 首次安装 | 1 | 1 | — | — |
+| 升级（新包） | **2** | **2** | — | — |
+| 升级（旧包） | — | — | **1** | **1** |
+| 卸载 | — | — | 0 | 0 |
+
+因此：
+- 判断「是否升级」：`%pre`/`%post` 里 `$1 -gt 1`；`%preun`/`%postun` 里 `$1 -ge 1`
+- 判断「彻底卸载」：`%preun`/`%postun` 里 `$1 -eq 0`
+
+**升级顺序是「新包先跑，旧包后停」**：
+
+```
+new %pre → [解包] → new %post → old %preun → old %postun
+```
+
+这是和 dpkg 最实质的差异。dpkg 是 `old-prerm upgrade → old-postrm upgrade → new-preinst upgrade → new-postinst configure`，即旧包先停、再装新包；RPM 相反。**后果**：不能在 `%preun` 里停服务——那时新包已经解开并跑过 `%post`，停掉的是刚启动的新版本。停止动作必须在**新包的 `%pre`**（解包之前）完成。
+
+**`%pre` 拒绝后原包完好**（忙拒绝的成立前提）：
+
+```
+before: version=1 payload=payload-1
+upgrade refused, rc=1
+  error: %prein(aiprobe-2-1) scriptlet failed, exit status 1
+  error: aiprobe-1-1: erase skipped
+after : version=1 payload=payload-1
+rpm -V: clean
+rpm -U --replacepkgs <旧包> -> 成功
+```
+
+`%pre` 失败时解包未开始、旧包未擦除，`rpm -V` 干净，`--replacepkgs` 重试可收敛。忙拒绝放在 `%pre` 是正确位置。注意：如果安装时用了 `--nodeps` 之类跳过，或 `%pre` 成功但解包中途失败，语义不同，不能外推。
+
+**`%post` 失败不会让 `rpm -U` 返回非零**：
+
+```
+POST v2 failing
+warning: %post(aiprobe-2-1) scriptlet failed, exit status 1
+```
+
+`rpm -U` 返回 **0**，包已是 v2、payload 已替换、`rpm -V` 干净，只有 warning。重跑 `--replacepkgs` 仍返回 0。
+
+这直接影响「重装可修复」的语义：**RPM 里 `%post` 失败是静默的**。如果 `%post` 负责启动服务或做 ready 检查，失败时调用方以为成功。可选项：
+
+- 在 `%post` 失败时写标记文件，由外部验收读取（但 RPM 不提供失败信号）
+- 把关键检查留在 `%pre`（会真正阻断）
+- 接受该限制并在文档写明，`ready` 由包外流程验证
+
+DEB 的 `postinst` 失败会让 dpkg 返回非零，行为不同。这是移植时必须显式决定的产品取舍，不能默认「照搬即可」。
+
+**环境说明**：Apple container，`rockylinux:9` 镜像（未固定 digest），容器内 `dnf install rpm-build` 获得 4.16.1.3。样本包为纯 `noarch`，不涉及真实 payload、systemd 或客户端进程。这是脚本语义证据，不是产品包验收。
