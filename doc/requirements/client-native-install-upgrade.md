@@ -392,7 +392,10 @@ macOS 已配置用户已登录时，升级必须正确卸载/加载该用户服�
 - ~~**登录后约 63 秒空窗**~~：已查清为 launchd 域级 `on-demand-only` 节流（`gui/<uid>` 整个域含 Apple 自家 job 一并挂起，恰好 60 秒后集中拉起），非客户端缺陷，无需修复；已写入 `docs/client-native-macos-guide.md`
 - ~~**旧路径最终清理**~~：旧 macOS 部署链（`launchd_deploy.py`、`instance launchd` 子命令、专属测试）已删除，净减 417 行，全量 2199 passed / 20 skipped。核对过程与保留理由见 `docs/client-native-legacy-deletion-review.md`；清单 `docs/client-native-legacy-inventory.md` 已同步
 - ~~**README / 正式交付文档 / 操作技能 / 版本一致性测试（交付物 6）**~~：根 README 补 macOS 指南并去除“阶段二进行中”过时表述；`packages/device-runtime/README.md` 完整包章节由“重构中 / 不提供 RPM / Mac 尚未实现”改为三平台现状表；`docs/device-delivery.md` 开头区分 bundle 实例与完整包两条路径；`skills/device-operations/SKILL.md` 修正两处不存在的 `doc/docs/` 路径并补指向两份指南；新增 3 项版本一致性测试（DEB/RPM 字符集分歧、发行版本交集、包版本独立于 `__version__`），全量 2202 passed / 20 skipped
-- 多用户、并发安装、非管理员路径、签名与公证
+- **并发安装**：preinstall 已改为 `mkdir` 原子占位，冲突明确拒绝并写入 `preinstall-token`
+  （`BUSY` / `RESIDUE`），10 进程实测 1 放行 9 拒绝；仍未串行化，胜者仍可能替换运行树。
+  多用户、非管理员路径未验证；签名与公证未完成。详见
+  `docs/client-native-macos-concurrent-install-design.md`
 
 旧未受管实例的升级退路（`upgrade_supervisor._runner_bound` 的 launchd 段）刻意保留，
 待旧实例全部退役后可单独评估，不属本次清理范围。

@@ -1,9 +1,10 @@
 # 并发安装互斥：设计方案与探针结论
 
-> 状态：**探针已验证，方案已定，未实施代码**。
+> 状态：**B1–B2 已实施（`fac99bb`），B3 与方案 D 已随指南更新完成**。
 > 对应未闭合项：`client-native-macos-development.md` 当前状态第 1 条、
 > `client-native-macos-installer-write-mutex.md` 第四节第 3 条。
 > 需求依据：`doc/requirements/client-native-install-upgrade.md` §9（新旧路径与并发）。
+> 实施差异：token 文件实际落在管理目录而非原设计的 `/var/tmp`，原因见 B2 节。
 
 ## 一、问题与实测证据
 
@@ -101,19 +102,24 @@ fi
 
 ### B2. 失败原因写入可见位置
 
-P5/P6 证明 stderr 不进终端，只写 stderr 等于用户看不到。改为三处：
+P5/P6 证明 stderr 不进终端，只写 stderr 等于用户看不到。改为：
 
 | 位置 | 内容 | 用途 |
 | --- | --- | --- |
 | `/var/log/install.log`（自动） | 脚本 stderr | 事后诊断，无需改代码 |
-| `/var/tmp/ai-device-client-install-token` | 失败 token | 运维可立即读取，不依赖日志格式 |
+| `.../ai-device-client-management/preinstall-token` | 失败 token | 运维可立即读取，不依赖日志格式 |
 | `.../ai-device-client-management/install-status` | 复用已有机制 | 与现有 postinstall 结果口径一致 |
+
+**与原设计的差异**：原计划写 `/var/tmp/ai-device-client-install-token`。读代码后发现
+`COMMIT_STATUS_DIR` 的注释已明确指出 `/var/tmp` 全局可写且开机不清理，本地用户可
+预置符号链接让 root 脚本写穿。改用管理目录；创建时用 `0700`，与 postinstall 一致，
+不因报错而放宽已有目录权限。
 
 ### B3. 指南明确告知去哪看
 
 用户指南故障处理补一条：安装报“脚本执行出错”时，先看 `/var/log/install.log` 与 `/var/tmp/ai-device-client-install-token`，再对照 token 含义。这是 P5 的直接后果：原因不在界面上。
 
-## 五、实施范围
+## 五、实施范围（已完成）
 
 | 文件 | 改动 |
 | --- | --- |
@@ -125,11 +131,13 @@ P5/P6 证明 stderr 不进终端，只写 stderr 等于用户看不到。改为�
 
 **不改**：`commit_staged_program` 原语、`RENAME_SWAP` 语义、升级协调器。并发问题在安装入口解决，不下推到发布原语。
 
-## 六、需要确认的问题
+## 六、决策记录
 
-1. **接受“并发时一方明确失败”而非“自动排队”？** 后者需要常驻 daemon，不建议。
-2. **是否连方案 D 一起做？** 文档声明并发不支持，成本近零。
-3. **是否现在实施 B1–B3？** 改动集中在构建脚本的 preinstall 生成与一处测试。
+三项均已决定：
+
+1. **目标定为“并发时一方明确失败”，不做排队。** 排队需常驻 daemon，与本地单用户自用定位不匹配。
+2. **连同方案 D 一起做**：用户指南已写明并发安装不受支持。
+3. **B1–B3 已实施**，见第八节。
 
 ## 七、明确不做
 
@@ -137,7 +145,27 @@ P5/P6 证明 stderr 不进终端，只写 stderr 等于用户看不到。改为�
 - 不修改 `commit_staged_program` 使其取锁（它无法验证并发，取锁会造成虚假保证）。
 - 不处理 Linux RPM/DEB 的并发：它们由包管理器自身互斥，RPM 侧另有 `client_package_stop.sh` 的忙检查；macOS 无等价机制才是问题所在。
 
-## 八、探针残留说明
+## 八、实施结果（`fac99bb`）
+
+实际改动与前述设计一致，差异仅有 token 位置（管理目录而非 `/var/tmp`）。
+
+| 验证项 | 结果 |
+| --- | --- |
+| 10 进程抢同一 stage | 1 放行、9 `BUSY`、0 误判为残留 |
+| 全新路径 | 放行，rc=0，目录被创建 |
+| 空目录已存在 | `BUSY`，rc=1 |
+| 非空目录 | `RESIDUE`，rc=1 |
+| 符号链接 | `RESIDUE`（not a directory），rc=1 |
+| 管理目录权限 | `0700`，未因报错放宽 |
+| 受影响测试 | 96 passed（build-client-pkg + nopayload）|
+| 全量测试 | **2204 passed / 20 skipped** |
+| ruff | 通过 |
+
+仍存在的边界：本方案让并发冲突**可检测、可说明**，不让并发安装排队。
+第二个安装器失败后，第一个仍可能已把程序树换成它自己的版本。
+要真正串行化需常驻 daemon 或安装器配合，本方案不做。
+
+## 九、探针残留说明
 
 探针包 `local.probe14497.test`、`local.probe14497.p2` 已 `pkgutil --forget`；
 `/tmp/probe14497*` 全部删除。设备当前状态与探针前一致：客户端 PID 7692 运行中，

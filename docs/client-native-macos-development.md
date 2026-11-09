@@ -22,11 +22,11 @@ Mac 侧代码包含 13 个 `client_macos_*.py` 模块、`scripts/build-client-pk
 
 仍未闭合的项：
 
-1. **Installer 写入期并发互斥**：preinstall 与 postinstall 是独立进程，脚本锁无法跨越 payload
-   写入窗口。真机并发安装两次时一成一败，失败方报模糊的“脚本执行出错”，`/opt` 下残留两个 stage。
-   当前结构靠“安装器写 stage 路径、postinstall 一次 rename”让运行路径不被写入，见
-   [`client-native-macos-installer-write-mutex.md`](client-native-macos-installer-write-mutex.md)。
-2. **多用户、非管理员路径、并发安装**未验证。
+1. **并发安装未串行化。** preinstall 已改为 `mkdir` 原子占位，冲突会被明确拒绝并写入
+   `preinstall-token`（`BUSY` / `RESIDUE` 两种），不再只有安装器通用文案。
+   但胜者仍可能把运行树换成自己的版本，两个安装器不会排队。
+   详见 [`client-native-macos-concurrent-install-design.md`](client-native-macos-concurrent-install-design.md)。
+2. **多用户、非管理员路径**未验证。
 3. **签名与公证**未完成，不能公开发布。
 
 > `pkgbuild` 的 5 条 `write: Permission denied` 已查明为固有 stderr 噪音，不再是阻塞项，

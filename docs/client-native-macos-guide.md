@@ -371,14 +371,44 @@ sudo installer -pkg ai-device-client-<version>-arm64.pkg -target /
 
 ### 升级失败但看不出原因
 
-安装界面只显示"脚本执行出错"，不看这两个文件无法判断：
+安装界面只显示“脚本执行出错”，**具体原因不在界面上**。这不是提示不全，而是 macOS
+安装器的行为：脚本写到 stderr 的内容会被路由到 `/var/log/install.log`，不显示给用户。
+
+按顺序查这三处：
 
 ```bash
+# 1. preinstall 阶段被拒绝的原因（最常见）
+sudo cat "/Library/Application Support/ai-device-client-management/preinstall-token"
+
+# 2. postinstall 阶段的结果与说明
 sudo cat "/Library/Application Support/ai-device-client-management/install-status"
 sudo cat "/Library/Application Support/ai-device-client-management/install-note"
+
+# 3. 安装器的完整日志
+sudo grep -a "ai-device" /var/log/install.log | tail -20
 ```
 
-`install-note` 为空通常表示失败发生在更早的门禁（如 stage 残留、程序树是符号链接、registration 存在但程序树缺失）。
+#### `preinstall-token` 的两个值
+
+| token | 含义 | 怎么办 |
+| --- | --- | --- |
+| `PROGRAM_INSTALL_BUSY_V1` | stage 目录被另一个安装器占着，它正在装 | 等它装完再重试，**不要删除那个目录** |
+| `PROGRAM_INSTALL_RESIDUE_V1` | stage 目录里有无法归属的内容 | 确认无安装在进行后，`sudo rm -rf` 掉该 stage 目录再重试 |
+
+`BUSY` 与 `RESIDUE` 的区别值得留意：前者说明**有并发安装正在进行**，删目录会破坏对方；
+后者说明是**历史残留**，不清理就会一直失败。搞反了会出问题。
+
+stage 目录名带版本与构建摘要，例如
+`/opt/ai-device-client-stage-0.4.0-eaf47863e9d4`，不同包的 stage 互不相同。
+
+#### `install-note` 为空时
+
+通常表示失败发生在更早的门禁（如程序树是符号链接、registration 存在但程序树缺失）。
+若 `preinstall-token` 也不存在，说明失败发生在 preinstall 之前的包校验阶段，
+此时只能看 `/var/log/install.log`。
+
+> 并发安装**不受支持**。请勿同时运行两个 `installer`，即使安装的是同一个包。
+> 上述 token 的作用是让冲突明确失败并说明原因，不是让并发安装变得安全。
 
 ### 用户登出后设备在中心侧显示离线
 

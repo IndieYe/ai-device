@@ -103,11 +103,16 @@ root 身份检查 → 一次调用 → 输出 token（`PROGRAM_COMMITTED_V1` / `
 1. **`RENAME_SWAP` 是交换，不是移动。** 旧树会留在 stage 路径。这需要调用方处理（清理或保留为回退证据），
    当前入口不删它——删除属于不可逆动作，不应由安装脚本顺手做。
 2. **命令行参数可能出现在进程列表中。** 路径本身不是凭证，但这是可观察性事实。
-3. **并发安装器未被排除。** 原子发布保证"要么旧树要么新树"，不保证两次并发安装的结果顺序。
-   真正的串行化仍需安装器/包管理器层面或管理锁，而那需要能跨进程持锁的调用方。
+3. **并发安装器：冲突已可检测，但仍未串行化。** 原子发布保证"要么旧树要么新树"，
+   不保证两次并发安装的结果顺序。
    实测（macminim6）：并发安装两次一成一败，失败方报“脚本执行出错”而非明确的“已有安装器在运行”，
-   `/opt` 下残留两个 stage 且程序树 `build_id` 属更早的包。即并发下状态会乱且失败原因不可读，
-   仍是未闭合项。
+   `/opt` 下残留两个 stage 且程序树 `build_id` 属更早的包。
+   **已缓解**：preinstall 改为 `mkdir` 原子占位，败者拿到 `PROGRAM_INSTALL_BUSY_V1`
+   或 `PROGRAM_INSTALL_RESIDUE_V1` 并写入管理目录的 `preinstall-token`，不再只能看到安装器通用文案。
+   10 进程抢同一 stage 实测：1 放行、9 拒绝。
+   仍未变的是：胜者仍可能把运行树换成自己的版本，两个安装器不会排队。
+   真正的串行化需要常驻 daemon，不在本设计范围内。详见
+   `client-native-macos-concurrent-install-design.md`。
 4. **已实测（版本 3 修正）。** shipping PKG（`build-client-pkg.py`）已在 macminim6 完成
    A→B 升级、忙碌拒绝、卸载重装与登录生命周期四项真机验收，postinstall 与
    `RENAME_SWAP` 均实际执行过。inspection-only 包（`build-client-nopayload-inspection.py`）
