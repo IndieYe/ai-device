@@ -113,28 +113,18 @@ def stage_native_sources(output):
         raise ValueError("no native sources staged into the client tree")
 
 
-def write_client_identity(output):
-    """Match version.py's runtime fingerprint without importing target code.
+def compute_client_identity(output):
+    """The identity digest alone, without touching the tree.
 
-    Inputs, mirroring device_runtime/version.py exactly:
-      1. every .py in the installed package;
-      2. every native executable this tree ships (NATIVE_IDENTITY_FILES),
-         by tree-relative name and byte content;
-      3. the native sources those binaries and the upgrade entry are built from
-         (NATIVE_IDENTITY_SOURCES), by tree-relative name and bytes.
-
-    The native binaries must be built before this runs; build() orders it that
-    way. Readiness compares this digest against the runtime's own, so a drift
-    between the two implementations is not cosmetic -- it makes every upgrade
-    fail to become ready. tests/test_client_tree_build.py pins them together.
-
-    A missing native binary is hashed as empty rather than raising: the digest
-    then differs from any real build, which is a truthful "this tree is not
-    complete" rather than a silent pass.
+    Shared by write_client_identity and rewrite_client_identity so the two
+    cannot drift. Two independent copies of this digest already exist (here and
+    in device_runtime/version.py) and a test pins them together; a third inside
+    this file would only add another chance to disagree.
     """
     import ast
     import re
 
+    output = Path(output)
     package = output / "runtime/lib/python3.13/site-packages/device_runtime"
     syntax = ast.parse((package / "__init__.py").read_text())
     versions = [
@@ -183,9 +173,70 @@ def write_client_identity(output):
             digest.update(len(content).to_bytes(8, "big") + content)
     else:
         digest.update(b"\x00")
-    identity = {"version": versions[0], "build_id": "sha256:" + digest.hexdigest()}
+    return {"version": versions[0], "build_id": "sha256:" + digest.hexdigest()}
+
+
+def write_client_identity(output):
+    """Match version.py's runtime fingerprint without importing target code.
+
+    Inputs, mirroring device_runtime/version.py exactly:
+      1. every .py in the installed package;
+      2. every native executable this tree ships (NATIVE_IDENTITY_FILES),
+         by tree-relative name and byte content;
+      3. the native sources those binaries and the upgrade entry are built from
+         (NATIVE_IDENTITY_SOURCES), by tree-relative name and bytes.
+
+    The native binaries must be built before this runs; build() orders it that
+    way. Readiness compares this digest against the runtime's own, so a drift
+    between the two implementations is not cosmetic -- it makes every upgrade
+    fail to become ready. tests/test_client_tree_build.py pins them together.
+
+    A missing native binary is hashed as empty rather than raising: the digest
+    then differs from any real build, which is a truthful "this tree is not
+    complete" rather than a silent pass.
+
+    Refuses to replace an existing identity: a first build must not silently
+    discard one that is already there. rewrite_client_identity is the
+    deliberate overwrite, for a tree that changed after it was written.
+    """
+    output = Path(output)
+    identity = compute_client_identity(output)
     with (output / "client-identity.json").open("x") as stream:
         stream.write(json.dumps(identity, separators=(",", ":")) + "\n")
+    return identity
+
+
+def rewrite_client_identity(output):
+    """Recompute and overwrite client-identity.json in an already-built tree.
+
+    Signing invalidates the digest. `codesign` rewrites bin/ai-device-client-
+    launcher and bin/ai-device-client-commit, and both are hashed into build_id
+    by design, so a signed tree stops matching its own recorded identity. The
+    running process then reports one digest and client-identity.json holds
+    another, readiness never becomes true, and an upgrade waits out its whole
+    deadline before reporting LOADED_NOT_READY -- with nothing in that message
+    pointing at signing.
+
+    Callers must order this between signing the native executables and taking
+    the dependency inventory: the digest covers the executables, and the
+    inventory covers this file.
+    """
+    output = Path(output)
+    path = output / "client-identity.json"
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"client identity is not a regular file: {path}")
+    # Compute before touching the file: a raised error must leave the previous
+    # identity in place. A tree with a missing identity is worse than one with a
+    # stale identity, because the installer cannot read a file that is not there
+    # while it can at least report a mismatch against one that is.
+    identity = compute_client_identity(output)
+    temporary = output / "client-identity.json.new"
+    temporary.write_text(json.dumps(identity, separators=(",", ":")) + "\n")
+    temporary.chmod(path.stat().st_mode & 0o777)
+    # Replace rather than truncate-and-write: a reader sampling mid-write would
+    # see a partial JSON document and report an identity failure it cannot
+    # explain.
+    temporary.replace(path)
     return identity
 
 

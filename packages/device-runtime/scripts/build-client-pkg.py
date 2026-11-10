@@ -28,6 +28,15 @@ _SPEC = importlib.util.spec_from_file_location(
 INVENTORY = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(INVENTORY)
 
+# Needed to rewrite client-identity.json after signing. Signing changes the
+# bytes of the two native executables the identity digest covers, so a signed
+# tree no longer matches the identity file it was built with.
+_TREE_SPEC = importlib.util.spec_from_file_location(
+    "client_tree_build", Path(__file__).with_name("build-client-tree.py")
+)
+TREE_BUILD = importlib.util.module_from_spec(_TREE_SPEC)
+_TREE_SPEC.loader.exec_module(TREE_BUILD)
+
 IDENTIFIER = "local.ai-device.client.inspection"
 # Installable builds must never share an identifier with the inspection product:
 # receipts are keyed by it, so a rehearsal install would be indistinguishable
@@ -1376,7 +1385,21 @@ def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
     if sign_identity:
         sign_payload(payload, sign_identity, run=run)
         verify_payload_signatures(payload, run=run)
-    upgrade_entry = None
+        # Signing rewrote the two native executables the identity digest covers,
+        # so the identity recorded when the tree was built no longer describes
+        # this payload. Left alone, the running process reports one digest and
+        # client-identity.json holds another, readiness never becomes true, and
+        # every upgrade waits out its full deadline before failing with
+        # LOADED_NOT_READY -- a message that says nothing about signing.
+        #
+        # It has to happen here, between the signature and stage_upgrade_entry:
+        # after signing, because the digest covers the signed bytes; before the
+        # inventory, because the inventory covers this file.
+        identity = TREE_BUILD.rewrite_client_identity(payload)
+        (output / "signing-identity.json").write_text(
+            json.dumps(identity, indent=2) + "\n"
+        )
+        upgrade_entry = None
     if mode != "inspection":
         upgrade_entry = stage_upgrade_entry(
             payload, output / "root", output / "upgrade-build", run=run,

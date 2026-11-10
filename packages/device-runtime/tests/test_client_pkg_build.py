@@ -1531,12 +1531,19 @@ def _signed_tree(builder, base, tmp_path):
     The shared fixture writes text bytes; sign_payload refuses a payload with
     no Mach-O files, which is the behaviour under test elsewhere. Signing tests
     need a tree that has some.
+
+    It also needs the installed package layout, because signing now rewrites
+    client-identity.json and that digest is computed from the .py files under
+    runtime/lib/python3.13/site-packages/device_runtime.
     """
     import shutil as _shutil
 
     target = tmp_path / "signed-tree"
     _shutil.copytree(base, target)
     _add_macho(target / "runtime/bin/python3")
+    package = target / "runtime/lib/python3.13/site-packages/device_runtime"
+    package.mkdir(parents=True, exist_ok=True)
+    (package / "__init__.py").write_text('__version__ = "0.3.4"\n')
     return target
 
 
@@ -1765,3 +1772,47 @@ def test_signed_and_unsigned_shipping_use_different_titles(builder):
     unsigned = ET.fromstring(builder.distribution("0.3.4.1", mode="shipping"))
     assert signed.find("title").text != unsigned.find("title").text
     assert "UNSIGNED" in unsigned.find("title").text
+
+
+def test_signing_rewrites_the_identity_to_match_the_signed_tree(builder, tree, tmp_path):
+    """The defect this exists to prevent, stated as an invariant.
+
+    Signing rewrites bin/ai-device-client-launcher and bin/ai-device-client-
+    commit, which are hashed into build_id. If client-identity.json keeps the
+    pre-signing digest, the running process reports one value and the file holds
+    another; readiness never becomes true and every upgrade times out with
+    LOADED_NOT_READY. Reproduced on macminim6: eaf47863 on disk, f8d54e56 from
+    the running process.
+    """
+    signed_tree = _signed_tree(builder, tree, tmp_path)
+    before = json.loads((signed_tree / "client-identity.json").read_text())["build_id"]
+
+    def run(argv, **kwargs):
+        if argv[0] == "/usr/bin/codesign" and "--sign" in argv:
+            # A real signature changes the file; simulate that so the digest has
+            # something different to cover.
+            target = Path(argv[-1])
+            target.write_bytes(target.read_bytes() + b"signature")
+        if argv[0] == "/usr/bin/xcrun" and "clang" in argv:
+            Path(argv[argv.index("-o") + 1]).write_bytes(b"entry")
+        return subprocess.CompletedProcess(
+            argv, 0, stdout=".\t40755\t0/0\n", stderr=""
+        )
+
+    builder.build(
+        signed_tree, tmp_path / "out", "0.3.4.1", mode="verification",
+        sign_identity="Developer ID Application: T (TEAM)", run=run,
+    )
+    payload = next(
+        p for p in (tmp_path / "out/root/opt").iterdir()
+        if p.name.startswith("ai-device-client-stage")
+    )
+    after = json.loads((payload / "client-identity.json").read_text())["build_id"]
+    assert after != before, "signing changed the native binaries; the identity must follow"
+    recorded = json.loads((tmp_path / "out/signing-identity.json").read_text())
+    assert recorded["build_id"] == after
+
+
+def test_identity_rewrite_refuses_a_missing_identity_file(builder, tmp_path):
+    with pytest.raises(ValueError, match="not a regular file"):
+        builder.TREE_BUILD.rewrite_client_identity(tmp_path)
