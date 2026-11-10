@@ -1477,3 +1477,291 @@ def test_symlinked_program_path_is_not_reported_as_an_orphan(tmp_path):
     # And it must not tell the operator to delete anything: the identity is
     # still valid here.
     assert "sudo rm" not in result.stderr
+
+
+# --- Signing and notarisation ------------------------------------------------
+#
+# These assert the order of operations and the refusals, not Apple's own
+# behaviour: codesign, productsign and notarytool are replaced by a recorder.
+# What they pin is the part that is ours to get wrong -- signing before the
+# embedded inventory is hashed, refusing incomplete credential sets, and never
+# labelling an unsigned artefact as a deliverable.
+
+FAKE_MACHO = b"\xcf\xfa\xed\xfe" + b"\x00" * 60
+
+
+def _record(calls, *, fail_on=None, output='{"status": "Accepted", "id": "sub-1"}'):
+    def run(argv, **kwargs):
+        calls.append(list(argv))
+        status = 1 if fail_on and fail_on in " ".join(argv) else 0
+        return subprocess.CompletedProcess(argv, status, stdout=output, stderr="")
+    return run
+
+
+def _add_macho(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(FAKE_MACHO)
+    return path
+
+
+def test_payload_binaries_detects_macho_by_magic(builder, tmp_path):
+    binary = _add_macho(tmp_path / "runtime/bin/python3.13")
+    (tmp_path / "runtime/lib/data.txt").parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "runtime/lib/data.txt").write_text("not code")
+    found = builder.payload_binaries(tmp_path)
+    assert found == [binary]
+
+
+def test_payload_binaries_returns_deepest_first(builder, tmp_path):
+    shallow = _add_macho(tmp_path / "a/binary")
+    deep = _add_macho(tmp_path / "a/b/c/d/binary")
+    found = builder.payload_binaries(tmp_path)
+    assert found.index(deep) < found.index(shallow)
+
+
+def test_payload_binaries_skips_symlinks(builder, tmp_path):
+    target = _add_macho(tmp_path / "real")
+    (tmp_path / "link").symlink_to(target)
+    assert builder.payload_binaries(tmp_path) == [target]
+
+
+def _signed_tree(builder, base, tmp_path):
+    """A copy of the fixture tree that actually contains code to sign.
+
+    The shared fixture writes text bytes; sign_payload refuses a payload with
+    no Mach-O files, which is the behaviour under test elsewhere. Signing tests
+    need a tree that has some.
+    """
+    import shutil as _shutil
+
+    target = tmp_path / "signed-tree"
+    _shutil.copytree(base, target)
+    _add_macho(target / "runtime/bin/python3")
+    return target
+
+
+def _recording_run(calls, *, listing=None, notary=None):
+    """Records argv and stands in for the toolchain.
+
+    clang is the one call whose output the builder inspects, so it has to leave
+    a file behind; everything else is judged by its exit status.
+    """
+    def run(argv, **kwargs):
+        calls.append(list(argv))
+        stdout = ".\t40755\t0/0\n"
+        if argv[0] == "/usr/bin/xcrun" and "clang" in argv:
+            Path(argv[argv.index("-o") + 1]).write_bytes(b"entry")
+        elif argv[0] == "/usr/bin/xcrun" and "notarytool" in argv:
+            stdout = notary or '{"status": "Accepted", "id": "sub-1"}'
+        elif argv[0] == "/usr/bin/security":
+            stdout = listing or ""
+        elif argv[0] == "/usr/bin/productsign":
+            Path(argv[-1]).write_bytes(b"signed")
+        return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
+    return run
+
+
+def test_signing_happens_before_the_inventory_is_hashed(builder, tree, tmp_path):
+    """The regression this ordering exists to prevent.
+
+    stage_upgrade_entry hashes the payload into the compiled entry. codesign
+    rewrites the bytes it signs, so signing afterwards would ship a table of
+    hashes that no longer describe the tree -- and the mismatch only surfaces
+    on a real install, as a refusal with nothing pointing back at this order.
+    """
+    signed_tree = _signed_tree(builder, tree, tmp_path)
+    order = []
+
+    original_inventory = builder.INVENTORY.inventory
+
+    def spy_inventory(path):
+        if "ai-device-client-stage" in str(path):
+            order.append("inventory")
+        return original_inventory(path)
+
+    builder.INVENTORY.inventory = spy_inventory
+    inner = _recording_run([])
+
+    def run(argv, **kwargs):
+        if argv[0] == "/usr/bin/codesign" and "--sign" in argv:
+            order.append("sign")
+        return inner(argv, **kwargs)
+
+    try:
+        builder.build(
+            signed_tree, tmp_path / "out", "0.3.4.1", mode="verification",
+            sign_identity="Developer ID Application: T (TEAM)", run=run,
+        )
+    finally:
+        builder.INVENTORY.inventory = original_inventory
+
+    assert "sign" in order, "the payload was never signed"
+    assert "inventory" in order, "the inventory was never taken"
+    assert order.index("sign") < order.index("inventory"), (
+        "signing must precede hashing, or the embedded table describes bytes "
+        f"that no longer exist; got {order}"
+    )
+
+
+def test_the_compiled_entry_is_signed_too(builder, tree, tmp_path):
+    """It is compiled after the payload sweep, so it needs its own call.
+
+    It is a Mach-O executable that runs as root at install time; leaving it out
+    of the sweep silently would be the worst of the three to miss.
+    """
+    signed_tree = _signed_tree(builder, tree, tmp_path)
+    calls = []
+    builder.build(
+        signed_tree, tmp_path / "out", "0.3.4.1", mode="verification",
+        sign_identity="Developer ID Application: T (TEAM)",
+        run=_recording_run(calls),
+    )
+    signed_paths = [
+        call[-1] for call in calls
+        if call[0] == "/usr/bin/codesign" and "--sign" in call
+    ]
+    assert any(builder.UPGRADE_ENTRY in path for path in signed_paths), (
+        f"no signature call targeted the compiled entry: {signed_paths}"
+    )
+
+
+def test_payload_without_macho_is_refused(builder, tmp_path):
+    (tmp_path / "data.txt").write_text("no code here")
+    with pytest.raises(ValueError, match="no Mach-O files"):
+        builder.sign_payload(tmp_path, "Developer ID Application: Test (TEAM)",
+                             run=_record([]))
+
+
+def test_failed_codesign_names_the_file(builder, tmp_path):
+    binary = _add_macho(tmp_path / "runtime/bin/python3")
+    with pytest.raises(ValueError, match="codesign failed") as error:
+        builder.sign_payload(
+            tmp_path, "Developer ID Application: Test (TEAM)",
+            run=_record([], fail_on="codesign"),
+        )
+    assert str(binary) in str(error.value)
+
+
+def test_signature_verification_failure_is_reported(builder, tmp_path):
+    _add_macho(tmp_path / "runtime/bin/python3")
+    with pytest.raises(ValueError, match="did not verify"):
+        builder.verify_payload_signatures(
+            tmp_path, run=_record([], fail_on="codesign")
+        )
+
+
+def test_application_identity_is_refused_for_packaging(builder):
+    """The mistake that costs an afternoon: productsign needs Installer."""
+    listing = '  1) ABC "Developer ID Application: Test (TEAM)"'
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, stdout=listing, stderr="")
+
+    with pytest.raises(ValueError, match="no Developer ID Installer identity"):
+        builder.check_installer_identity(
+            "Developer ID Application: Test (TEAM)", run=run
+        )
+
+
+def test_missing_identity_is_refused_before_productsign(builder):
+    with pytest.raises(ValueError, match="no valid identity matches"):
+        builder.check_installer_identity(
+            "Developer ID Installer: Test (TEAM)",
+            run=_record([], ),
+        )
+
+
+def test_installer_identity_present_is_accepted(builder):
+    listing = '  1) ABC "Developer ID Installer: Test (TEAM)"'
+    def run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 0, stdout=listing, stderr="")
+
+    assert builder.check_installer_identity(
+        "Developer ID Installer: Test (TEAM)", run=run
+    )
+
+
+def test_unnotarised_submission_is_refused(builder, tmp_path):
+    package = tmp_path / "x.pkg"
+    package.write_bytes(b"pkg")
+    with pytest.raises(ValueError, match="not accepted"):
+        builder.notarize(
+            package, "profile",
+            run=_record([], output='{"status": "Invalid", "id": "sub-9"}'),
+        )
+
+
+def test_notary_log_hint_appears_on_rejection(builder, tmp_path):
+    package = tmp_path / "x.pkg"
+    package.write_bytes(b"pkg")
+    with pytest.raises(ValueError, match="notarytool log sub-9"):
+        builder.notarize(
+            package, "profile",
+            run=_record([], output='{"status": "Invalid", "id": "sub-9"}'),
+        )
+
+
+def test_gatekeeper_still_refusing_after_staple_is_an_error(builder, tmp_path):
+    package = tmp_path / "x.pkg"
+    package.write_bytes(b"pkg")
+    with pytest.raises(ValueError, match="spctl still refuses"):
+        builder.notarize(
+            package, "profile", run=_record([], fail_on="spctl")
+        )
+
+
+def test_notary_profile_requires_a_signed_package(builder, tree, tmp_path):
+    with pytest.raises(ValueError, match="requires --installer-identity"):
+        builder.build(tree, tmp_path / "out", "0.3.4.1",
+                      notary_profile="profile")
+
+
+def test_installer_identity_requires_signed_payload(builder, tree, tmp_path):
+    with pytest.raises(ValueError, match="requires --sign-identity"):
+        builder.build(tree, tmp_path / "out", "0.3.4.1",
+                      installer_identity="Developer ID Installer: T (TEAM)")
+
+
+def test_inspection_build_refuses_signing(builder, tree, tmp_path):
+    with pytest.raises(ValueError, match="refuse installation"):
+        builder.build(tree, tmp_path / "out", "0.3.4.1",
+                      sign_identity="Developer ID Application: T (TEAM)")
+
+
+def test_unsigned_shipping_build_keeps_the_marker(builder, tree, tmp_path):
+    """A partial credential set must not downgrade the warning."""
+    signed_tree = _signed_tree(builder, tree, tmp_path)
+    result = builder.build(
+        signed_tree, tmp_path / "out", "0.3.4.1", mode="shipping",
+        sign_identity="Developer ID Application: T (TEAM)",
+        run=_recording_run([]),
+    )
+    assert (tmp_path / "out" / f"{result.name}.UNSIGNED.txt").is_file()
+    xml = ET.fromstring((tmp_path / "out/Distribution.xml").read_text())
+    assert "UNSIGNED" in xml.find("title").text
+
+
+def test_fully_signed_build_drops_the_unsigned_marker(builder, tree, tmp_path):
+    signed_tree = _signed_tree(builder, tree, tmp_path)
+    listing = '  1) ABC "Developer ID Installer: T (TEAM)"'
+    result = builder.build(
+        signed_tree, tmp_path / "out", "0.3.4.1", mode="shipping",
+        sign_identity="Developer ID Application: T (TEAM)",
+        installer_identity="Developer ID Installer: T (TEAM)",
+        notary_profile="profile",
+        run=_recording_run([], listing=listing),
+    )
+    assert not (tmp_path / "out" / f"{result.name}.UNSIGNED.txt").exists()
+    xml = ET.fromstring((tmp_path / "out/Distribution.xml").read_text())
+    assert xml.find("title").text == "AI Device Client"
+    welcome = (tmp_path / "out/resources/welcome.html").read_text()
+    assert "notarised" in welcome
+
+
+def test_signed_and_unsigned_shipping_use_different_titles(builder):
+    signed = ET.fromstring(builder.distribution("0.3.4.1", mode="shipping", signed=True))
+    unsigned = ET.fromstring(builder.distribution("0.3.4.1", mode="shipping"))
+    assert signed.find("title").text != unsigned.find("title").text
+    assert "UNSIGNED" in unsigned.find("title").text

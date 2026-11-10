@@ -657,7 +657,251 @@ exit 0
 """
 
 
-def distribution(version, *, mode="inspection"):
+# --- Signing and notarisation -------------------------------------------
+#
+# Three independent steps, three different authorities:
+#
+#   payload Mach-O files      Developer ID Application   codesign
+#   the .pkg itself           Developer ID Installer     productsign
+#   the notarisation ticket   Apple                      notarytool + stapler
+#
+# Neither step implies the next. productsign rejects an Application identity,
+# and notarisation rejects a package whose contents are unsigned even when the
+# outer signature is valid: the ticket covers what ships, not the wrapper.
+#
+# Order is load-bearing. The upgrade entry embeds an inventory of sha256 hashes
+# taken from the payload, and codesign rewrites the file it signs. Signing after
+# that inventory is compiled in would ship a table describing bytes which no
+# longer exist, and every install would then refuse at verify_resource_tree --
+# with a clean build, a valid signature, and no obvious connection between the
+# two.
+
+MACHO_MAGICS = frozenset({
+    b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe",   # 32-bit, either endian
+    b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe",   # 64-bit, either endian
+    b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca",   # universal
+})
+
+# Hardened runtime is not a preference here: notarytool refuses a submission
+# without it. Library validation is satisfied because every binary in the
+# payload carries the same Team ID, so the interpreter still loads its own
+# extension modules.
+SIGN_FLAGS = ("--force", "--options", "runtime", "--timestamp")
+
+
+def is_macho(path):
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(4) in MACHO_MAGICS
+    except OSError:
+        return False
+
+
+def payload_binaries(payload):
+    """Every Mach-O file under `payload`, deepest first.
+
+    The client ships flat dylibs and extension modules rather than frameworks,
+    so nothing in this tree seals other code and the order does not change the
+    result today. Deepest-first costs nothing and stays correct if a bundle is
+    ever added.
+    """
+    payload = Path(payload)
+    found = [
+        path
+        for root, _dirs, names in os.walk(payload)
+        for path in (Path(root) / name for name in names)
+        if not path.is_symlink() and is_macho(path)
+    ]
+    return sorted(found, key=lambda p: (-len(p.parts), str(p)))
+
+
+def sign_file(path, identity, *, run=None):
+    execute = run or subprocess.run
+    result = execute(
+        ["/usr/bin/codesign", "--sign", identity, *SIGN_FLAGS, str(path)],
+        check=False, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise ValueError(
+            f"codesign failed for {path} (status {result.returncode}): {detail}"
+        )
+    return path
+
+
+def sign_payload(payload, identity, *, run=None):
+    binaries = payload_binaries(payload)
+    if not binaries:
+        raise ValueError(
+            f"no Mach-O files under {payload}; refusing to report a signed "
+            "payload that carries no code"
+        )
+    for binary in binaries:
+        sign_file(binary, identity, run=run)
+    return binaries
+
+
+def verify_payload_signatures(payload, *, run=None):
+    """Check what was just signed instead of trusting the exit statuses.
+
+    codesign reports success for the file it was handed; it cannot know whether
+    the result still loads. This only proves the signature is present and
+    structurally valid, which is what a later notarisation refusal would
+    otherwise be the first to discover.
+    """
+    execute = run or subprocess.run
+    binaries = payload_binaries(payload)
+    for binary in binaries:
+        result = execute(
+            ["/usr/bin/codesign", "--verify", "--strict", str(binary)],
+            check=False, capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            raise ValueError(
+                f"signature did not verify for {binary.relative_to(payload)} "
+                f"(status {result.returncode}): {detail}"
+            )
+    return len(binaries)
+
+
+def check_installer_identity(identity, *, run=None):
+    """Fail before productsign with the actual reason.
+
+    This is the mistake that costs an afternoon: the keychain holds a Developer
+    ID Application certificate, productsign wants a Developer ID Installer one,
+    and the raw error does not say so.
+    """
+    execute = run or subprocess.run
+    result = execute(
+        ["/usr/bin/security", "find-identity", "-v", "-p", "basic"],
+        check=False, capture_output=True, text=True,
+    )
+    listed = result.stdout or ""
+    if identity not in listed:
+        raise ValueError(
+            f"no valid identity matches {identity!r}; productsign needs a "
+            "Developer ID Installer certificate in the login keychain"
+        )
+    if "Developer ID Installer" not in listed:
+        raise ValueError(
+            "the keychain has no Developer ID Installer identity. productsign "
+            "cannot sign a package with Developer ID Application: that is a "
+            "different certificate, issued for the same Team ID, and the two "
+            "are not interchangeable."
+        )
+    return True
+
+
+def sign_package(package, identity, *, run=None):
+    execute = run or subprocess.run
+    package = Path(package)
+    signed = package.with_name(package.name + ".signed")
+    if signed.exists():
+        signed.unlink()
+    result = execute(
+        ["/usr/bin/productsign", "--sign", identity, str(package), str(signed)],
+        check=False, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        if signed.exists():
+            signed.unlink()
+        detail = (result.stderr or result.stdout or "").strip()
+        raise ValueError(
+            f"productsign failed (status {result.returncode}): {detail}"
+        )
+    if not signed.is_file():
+        raise ValueError("productsign reported success but produced no package")
+    # productsign refuses to overwrite its input, so the result is swapped in
+    # only after it exists. The original is gone at this point by design: the
+    # caller asked for a signed deliverable, not for two artefacts where one of
+    # them silently is not the one being shipped.
+    signed.replace(package)
+    verify = execute(
+        ["/usr/sbin/pkgutil", "--check-signature", str(package)],
+        check=False, capture_output=True, text=True,
+    )
+    if verify.returncode != 0:
+        detail = (verify.stdout or verify.stderr or "").strip()
+        raise ValueError(f"package signature did not verify: {detail}")
+    return package
+
+
+def notarize(package, profile, *, run=None):
+    """Submit, wait, staple, and re-check.
+
+    stapler runs on the local package, not on the submission: Apple returns a
+    ticket, and the ticket only reaches users if it is attached to the artefact
+    they download. spctl then answers the question a user would ask -- can this
+    install without an overrides dance -- rather than the question the
+    submission answered.
+    """
+    execute = run or subprocess.run
+    package = Path(package)
+    submitted = execute(
+        ["/usr/bin/xcrun", "notarytool", "submit", str(package),
+         "--keychain-profile", profile, "--wait", "--output-format", "json"],
+        check=False, capture_output=True, text=True,
+    )
+    if submitted.returncode != 0:
+        detail = (submitted.stderr or submitted.stdout or "").strip()
+        raise ValueError(
+            f"notarytool submit failed (status {submitted.returncode}): {detail}"
+        )
+    try:
+        verdict = json.loads(submitted.stdout or "{}")
+    except json.JSONDecodeError as error:
+        raise ValueError(
+            f"notarytool returned output that is not JSON: {error}"
+        ) from error
+    status = verdict.get("status")
+    if status != "Accepted":
+        submission = verdict.get("id")
+        raise ValueError(
+            f"notarisation was not accepted (status {status!r}, submission "
+            f"{submission!r}); the reason is in `xcrun notarytool log "
+            f"{submission} --keychain-profile {profile}`"
+        )
+    stapled = execute(
+        ["/usr/bin/xcrun", "stapler", "staple", str(package)],
+        check=False, capture_output=True, text=True,
+    )
+    if stapled.returncode != 0:
+        detail = (stapled.stderr or stapled.stdout or "").strip()
+        raise ValueError(
+            f"stapler failed (status {stapled.returncode}): {detail}. The "
+            "package was accepted but carries no ticket, so Gatekeeper will "
+            "still refuse it offline."
+        )
+    accepted = execute(
+        ["/usr/sbin/spctl", "-a", "-vvv", "-t", "install", str(package)],
+        check=False, capture_output=True, text=True,
+    )
+    if accepted.returncode != 0:
+        detail = (accepted.stdout or accepted.stderr or "").strip()
+        raise ValueError(
+            f"spctl still refuses the package after stapling: {detail}"
+        )
+    return verdict
+
+
+SIGNED_WELCOME = """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+body { font: 13px -apple-system, sans-serif; margin: 0; }
+h2 { font-size: 14px; margin: 0 0 8px; }
+p { margin: 0 0 8px; }
+code { font-family: ui-monospace, monospace; font-size: 12px; }
+</style></head><body>
+<h2>AI Device Client</h2>
+<p>This installer is signed with a Developer ID certificate and notarised by
+Apple, so it installs without a Gatekeeper override.</p>
+<p>After installation the client still has to be configured and registered
+before it can serve this machine. Installation alone does not start it.</p>
+</body></html>
+"""
+
+
+def distribution(version, *, mode="inspection", signed=False):
     """Build the Distribution.xml for one of four deliberately distinct products.
 
     inspection  — refuses at both the product and the component level. The
@@ -686,13 +930,22 @@ def distribution(version, *, mode="inspection"):
     }[mode]
     title = {
         "inspection": "AI Device Client — inspection only",
-        "verification": "AI Device Client — VERIFICATION BUILD, not for release",
+        "verification": (
+            "AI Device Client — VERIFICATION BUILD (signed), not for release"
+            if signed
+            else "AI Device Client — VERIFICATION BUILD, not for release"
+        ),
         "stage_only": "AI Device Client — VERIFICATION stage-only, not for release",
         # Requirement 11: a local development package may be unsigned but must
         # say so. The title is the one string an ordinary user always sees, and
         # it is what distinguishes this artifact from a signed public release --
-        # the filename deliberately carries no mode word.
-        "shipping": "AI Device Client — UNSIGNED development build",
+        # the filename deliberately carries no mode word. Once signed and
+        # notarised the qualifier is wrong and has to go: a build that claims to
+        # be unsigned after being signed is just as misleading as the reverse.
+        "shipping": (
+            "AI Device Client" if signed
+            else "AI Device Client — UNSIGNED development build"
+        ),
     }[mode]
     root = ET.Element("installer-gui-script", {"minSpecVersion": "2"})
     ET.SubElement(root, "title").text = title
@@ -1023,9 +1276,29 @@ def build_upgrade_payload(tree, output, *, run=None):
 
 
 def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
-          stage=None, mode="inspection"):
+          stage=None, mode="inspection", sign_identity=None,
+          installer_identity=None, notary_profile=None):
     if mode not in MODES:
         raise ValueError(f"unknown package mode: {mode!r}")
+    # Each of these three implies the ones before it. Refusing the combination
+    # up front keeps the failure at the command line instead of at step 40 of a
+    # build, and keeps a half-signed artefact from being produced at all.
+    if installer_identity and not sign_identity:
+        raise ValueError(
+            "--installer-identity requires --sign-identity: a signed package "
+            "whose contents are unsigned is refused by notarisation and is not "
+            "a deliverable"
+        )
+    if notary_profile and not installer_identity:
+        raise ValueError(
+            "--notary-profile requires --installer-identity: notarisation only "
+            "applies to a signed package"
+        )
+    if (sign_identity or installer_identity or notary_profile) and mode == "inspection":
+        raise ValueError(
+            "inspection builds refuse installation; signing one would suggest "
+            "it is installable"
+        )
     if (platform.system(), platform.machine()) != ("Darwin", "arm64"):
         raise ValueError("PKG construction requires native macOS arm64")
     if not re.fullmatch(r"[0-9]+(?:\.[0-9]+){0,3}", version):
@@ -1096,11 +1369,25 @@ def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
     # tree does not have, and verify_resource_tree requires an exact entry count.
     # The result was a package that built and signed cleanly and then refused
     # every install on real hardware. The manifest must describe what ships.
+    # Sign before the inventory, not after. stage_upgrade_entry hashes this
+    # payload into the compiled entry, and codesign rewrites the bytes of what
+    # it signs, so the reverse order ships a table of hashes which no longer
+    # describe the tree -- and the failure only appears on a real install.
+    if sign_identity:
+        sign_payload(payload, sign_identity, run=run)
+        verify_payload_signatures(payload, run=run)
+    upgrade_entry = None
     if mode != "inspection":
-        stage_upgrade_entry(
+        upgrade_entry = stage_upgrade_entry(
             payload, output / "root", output / "upgrade-build", run=run,
             entry_name=staged_entry_name(stage),
         )
+        # The entry is compiled here, so it cannot be part of the payload sweep
+        # above. It is a Mach-O executable that runs as root at install time,
+        # which makes it the last file that should be left unsigned.
+        if sign_identity:
+            sign_file(upgrade_entry, sign_identity, run=run)
+            verify_payload_signatures(upgrade_entry.parent, run=run)
     scripts = output / "scripts"
     scripts.mkdir()
     preinstall = scripts / "preinstall"
@@ -1133,8 +1420,12 @@ def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
             )
         )
     postinstall.chmod(0o755)
+    # A package is only a deliverable when all three steps ran. Anything less
+    # keeps the unsigned marker and the unsigned title, because "signed but not
+    # notarised" and "not signed at all" fail in the same place for a user.
+    delivered = bool(sign_identity and installer_identity and notary_profile)
     dist = output / "Distribution.xml"
-    dist.write_text(distribution(version, mode=mode))
+    dist.write_text(distribution(version, mode=mode, signed=delivered))
     resources = None
     if mode == "shipping":
         # productbuild only embeds a welcome page when it is found through
@@ -1143,7 +1434,9 @@ def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
         # nothing. Keep it in its own directory so nothing else is swept in.
         resources = output / "resources"
         resources.mkdir(exist_ok=True)
-        (resources / "welcome.html").write_text(UNSIGNED_WELCOME)
+        (resources / "welcome.html").write_text(
+            SIGNED_WELCOME if delivered else UNSIGNED_WELCOME
+        )
     identifier = {
         "inspection": IDENTIFIER,
         "verification": VERIFICATION_IDENTIFIER,
@@ -1234,7 +1527,12 @@ def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
         ],
         check=True,
     )
-    if mode == "shipping":
+    if installer_identity:
+        check_installer_identity(installer_identity, run=run)
+        sign_package(result, installer_identity, run=run)
+    if notary_profile:
+        notarize(result, notary_profile, run=run)
+    if mode == "shipping" and not delivered:
         # The artifact travels outside this directory, so the marker goes with
         # it: whoever picks up the .pkg must not have to open the installer or
         # read the build script to learn it is unsigned.
@@ -1264,10 +1562,43 @@ if __name__ == "__main__":
         "entry still refuses a busy instance and requires an explicit "
         "acknowledgement when invoked.",
     )
+    parser.add_argument(
+        "--sign-identity",
+        help="Developer ID Application identity used to sign every Mach-O file "
+        "in the payload, e.g. 'Developer ID Application: Name (TEAMID)'. "
+        "Without it the payload ships unsigned.",
+    )
+    parser.add_argument(
+        "--installer-identity",
+        help="Developer ID Installer identity used by productsign for the .pkg "
+        "itself. This is a different certificate from --sign-identity and is "
+        "required for anything Apple will notarise.",
+    )
+    parser.add_argument(
+        "--notary-profile",
+        help="notarytool keychain profile created with 'xcrun notarytool "
+        "store-credentials'. Credentials stay in the keychain; only this name "
+        "is passed on the command line.",
+    )
     args = parser.parse_args()
     if args.upgrade_entry:
         if args.mode != "inspection":
             parser.error("--upgrade-entry is a separate product; it takes no --mode")
+        if args.sign_identity or args.installer_identity or args.notary_profile:
+            parser.error(
+                "--upgrade-entry emits a bare entry, not an installable package; "
+                "there is nothing to sign"
+            )
         print(build_upgrade_payload(args.tree, args.output))
         raise SystemExit(0)
-    print(build(args.tree, args.output, args.version, mode=args.mode))
+    print(
+        build(
+            args.tree,
+            args.output,
+            args.version,
+            mode=args.mode,
+            sign_identity=args.sign_identity,
+            installer_identity=args.installer_identity,
+            notary_profile=args.notary_profile,
+        )
+    )
