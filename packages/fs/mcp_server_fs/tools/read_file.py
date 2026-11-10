@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from typing import Literal, Optional
+
 from fastmcp import FastMCP
 from fastmcp.tools.tool import ToolResult
+
 from .. import core
-from typing import Literal, Optional
 from ..defaults import DEFAULT_MAX_CHARS
+from .cancellable import register_cancellable_tool
 from .results import to_tool_result
 
 
@@ -39,4 +42,4 @@ def read_file(
 
 def register_tool(mcp: FastMCP):
     """Register the read_file tool."""
-    return mcp.tool()(read_file)
+    return register_cancellable_tool(mcp, read_file)

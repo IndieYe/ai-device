@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from fastmcp import FastMCP
 from fastmcp.tools.tool import ToolResult
+
 from .. import core
+from .cancellable import register_cancellable_tool
 from .results import to_tool_result
 
 
@@ -35,4 +37,4 @@ def write_file(path: str, content: str) -> ToolResult:
 
 def register_tool(mcp: FastMCP):
     """Register the write_file tool."""
-    return mcp.tool()(write_file)
+    return register_cancellable_tool(mcp, write_file)

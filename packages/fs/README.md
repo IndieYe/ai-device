@@ -94,6 +94,8 @@ callTool('read_file', { path: '/path/to/file.txt' });
 
 文本编辑工具返回结构化 JSON。`read_image` 成功时返回简短文本、标准 MCP `ImageContent` 和不含 Base64 的图片元数据；失败时返回稳定的 `error.code + error.message + error.details` 结构。
 
+MCP 请求被取消时，服务停止等待该请求并保持连接可用；已经在线程中开始的文件操作可能继续完成。取消不会撤销已产生的文件修改，结果未知时应先核对文件内容，不要盲目重试。
+
 所有工具固定操作服务进程所在机器的文件系统。工具的 SSH `host` 参数已删除；携带该参数的旧请求（包括 null 或空字符串）会在文件操作开始前被拒绝，不会改为本地执行。
 
 `edit_file` 和 `insert_file` 默认不会返回 diff。只有显式传入 `include_diff=true` 时才会附带 diff；非必要情况下请保持关闭，以避免增加不必要的 token 消耗。

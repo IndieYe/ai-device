@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from fastmcp import FastMCP
 from fastmcp.tools.tool import ToolResult
+
 from .. import core
+from .cancellable import register_cancellable_tool
 from .results import to_tool_result
 
 
@@ -22,4 +24,4 @@ def apply_patch(patch: str, dry_run: bool = False) -> ToolResult:
 
 def register_tool(mcp: FastMCP):
     """Register the apply_patch tool."""
-    return mcp.tool()(apply_patch)
+    return register_cancellable_tool(mcp, apply_patch)

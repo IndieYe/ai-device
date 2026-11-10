@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from fastmcp import FastMCP
 from fastmcp.tools.tool import ToolResult
+
 from .. import core
 from ..image_utils import DEFAULT_MAX_IMAGE_BYTES, ImageReadError
-from .results import to_image_tool_result, raise_image_tool_error
+from .cancellable import register_cancellable_tool
+from .results import raise_image_tool_error, to_image_tool_result
 
 
 def read_image(path: str, max_bytes: int = DEFAULT_MAX_IMAGE_BYTES) -> ToolResult:
@@ -27,4 +29,4 @@ def read_image(path: str, max_bytes: int = DEFAULT_MAX_IMAGE_BYTES) -> ToolResul
 
 def register_tool(mcp: FastMCP):
     """Register the read_image tool."""
-    return mcp.tool()(read_image)
+    return register_cancellable_tool(mcp, read_image)

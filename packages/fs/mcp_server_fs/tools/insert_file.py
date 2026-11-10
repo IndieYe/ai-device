@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 from fastmcp import FastMCP
 from fastmcp.tools.tool import ToolResult
+
 from .. import core
-from typing import Optional
 from ..config import TEMP_DIR
+from .cancellable import register_cancellable_tool
 from .results import to_tool_result
 
 
@@ -63,4 +66,4 @@ def insert_file(
 
 def register_tool(mcp: FastMCP):
     """Register the insert_file tool."""
-    return mcp.tool()(insert_file)
+    return register_cancellable_tool(mcp, insert_file)

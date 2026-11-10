@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from fastmcp import FastMCP
 from fastmcp.tools.tool import ToolResult
+from pydantic import BaseModel, ConfigDict, Field
+
 from .. import core
 from ..config import TEMP_DIR
+from .cancellable import register_cancellable_tool
 from .results import to_tool_result
-from pydantic import BaseModel, ConfigDict, Field
 
 
 class EditOperation(BaseModel):
@@ -59,4 +61,4 @@ def edit_file(
 
 def register_tool(mcp: FastMCP):
     """Register the edit_file tool."""
-    return mcp.tool()(edit_file)
+    return register_cancellable_tool(mcp, edit_file)
