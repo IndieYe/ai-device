@@ -851,7 +851,7 @@ security add-certificates -k ~/Library/Keychains/login.keychain-db /tmp/devidg2.
 凭证存进 keychain，命令只引用 profile 名称，密钥内容不进命令行、不进日志。
 
 ```bash
-xcrun notarytool store-credentials "aidevice-notary" \
+xcrun notarytool store-credentials "aidevice" \
   --key /path/to/AuthKey_XXXXXXXXXX.p8 \
   --key-id XXXXXXXXXX \
   --issuer 00000000-0000-0000-0000-000000000000
@@ -860,7 +860,7 @@ xcrun notarytool store-credentials "aidevice-notary" \
 `.p8` 只能从 Apple 下载一次，存好。验证 profile 可用：
 
 ```bash
-xcrun notarytool history --keychain-profile aidevice-notary
+xcrun notarytool history --keychain-profile aidevice
 ```
 
 ### 完整签名构建
@@ -875,7 +875,7 @@ uv run python scripts/build-client-pkg.py \
   --mode shipping \
   --sign-identity "Developer ID Application: yuexiang feng (ATZDSN35HB)" \
   --installer-identity "Developer ID Installer: yuexiang feng (ATZDSN35HB)" \
-  --notary-profile aidevice-notary
+  --notary-profile aidevice
 ```
 
 三个参数相互依赖，顺序给错会在命令行直接报错，不会产出半成品：
@@ -903,10 +903,10 @@ pkgutil --check-signature /path/to/output/ai-device-client-0.4.3-arm64.pkg
 
 # 4. 单独提交公证
 xcrun notarytool submit /path/to/output/ai-device-client-0.4.3-arm64.pkg \
-  --keychain-profile aidevice-notary --wait
+  --keychain-profile aidevice --wait
 
 # 5. 被拒时读日志（给出的是 JSON，含每个文件的拒绝原因）
-xcrun notarytool log <submission-id> --keychain-profile aidevice-notary
+xcrun notarytool log <submission-id> --keychain-profile aidevice
 
 # 6. 装订并通过后验证
 xcrun stapler staple /path/to/output/ai-device-client-0.4.3-arm64.pkg
@@ -928,7 +928,7 @@ spctl -a -vvv -t install /path/to/output/ai-device-client-0.4.3-arm64.pkg
 测试 `test_signing_happens_before_the_inventory_is_hashed` 固定这个顺序，
 把签名挪到清单之后会失败。
 
-### 必须用 GUI 终端执行
+### 私钥访问：先解决授权，再谈会话类型
 
 签名要访问 login keychain 里的私钥，而 keychain 解锁状态按会话隔离。
 SSH 会话和 system 域的后台服务都拿不到 GUI 会话的授权，表现为
@@ -939,8 +939,13 @@ s.bin: errSecInternalComponent
 ```
 
 这不是证书坏了。`codesign -s -`（adhoc，不需要私钥）能成功就说明工具链正常，
-问题只在私钥访问。**签名构建所以在 macmini 本机屏幕或屏幕共享的终端里跑，
-不要在 SSH 里跑。**
+问题只在私钥访问。
+
+实测补充（2026-11-10）：非 GUI 会话不是绝对不可签。在 GUI 会话里首次
+`productsign` 时选一次「始终允许」，系统会为该进程持久授权，之后同一
+进程族再签名不再弹窗，耗时从挂起 4 分钟以上降到 0.4 秒。反过来说，
+第一次在非 GUI 会话里签会静默挂起等弹窗，看起来像死锁而不是报错——
+遇到无输出的 `productsign`，先查是不是授权弹窗无人应答，不要直接归因钥匙串损坏。
 
 如果 GUI 终端里仍然失败，把私钥加入 partition list 允许指定工具免弹窗访问：
 
@@ -952,9 +957,33 @@ security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
 这条会提示输入登录密码，密码只在本机 keychain 内传递。不要写成 `-k <密码>`，
 那会把密码留在 shell 历史里。
 
-### 未验证的部分
+### 已验证的部分
 
-- 41 个 Mach-O 里包含 PIL 的 `.dylibs` 嵌套依赖，hardened runtime 下是否
-  全部能正常加载，没有实测过。公证被拒时这里是最可能的原因。
-- 出包后没有做过真实安装验收。签名不改变安装逻辑，但也没有证据说明它不影响。
-- `.p8` 凭证轮换、证书到期（Developer ID 有效期通常 5 年）未纳入流程。
+2026-11-10 首次跑通完整链路，产物
+`ai-device-client-0.4.3-arm64-verification.pkg`：
+
+```
+外层签名  pkgutil --check-signature  → signed by a developer certificate
+公证      notarytool submit --wait   → Accepted（59 秒）
+粘票      stapler staple / validate  → worked
+Gatekeeper spctl -a -vvv -t install  → accepted, source=Notarized Developer ID
+内层签名  41/41 Mach-O codesign --verify --strict 通过
+identity  树内 JSON = 独立重算 = payload 自带 Python 运行时，三者一致
+```
+
+关键是 identity 三项一致：签名前 `926f7eff`，签名后 `4a30aff4`，
+说明 `rewrite_client_identity` 按签名后的字节重算了身份。这一项不过，
+升级会在 ready 校验阶段被拒——正是 2026-11-10 12:28 那次失败的根因。
+
+PIL 的嵌套 `.dylibs` 在 hardened runtime 下加载正常（`webp=true`），
+公证接受也印证了这一点。
+
+### 仍未覆盖
+
+- `shipping` 模式未出包；上面验证的都是 `verification` 模式。
+- 签名包未做真机安装验收。签名不改变安装逻辑，但也没有证据说明不影响。
+- `.p8` 凭证轮换、证书到期（Developer ID Installer 有效期到 2027-12-10）
+  未纳入流程。
+- 外层签名后 stage 路径仍按签名前 identity 派生
+  （`ai-device-client-stage-0.4.3-926f7eff1563`），与包内 JSON 的
+  `4a30aff4` 不一致。目前只影响目录命名，未发现依赖该名称做身份比较的代码。
