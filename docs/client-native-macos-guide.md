@@ -39,21 +39,31 @@ sudo installer -pkg ai-device-client-<version>-arm64.pkg -target /
 预期输出：
 
 ```
-installer: Package name is AI Device Client — UNSIGNED development build
+installer: Package name is AI Device Client
 installer: Upgrading at base path /
 installer: The upgrade was successful.
 ```
 
 此时服务尚未配置，`launchctl print gui/$(id -u)/local.ai-device.client` 会报 `Could not find job`，这是正常的——服务定义还没创建。
 
-> **不要双击 .pkg。** 当前包未签名未公证，带 quarantine 属性的下载副本会被 Gatekeeper 拦下：Installer 会挂起，payload 根本不会写入，安装实际没有发生，但界面可能只显示"正在验证"。
->
-> 必须从命令行安装。若包来自下载，先清除隔离属性：
+**签名状态分两种，行为不同：**
+
+| 包 | 已签名并公证 | 未签名开发包 |
+| --- | --- | --- |
+| 标题 | `AI Device Client` | `AI Device Client — UNSIGNED development build` |
+| 产物旁警示 | 无 | 有 `UNSIGNED.txt` |
+| 双击 .pkg | 可以 | **不可以** |
+| `spctl -a -vvv -t install` | `accepted, Notarized Developer ID` | `rejected, no usable signature` |
+| 命令行安装 | 可以 | 可以 |
+
+> **未签名包不要双击。** 带 quarantine 属性时会被 Gatekeeper 拦下：Installer 会挂起，payload 根本不会写入，安装实际没有发生，但界面可能只显示"正在验证"。此时必须从命令行安装，并先清除隔离属性：
 >
 > ```bash
 > xattr -d com.apple.quarantine ai-device-client-<version>-arm64.pkg
 > sudo installer -pkg ai-device-client-<version>-arm64.pkg -target /
 > ```
+>
+> 已签名并公证的包带 quarantine 双击也属正常路径，不需要清属性。
 
 > 包要求 macOS 11.0 或更高、arm64。这是包内原生组件（launcher 与 commit）的构建目标。
 
@@ -200,6 +210,40 @@ sudo /opt/ai-device-client-upgrade/installer-inspection \
 pkgutil --pkg-info local.ai-device.client
 ```
 
+### 连接日志
+
+launchd 把 stdout 与 stderr 都重定向到同一个文件：
+
+```bash
+cat ~/Library/Logs/ai-device-client/client.log
+```
+
+正常上线时只有一行：
+
+```
+ai-device-client: connected to wss://<center>/v1/devices/<device-id>/connect
+```
+
+**这行日志是判断设备是否真的连上的唯一本地依据。** 进程存在不等于连上，
+TCP 列为 ESTABLISHED 也不等于中心已接纳（welcome 帧验证通过才打印这行）。
+
+日志只在 **连接状态发生变化** 时写入，不是每秒刷。去重依据是状态而非文本，
+所以 DNS 解析失败这类每秒重复的故障不会把日志写爆。
+
+断开时会追加一行，带异常类型与消息：
+
+```
+ai-device-client: disconnected: <ExcType>: <message>; retrying every <n>s
+```
+
+两个运维注意点：
+
+- **文件没有轮转机制。** 持续连接抖动会持续追写，长期运行应自查文件大小，
+  必要时手动截断或压缩归档。当前包不提供自动轮转。
+- **异常消息原样写入。** 断开行包含底层异常的字符串形式，可能带有 URL 或
+  网络栈细节。日志权限为 600（launchd 的 Umask 63），仅该用户可读，
+  但把它当成可公开分享的排障材料之前应先看一眼内容。
+
 ### 服务状态
 
 ```bash
@@ -276,16 +320,29 @@ sudo cat "/Library/Application Support/ai-device-client-management/install-note"
 
 ### 升级失败后重试被拒：stage 残留
 
-失败路径会在 `/opt/ai-device-client-stage-<版本>-<identity>` 留下 payload 副本，`preinstall` 见到同名目录会直接拒绝，报 `PROGRAM_COMMIT_REFUSED_V1`。这会**掩盖真正的失败原因**。
+失败路径会在 `/opt/ai-device-client-stage-<版本>-<identity>` 留下 payload 副本，`preinstall` 见到同名目录会直接拒绝。这会**掩盖真正的失败原因**。
 
-确认残留内容与当前程序树一致后删除再重试：
+先看拒绝时写下的 token，它是区分两种情况的唯一依据：
+
+```bash
+sudo cat "/Library/Application Support/ai-device-client-management/preinstall-token"
+```
+
+| token | stage 目录状态 | 含义 | 怎么办 |
+| --- | --- | --- | --- |
+| `PROGRAM_INSTALL_BUSY_V1` | 存在且**为空** | 另一个安装器刚 mkdir、正在写入 | **等等再试，不要删** |
+| `PROGRAM_INSTALL_RESIDUE_V1` | 存在且**非空**，或是链接/非目录 | 前次失败留下的历史残留 | 确认无安装在进行后清掉再试 |
+
+**这个区分不能搞反**：空目录意味着对方正在装，删了会破坏进行中的安装；非空才是可归因的残留。
+
+确认为残留后，先比对内容再删：
 
 ```bash
 sudo diff -r /opt/ai-device-client-stage-<...> /opt/ai-device-client && echo "内容相同"
 sudo rm -rf /opt/ai-device-client-stage-<...>
 ```
 
-内容不一致时先查清来源再做决定，不要直接删。
+内容不一致时先查清来源再做决定，不要直接删。失败换下来的 stage 可能是**上一棵正常旧树**，删前应确认它不是唯一的回退副本。
 
 ## 7. 卸载
 
@@ -368,6 +425,55 @@ sudo installer -pkg ai-device-client-<version>-arm64.pkg -target /
 ```
 
 若此时 job 已损坏无法应答，协调器会拒绝。按第 7 节卸载后重新安装、配置、注册。
+
+### 首次安装失败后，重装一直报 stage 残留
+
+**这是已知缺陷，不是操作错误。** 首次安装时目标目录不存在，postinstall 会先写
+stage 再发布。如果发布被拒（例如旧实例冲突、宿主预检不通过），流程会停止，
+**但已经写入的 stage 不会被清理**。
+
+后果是死锁：下一次安装的 `preinstall` 看到同名非空 stage，直接报
+`PROGRAM_INSTALL_RESIDUE_V1` 并退出。提示写了 "remove it and retry"，
+却**没有告诉你目录在哪、叫什么**。
+
+现场表现（2026-11-10 在 macmini 实测）：
+
+```
+第一次安装 → postinstall 报
+  offline writer probe: first installation preflight refused
+  first program publication refused; no automatic retry or rollback
+  （exit 1，但 stage 已留在磁盘）
+
+第二次安装 → preinstall 报
+  PROGRAM_INSTALL_RESIDUE_V1
+  （退出 1，日志只说 "remove it and retry"）
+```
+
+**先定位 stage 目录名。** 它不是固定路径，带版本与 identity 后缀：
+
+```bash
+ls -d /opt/ai-device-client-stage-* 2>/dev/null
+```
+
+确认里面没有正在进行的安装（目录非空且无安装进程），再看拒绝 token：
+
+```bash
+sudo cat "/Library/Application Support/ai-device-client-management/preinstall-token"
+```
+
+token 为 `PROGRAM_INSTALL_RESIDUE_V1` 才能删；若为 `PROGRAM_INSTALL_BUSY_V1`，
+说明另一个安装器正在用这个目录，**删了会破坏进行中的安装**。
+
+确认是残留后清理再重试：
+
+```bash
+sudo rm -rf /opt/ai-device-client-stage-<版本>-<identity>
+sudo installer -pkg ai-device-client-<版本>-arm64.pkg -target /
+```
+
+这个 stage 由 root 创建，普通用户既看不到也无法删除，必须 `sudo`。
+首装失败后不要连续重试——每次重试都会在同一个坑上再撞一次，应先查
+`/var/log/install.log` 确认首次失败的真实原因。
 
 ### 升级失败但看不出原因
 
@@ -479,9 +585,20 @@ Gatekeeper 拦截。见第 2 节，必须用 `sudo installer`。
 | 多用户同时安装 | 未验证 |
 | 并发安装 | 未验证 |
 | 降级安装 | **不支持** |
-| 签名与公证 | **未完成**。当前为未签名开发包，图形安装被 Gatekeeper 拦截 |
+| 签名与公证 | 已完成（`shipping` 模式）|
+| GUI 双击安装 | **未验收**。仅用 `spctl` 与 `sudo installer` 验证过 |
+| 中心业务 / MCP 端到端 | **未验收**。仅验证到 WebSocket 建连 |
 
-未签名包**不等于**满足公开分发条件。正式发布前必须完成签名与公证。
+已签名并公证的包可双击安装，Gatekeeper 不再拦截。当前交付的正式包为
+`shipping` 模式（标题 `AI Device Client`，无未签名警示）。`verification`
+模式与未签名开发包仍存在，用于隔离验证，不等同正式分发件。
+
+已签名包仍须满足全部前置条件（配置 → 注册 → 启动），签名不改变生命周期语义。
+
+**“连上了”具体指什么。** 当前已验收的范围是连接建立：`client.log` 输出
+`connected to …/connect`，`lsof` 看到 TCP ESTABLISHED。这证明客户端拿到中心
+`welcome` 帧，但**不证明**远程控制、指令下发、设备侧执行等业务链路可用。
+把设备接入真正业务之前，应单独跑一次端到端验证。
 
 ## 10. 相关文档
 

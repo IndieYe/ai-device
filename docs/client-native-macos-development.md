@@ -863,6 +863,27 @@ xcrun notarytool store-credentials "aidevice" \
 xcrun notarytool history --keychain-profile aidevice
 ```
 
+#### 三个凭据要分开备份，别只依赖 keychain
+
+2026-11-10 实际丢过一次 profile：`notarytool history` 报
+`No Keychain password item found`，重建后才恢复。keychain 不是备份。
+
+丢掉任何一个都无法重建凭据，只能重新去 ASC 生成：
+
+| 项 | 位置 | 能否找回 |
+| --- | --- | --- |
+| `.p8` 私钥 | `~/.appstoreconnect/private_keys/AuthKey_<KEY_ID>.p8` | **不能**，只能在 ASC 下载一次 |
+| Key ID | 文件名与 ASC 页面 | 可以（从文件名推） |
+| **Issuer ID** | 只在 ASC 页面与当初的 `store-credentials` 命令里 | 可以查 ASC，但**本地不保留就每次都要去查** |
+
+**Issuer ID 当前没有留在本地。** 它不是秘密，但不该靠“到时候去 ASC 翻”
+这种记忆路径维持。重建凭据或换机器时，它是拼齐命令的最后一块，缺了就得
+额外一趟 ASC 登录。建议与 `.p8` 分开保存（它不是秘密，可以单独记在
+安全笔记里），不要把 `.p8` 本体放进同一个共享位置。
+
+重建 profile 时三个参数缺一不可，Issuer 写错时 `notarytool` 报的往往是
+认证失败而不是“issuer 不对”，容易误判成 key 问题。
+
 ### 完整签名构建
 
 ```bash
@@ -980,10 +1001,19 @@ PIL 的嵌套 `.dylibs` 在 hardened runtime 下加载正常（`webp=true`），
 
 ### 仍未覆盖
 
-- `shipping` 模式未出包；上面验证的都是 `verification` 模式。
-- 签名包未做真机安装验收。签名不改变安装逻辑，但也没有证据说明不影响。
+- **`shipping` 模式已出包并真机验收**（2026-11-10，改写本节此前“未出包”的说法）：
+  `ai-device-client-0.4.3-arm64.pkg`，SHA256 `8b4cafaf…`，公证 `d451767c`
+  Accepted（54 秒），macminim6 安装输出 `The upgrade was successful`
+  与 `AI_DEVICE_UPGRADE_READY_EXACT_V1`，本机 macmini 首装 + 注册 + 启动 + 连接
+  已走通。**但没做 GUI 双击验收**：仅用 `spctl` 与命令行 installer 验证，
+  带人工 quarantine 属性时 `spctl` 也 accepted，不等于真双击过。
+- **未做中心业务/MCP 端到端验收。** 目前验证到的是 WebSocket 建连层：
+  日志输出了 `connected`、TCP 为 ESTABLISHED。这不等于远程控制、
+  中心下发指令、设备侧执行等业务链路已验证。
 - `.p8` 凭证轮换、证书到期（Developer ID Installer 有效期到 2027-12-10）
-  未纳入流程。
+  未纳入流程。Issuer ID 本地未留存，换机器或重建 profile 时需回 ASC 查。
 - 外层签名后 stage 路径仍按签名前 identity 派生
   （`ai-device-client-stage-0.4.3-926f7eff1563`），与包内 JSON 的
-  `4a30aff4` 不一致。目前只影响目录命名，未发现依赖该名称做身份比较的代码。
+  `9c155b40` 不一致。目前未发现依赖该名称做身份比较的代码，
+  但这不证明它仅影响命名：不同最终签名构建可能同名，同名 stage
+  会触发 preinstall 拒绝（详见 `client-native-macos-guide.md` 故障处理）。

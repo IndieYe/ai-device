@@ -101,6 +101,28 @@
 
 ## 六、遗留
 
+- **首次安装失败会留下 stage，且现无任何机制回收它——这是当前实际存在的死锁缺陷。**
+  首次安装走 `RENAME_EXCL`，目标不存在，而 postinstall 仍会先写 stage。
+  一旦发布被拒（如首装 preflight 拒绝），进程退出但 **stage 不会被清理**，
+  下一次安装的 `preinstall` 见到同名非空目录即报 `PROGRAM_INSTALL_RESIDUE_V1` 而退出。
+  提示只写 “remove it and retry”，**不告诉用户目录在哪里**。
+
+  2026-11-10 在 macmini 实测完整复现：第一次 postinstall 报
+  `first installation preflight refused` / `first program publication refused`，
+  第二次 preinstall 即被 `PROGRAM_INSTALL_RESIDUE_V1` 拦住。
+  绕过方式只有手工 `sudo rm -rf`（原目录 root 所有，普通用户删不掉）。
+
+  与本节其余条目不同，这一条是 **用户会真实撞上、且无自助路径的死锁**，
+  不是“已知限制”而更接近缺陷。修复方向是首装失败路径自己清理自己写的
+  stage，或至少在提示里输出具体路径；未在本次交付内实现。
+
+- **`BUSY` 与 `RESIDUE` 的判定依赖“非空”这一信号，语义比表面弱。**
+  stage 目录为空时归为“另一个安装器刚 mkdir”，非空时归为“无法归属的残留”。
+  但首装失败后 stage 通常是**非空**的，因此会落进 `RESIDUE` 分支；
+  反之，一个刚开始写入的并发安装器如果尚未落盘第一个文件，也会被判为 `BUSY`。
+  两个 token 对应的处置相反，而判断依据只有目录是否为空，
+  无法区分“残留”与“刚起步的并发安装”。
+
 - **残留 debris 不会自动回收。** debris 名带 pid，因此不同次运行的清理互不阻塞；
   但也意味着中断留下的 `…stage.old-<pid>` 会一直累积，直到别的机制处理。
   这是已知限制，不是遗漏。
