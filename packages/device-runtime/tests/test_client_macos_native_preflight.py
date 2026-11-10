@@ -511,8 +511,8 @@ def test_registered_recovery_observation_never_replays(environment, tmp_path, ca
         f'#include "{native / "client-macos-bound-resources.h"}"\n'
         f'#include "{native / "client-macos-lease-request.m"}"\n'
         f'#include "{native / "client-macos-ready-request.h"}"\n'
-        "static int test_ready_response(int fd,uid_t uid,NSString *v,NSString *b,double d) {\n"
-        " (void)fd;(void)uid;(void)v;(void)b;(void)d;\n"
+        "static int test_ready_response(int fd,uid_t uid,NSString *v,NSString *b,double d,ready_cause *cause) {\n"
+        " (void)fd;(void)uid;(void)v;(void)b;(void)d;if(cause)*cause=READY_NO_RESPONSE;\n"
         ' if(!strcmp(getenv("TEST_CASE"),"ready-identity-change")) {\n'
         ' NSString *path=[[NSString stringWithUTF8String:getenv("TEST_MANAGEMENT")] stringByAppendingPathComponent:@"registration.json"];\n'
         " NSData *data=[NSData dataWithContentsOfFile:path];\n"
@@ -545,9 +545,9 @@ def test_registered_recovery_observation_never_replays(environment, tmp_path, ca
         " if(!publish_registered_target(argv[1],getuid(),paths,&g,source_path))return 102;\n"
         ' release_guards(&g);puts("UNKNOWN_READY_NOT_CHECKED");return 0;}\n'
         ' if(!strcmp(argv[2],"ready-after-handoff") || !strcmp(argv[2],"ready-identity-change")) {\n'
-        ' if(ready_registered_connected(-1,argv[1],getuid(),paths,&g,@"B",@"build",lease_clock()+1))return 94;\n'
+        ' if(ready_registered_connected(-1,argv[1],getuid(),paths,&g,@"B",@"build",lease_clock()+1,NULL))return 94;\n'
         " if(!handoff_registered_start(argv[1],getuid(),paths,&g))return 95;\n"
-        ' int ready=ready_registered_connected(-1,argv[1],getuid(),paths,&g,@"B",@"build",lease_clock()+1);\n'
+        ' int ready=ready_registered_connected(-1,argv[1],getuid(),paths,&g,@"B",@"build",lease_clock()+1,NULL);\n'
         ' if(ready!=(!strcmp(argv[2],"ready-after-handoff")))return 96;\n'
         " if(acquireManagement(argv[1],getuid())!=-2)return 97;release_guards(&g);return 0;}\n"
         ' if(!strcmp(argv[2],"handoff") || !strcmp(argv[2],"handoff-invalid")) {\n'
@@ -933,7 +933,7 @@ def test_registered_native_exit_acquires_runtime_without_python_coordinator(
         ' if(getenv("FULL_READY")) {puts("PUBLISHED_START");fflush(stdout);\n'
         " struct pollfd input={0,POLLIN,0};char c;if(poll(&input,1,5000)<=0 || read(0,&c,1)!=1)return 81;\n"
         ' NSString *v=[NSString stringWithUTF8String:getenv("TARGET_VERSION")],*b=[NSString stringWithUTF8String:getenv("TARGET_BUILD")];\n'
-        " if(!query_registered_ready(argv[1],getuid(),paths,&g,v,b,lease_clock()+2))return 82;\n"
+        " if(!query_registered_ready(argv[1],getuid(),paths,&g,v,b,lease_clock()+2,NULL))return 82;\n"
         ' g.start=acquire_private_lock(dir,"start.lock",getuid());\n'
         " if(g.start<0 || exit_registered_original(argv[1],getuid(),paths,&g,lease_clock()+3)!=LEASE_ACCEPTED)return 83;\n"
         ' release_guards(&g);puts("PUBLISHED_READY_EXITED");return 0;}\n'
@@ -1226,7 +1226,7 @@ def test_fixed_registered_ready_after_handoff(environment, tmp_path, case):
         " if(poll(&input,1,5000)<=0 || read(0,&c,1)!=1 || c!=120)return 73;\n"
         ' version=[NSString stringWithUTF8String:getenv("TARGET_VERSION")];\n'
         ' build=[NSString stringWithUTF8String:getenv("TARGET_BUILD")]; }\n'
-        " int ready=query_registered_ready(argv[1],getuid(),paths,&g,version,build,lease_clock()+1);\n"
+        " int ready=query_registered_ready(argv[1],getuid(),paths,&g,version,build,lease_clock()+1,NULL);\n"
         ' if(getenv("REAL_RUNTIME")) {\n'
         ' g.start=acquire_private_lock([paths[@"directory"] fileSystemRepresentation],"start.lock",getuid());\n'
         " if(g.start<0 || exit_registered_original(argv[1],getuid(),paths,&g,lease_clock()+3)!=LEASE_ACCEPTED)return 74;}\n"

@@ -36,7 +36,7 @@ def binary(tmp_path):
         " if(strlen(argv[1])>=sizeof(address.sun_path))return 64;strcpy(address.sun_path,argv[1]);\n"
         " if(connect(fd,(struct sockaddr *)&address,sizeof(address)))return 70;\n"
         ' int result=ready_request_connected(fd,getuid(),@"B",\n'
-        ' @"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",lease_clock()+0.5);\n'
+        ' @"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",lease_clock()+0.5,NULL);\n'
         ' close(fd);printf("%d\\n",result);return 0;}}\n'
     )
     binary = tmp_path / "ready"

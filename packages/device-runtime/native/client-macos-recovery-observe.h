@@ -45,7 +45,7 @@ static enum registered_recovery_observation observe_registered_recovery(
     if (!expected || !target || !recovery_time_remaining(deadline) ||
         !registered_management_current(management,manager,paths,guards)) return RECOVERY_UNKNOWN;
     int ready=query_registered_ready(management,manager,paths,guards,
-                                    expected[@"version"],expected[@"build_id"],deadline);
+                                    expected[@"version"],expected[@"build_id"],deadline,NULL);
     /* A failed query can leave an exact tree but says NOTHING about service
      * absence, loaded definition, idle state, or permission to stop/replace.
      *

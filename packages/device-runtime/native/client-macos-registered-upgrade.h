@@ -20,31 +20,46 @@
  * Readiness is therefore observed by bounded polling of the read-only status
  * query; that is observation, never a replay of the start request.
  */
+#include "client-macos-ready-cause.h"
+
 static int upgrade_time_remaining(double deadline) {
     double now=lease_clock();
     return isfinite(now) && now>=0 && now<deadline;
 }
 
 /* Bounded observation of the read-only status query. `bootstrap` only loads the
- * job, so the target may not be serving yet. A mismatched identity cannot be
- * told apart from "not yet serving" here, so every unsuccessful attempt fails
+ * job, so the target may not be serving yet. Every unsuccessful attempt fails
  * closed by exhausting the caller's deadline; nothing is retried for effect.
+ *
+ * The last failure is reported once on giving up. Without it the caller learns
+ * only LOADED_NOT_READY, which is the same marker whether the job never started
+ * or started on the wrong bytes -- and those have opposite fixes. The message
+ * names the expected identity and nothing else: the reported one is not
+ * available here without threading it through every call, and the process that
+ * answers is reachable for a direct query once the operator knows to look.
  */
+#include "client-macos-ready-report.h"
+
 static int upgrade_wait_ready(const char *management,uid_t manager,NSDictionary *paths,
                               struct managed_guards *guards,NSString *version,NSString *build,
                               double deadline) {
+    ready_cause last=READY_CAUSE_NONE;
     for (int attempt=0; attempt<1000; attempt++) {
-        if (!upgrade_time_remaining(deadline)) return 0;
-        if (query_registered_ready(management,manager,paths,guards,version,build,deadline))
+        if (!upgrade_time_remaining(deadline)) {
+            upgrade_report_not_ready(last,attempt,version,build);
+            return 0;
+        }
+        if (query_registered_ready(management,manager,paths,guards,version,build,deadline,&last))
             return 1;
         double now=lease_clock();
-        if (!isfinite(now) || now<0) return 0;
+        if (!isfinite(now) || now<0) break;
         double pause=deadline-now;
-        if (!(pause>0)) return 0;
+        if (!(pause>0)) break;
         if (pause>0.05) pause=0.05;
         struct timespec nap={(time_t)pause,(long)((pause-(double)(time_t)pause)*1e9)};
-        if (nanosleep(&nap,NULL)) return 0;
+        if (nanosleep(&nap,NULL)) break;
     }
+    upgrade_report_not_ready(last,1000,version,build);
     return 0;
 }
 

@@ -92,7 +92,7 @@ static int repair_registered_entry(int argc,char **argv) {
         return 70;
     }
     int serving=query_registered_ready(management,0,paths,&guards,
-                                      expected[@"version"],expected[@"build_id"],deadline);
+                                      expected[@"version"],expected[@"build_id"],deadline,NULL);
     if (serving) {
         release_guards(&guards);
         puts("AI_DEVICE_REPAIR_REFUSED_SERVICE_RUNNING_V1");

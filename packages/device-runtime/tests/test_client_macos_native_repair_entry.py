@@ -48,6 +48,7 @@ def paths_literal(program):
 BODY = Template(
     """
 static int published=0, ready_calls=0, start_taken=0;
+#include "client-macos-ready-cause.h"
 static int ready_violation=0, publish_violation=0;
 static int open_probe(void){return open("/dev/null",O_RDWR|O_CLOEXEC);}
 static void close_probe(int *fd){if(*fd>=0){close(*fd);*fd=-1;}}
@@ -75,8 +76,8 @@ static NSDictionary *read_target_identity(const char *p,uid_t u){
     return @{@"version":@"1",@"build_id":@"sha256:abc"};}
 static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,
                                   struct managed_guards *g,NSString *v,
-                                  NSString *b,double d){
-    (void)m;(void)u;(void)p;(void)v;(void)b;(void)d;
+                                  NSString *b,double d,ready_cause *c){
+    (void)m;(void)u;(void)p;(void)v;(void)b;(void)d;(void)c;
     ready_calls++;
     if(g->start>=0||g->runtime>=0)ready_violation=1;
     return $serving;}
@@ -121,7 +122,8 @@ def compile_harness(tmp_path, body, name):
     binary = tmp_path / name
     compiled = subprocess.run(
         ["/usr/bin/xcrun", "clang", "-Wall", "-Wextra", "-Werror", "-fobjc-arc",
-         "-framework", "Foundation", str(harness), "-o", str(binary)],
+         "-framework", "Foundation", "-I", str(native),
+         str(harness), "-o", str(binary)],
         check=False, capture_output=True, text=True,
     )
     assert compiled.returncode == 0, compiled.stderr

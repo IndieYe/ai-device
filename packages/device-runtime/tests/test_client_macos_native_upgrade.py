@@ -75,7 +75,8 @@ def test_upgrade_once_order(tmp_path, failure):
         "static int registered_management_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;return g->management==1 && gate();}\n"
         "static int registered_management_confirmed(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}\n"
                 "static int handoff_registered_start(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;if(!gate())return 0;if(!registered_guards_current(m,u,p,g))return 0;g->start=-1;g->runtime=-1;return 1;}\n"
-        'static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d){(void)d;if(g->start>=0 || g->runtime>=0)return 0;if(!registered_management_current(m,u,p,g))return 0;if(bound && (![v isEqual:@"bound-2"] || ![b isEqual:@"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]))return 0;return gate();}\n'
+        f'#include "{native / "client-macos-ready-cause.h"}"\n'
+        'static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d,ready_cause *c){(void)d;(void)c;if(g->start>=0 || g->runtime>=0)return 0;if(!registered_management_current(m,u,p,g))return 0;if(bound && (![v isEqual:@"bound-2"] || ![b isEqual:@"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]))return 0;return gate();}\n'
         f'static NSDictionary *read_target_identity(const char *s,uid_t u){{if(strcmp(s,"fixed") || u!=0)return nil;return {identity_literal};}}\n'
         'static int cleanup_calls=0;static const char *cleanup_last_stage=0;\n'
         '#define STAGE_CLEANUP_OK 0\n#define STAGE_CLEANUP_REFUSED 1\n#define STAGE_CLEANUP_INCOMPLETE 2\n'
@@ -142,6 +143,7 @@ def test_upgrade_once_order(tmp_path, failure):
 
 BUSY_UNKNOWN_HARNESS = """
 #import <Foundation/Foundation.h>
+#include "NATIVE_CAUSE_HEADER"
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
@@ -165,7 +167,8 @@ static int registered_guards_current(const char *m,uid_t u,NSDictionary *p,struc
 static int unload_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;return 1;}
 static int commit_staged_program(const char *s,const char *p,uid_t o,int(*v)(const char*),struct stat *r){(void)s;(void)p;(void)o;(void)v;if(r){memset(r,0,sizeof(*r));r->st_dev=1;r->st_ino=2;}return 0;}
 static int registered_target_exact(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}
-static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d){(void)m;(void)u;(void)p;(void)g;(void)v;(void)b;(void)d;return 1;}
+
+static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d,ready_cause *c){(void)m;(void)u;(void)p;(void)g;(void)v;(void)b;(void)d;(void)c;return 1;}
 static int handoff_registered_start(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}
 static int load_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;return 1;}
 static int load_registered_service_relay_unattested(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;return 1;}
@@ -178,6 +181,7 @@ static NSDictionary *read_target_identity(const char *s,uid_t u){(void)s;(void)u
 #define STAGE_CLEANUP_INCOMPLETE 2
 static int cleanup_calls=0;
 static int cleanup_swapped_stage(const char *s,const char *p,uid_t o,const struct stat *r){(void)s;(void)p;(void)o;(void)r;cleanup_calls++;return STAGE_CLEANUP_OK;}
+#include "NATIVE_CAUSE_HEADER"
 #include "NATIVE_HEADER"
 int main(void){@autoreleasepool {
     struct managed_guards g={1,2,-1};
@@ -203,13 +207,15 @@ def test_busy_and_unknown_exit_are_reported_differently(tmp_path):
         harness = tmp_path / f"{name}.m"
         harness.write_text(
             BUSY_UNKNOWN_HARNESS.replace("LEASE_RESULT", lease)
+            .replace("NATIVE_CAUSE_HEADER", str(native / "client-macos-ready-cause.h"))
             .replace("NATIVE_HEADER", str(native / "client-macos-registered-upgrade.h"))
             .replace("BUILD_ID", "sha256:" + "a" * 64)
         )
         binary = tmp_path / name
         subprocess.run(
             ["/usr/bin/xcrun", "clang", "-Wall", "-Wextra", "-Werror", "-fobjc-arc",
-             "-framework", "Foundation", str(harness), "-o", str(binary)],
+             "-framework", "Foundation", "-I", str(native),
+             str(harness), "-o", str(binary)],
             check=True, capture_output=True,
         )
         out = subprocess.run([str(binary)], check=True, capture_output=True, text=True, timeout=5)
@@ -313,7 +319,8 @@ def test_upgrade_invalid_clock_stops_before_next_action(
         "static int load_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;actions++;return 1;}\n"
         "static int load_registered_service_relay_unattested(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;actions++;return 1;}\n"
         "static int handoff_registered_start(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;actions++;return 1;}\n"
-        "static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d){(void)m;(void)u;(void)p;(void)g;(void)v;(void)b;(void)d;return 1;}\n"
+        f'#include "{native / "client-macos-ready-cause.h"}"\n'
+        "static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d,ready_cause *c){(void)m;(void)u;(void)p;(void)g;(void)v;(void)b;(void)d;(void)c;return 1;}\n"
         "static NSDictionary *read_target_identity(const char *s,uid_t u){(void)s;(void)u;return nil;}\n"
         'static int cleanup_calls=0;static const char *cleanup_last_stage=0;\n'
         '#define STAGE_CLEANUP_OK 0\n#define STAGE_CLEANUP_REFUSED 1\n#define STAGE_CLEANUP_INCOMPLETE 2\n'
@@ -348,6 +355,7 @@ def test_upgrade_invalid_clock_stops_before_next_action(
 
 RECOVERY_HARNESS = r"""
 #import <Foundation/Foundation.h>
+#include "NATIVE_CAUSE_HEADER"
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
@@ -377,7 +385,8 @@ static int exit_registered_original(const char *m,uid_t u,NSDictionary *p,struct
 static int commit_staged_program(const char *s,const char *p,uid_t o,int(*v)(const char*),struct stat *r){(void)s;(void)p;(void)o;(void)v;if(r){memset(r,0,sizeof(*r));r->st_dev=1;r->st_ino=2;}return 0;}
 static int registered_target_exact(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 0;}
 static int unload_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;return 0;}
-static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d){(void)m;(void)u;(void)p;(void)g;(void)v;(void)b;(void)d;return 0;}
+
+static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d,ready_cause *c){(void)m;(void)u;(void)p;(void)g;(void)v;(void)b;(void)d;(void)c;return 0;}
 static NSDictionary *read_target_identity(const char *s,uid_t u){(void)s;(void)u;return nil;}
 static int registered_management_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 0;}
 static int registered_management_confirmed(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return confirmed_rc;}
@@ -401,6 +410,7 @@ def _build_recovery_harness(tmp_path, stage, deadline="10", confirmed=1, guards=
     guards_literal = "{1,4,3}" if held_locks else "{1,-1,-1}"
     source.write_text(
         RECOVERY_HARNESS
+        .replace("NATIVE_CAUSE_HEADER", str(native / "client-macos-ready-cause.h"))
         + '#include "' + str(native / "client-macos-registered-upgrade.h") + '"\n'
         + f"int main(void){{@autoreleasepool {{confirmed_rc={confirmed};guards_rc={guards};unused_leaves();"
         + "(void)upgrade_registered_once;(void)upgrade_registered_bound_once;"
@@ -411,7 +421,8 @@ def _build_recovery_harness(tmp_path, stage, deadline="10", confirmed=1, guards=
     binary = tmp_path / "recover"
     subprocess.run(
         ["/usr/bin/xcrun", "clang", "-Wall", "-Wextra", "-Werror", "-fobjc-arc",
-         "-framework", "Foundation", str(source), "-o", str(binary)],
+         "-framework", "Foundation", "-I", str(native),
+         str(source), "-o", str(binary)],
         check=True, capture_output=True,
     )
     out = subprocess.run([str(binary)], check=True, capture_output=True, text=True, timeout=5)
@@ -507,6 +518,10 @@ static int cleanup_owner=-1;
  * loop terminates quickly here instead of sleeping out 1000 attempts. */
 static double clock_now=0;
 static double lease_clock(void){return clock_now;}
+/* Reached through -I native: this harness defines the coordinator's own
+ * observables before including the header, so it cannot pull in
+ * ready-request.h for the cause enum. */
+#include "client-macos-ready-cause.h"
 static int registered_exit_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}
 #define PROGRAM_COMMIT_OK 0
 #define PROGRAM_COMMIT_REFUSED 1
@@ -522,7 +537,7 @@ static int unload_registered_service_relay(const char *m,uid_t u,int fd,const ch
  * below would then pass without ever exercising cleanup. */
 static int commit_staged_program(const char *s,const char *p,uid_t o,int(*v)(const char*),struct stat *r){(void)s;(void)p;(void)o;(void)v;if(r){memset(r,0,sizeof(*r));r->st_dev=1;r->st_ino=2;}return PROGRAM_COMMIT_OK;}
 static int registered_target_exact(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}
-static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d){(void)m;(void)u;(void)p;(void)g;(void)v;(void)b;(void)d;if(ready_rc)return 1;clock_now+=1.0;return 0;}
+static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d,ready_cause *c){(void)m;(void)u;(void)p;(void)g;(void)v;(void)b;(void)d;(void)c;if(ready_rc)return 1;clock_now+=1.0;return 0;}
 static int handoff_registered_start(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;g->start=-1;g->runtime=-1;return 1;}
 static int load_registered_service_relay(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;return 1;}
 static int load_registered_service_relay_unattested(const char *m,uid_t u,int fd,const char *t,double d){(void)m;(void)u;(void)fd;(void)t;(void)d;return 1;}
@@ -563,7 +578,8 @@ def _run_cleanup_case(tmp_path, ready_rc=1, cleanup_rc=0):
     binary = tmp_path / "cleanup-upgrade"
     subprocess.run(
         ["/usr/bin/xcrun", "clang", "-Wall", "-Wextra", "-Werror", "-fobjc-arc",
-         "-framework", "Foundation", str(source), "-o", str(binary)],
+         "-framework", "Foundation", "-I", str(native),
+         str(source), "-o", str(binary)],
         check=True, capture_output=True,
     )
     out = subprocess.run([str(binary)], check=True, capture_output=True, text=True, timeout=10)

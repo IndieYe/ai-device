@@ -32,24 +32,37 @@ static int handoff_registered_start(const char *management,uid_t manager,
     if (close(start)) return 0;
     return registered_management_current(management,manager,paths,guards);
 }
+/* Propagates the failure cause from ready_request_connected through an out
+ * parameter. The return value stays 1/0 so existing callers and tests that
+ * treat it as a boolean are unaffected; only upgrade_wait_ready asks for the
+ * cause, and it does so to name the reason once it gives up. */
 static int ready_registered_connected(int fd,const char *management,uid_t manager,
                                       NSDictionary *paths,struct managed_guards *guards,
-                                      NSString *version,NSString *build,double deadline) {
+                                      NSString *version,NSString *build,double deadline,
+                                      ready_cause *cause) {
+    if (cause) *cause=READY_NO_RESPONSE;
     if (guards->start>=0 || guards->runtime>=0 ||
         !registered_management_current(management,manager,paths,guards)) return 0;
-    if (!ready_request_connected(fd,[paths[@"runtime_owner"] unsignedIntValue],version,build,deadline)) return 0;
-    return registered_management_current(management,manager,paths,guards);
+    if (!ready_request_connected(fd,[paths[@"runtime_owner"] unsignedIntValue],version,build,deadline,cause))
+        return 0;
+    if (!registered_management_current(management,manager,paths,guards)) {
+        if (cause) *cause=READY_NO_RESPONSE;
+        return 0;
+    }
+    return 1;
 }
 
 #include "client-macos-registered-connect.h"
 static int query_registered_ready(const char *management,uid_t manager,
                                    NSDictionary *paths,struct managed_guards *guards,
-                                   NSString *version,NSString *build,double deadline) {
+                                   NSString *version,NSString *build,double deadline,
+                                   ready_cause *cause) {
+    if (cause) *cause=READY_NO_RESPONSE;
     if (guards->start>=0 || guards->runtime>=0 ||
         !registered_management_current(management,manager,paths,guards)) return 0;
     int fd=connect_registered_socket(paths,deadline);
     if (fd<0) return 0;
-    int ready=ready_registered_connected(fd,management,manager,paths,guards,version,build,deadline);
+    int ready=ready_registered_connected(fd,management,manager,paths,guards,version,build,deadline,cause);
     close(fd);
     return ready;
 }

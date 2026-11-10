@@ -32,6 +32,7 @@ def test_recovery_observation_no_replay(tmp_path, case):
     source.write_text(
         "#import <Foundation/Foundation.h>\n#include <math.h>\n#include <limits.h>\n#include <string.h>\n"
         "struct managed_guards {int start,runtime,management;};\n"
+        f'#include "{header.parent / "client-macos-ready-cause.h"}"\n'
         f"static double clock_now={2 if case == 'expired' else 0};\n"
         "static double lease_clock(void) {return clock_now;}\n"
         "static int checks=0,queries=0;"
@@ -44,8 +45,8 @@ def test_recovery_observation_no_replay(tmp_path, case):
         f'if(!strcmp(p,"target") && {int(case == "source-bad")})return nil;'
         f'if(!strcmp(p,"target") && {int(case == "target-bad")})return nil;'
         'return @{@"version":@"1",@"build_id":@"build"};}\n'
-        "static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d) {"
-        "(void)m;(void)u;(void)p;(void)g;(void)v;(void)b;(void)d;queries++;"
+        "static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d,ready_cause *c) {"
+        "(void)m;(void)u;(void)p;(void)g;(void)v;(void)b;(void)d;(void)c;queries++;"
         f"if({int(case == 'query-expired')})clock_now=2;"
         f"return {int(case != 'not-ready')};}}\n"
         f'#include "{header}"\n'
@@ -68,6 +69,8 @@ def test_recovery_observation_no_replay(tmp_path, case):
             "-fobjc-arc",
             "-framework",
             "Foundation",
+            "-I",
+            str(header.parent),
             str(source),
             "-o",
             str(binary),
@@ -91,11 +94,12 @@ def test_recovery_invalid_clock_never_reports_exact(tmp_path, failure_call, inva
     source.write_text(
         "#import <Foundation/Foundation.h>\n#include <math.h>\n#include <limits.h>\n#include <string.h>\n"
         "struct managed_guards {int start,runtime,management;};\n"
+        f'#include "{header.parent / "client-macos-ready-cause.h"}"\n'
         "static int calls=0;\n"
         f"static double lease_clock(void){{return ++calls=={failure_call} ? {invalid} : 0;}}\n"
         "static int registered_management_current(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g){(void)m;(void)u;(void)p;(void)g;return 1;}\n"
         "static NSDictionary *read_target_identity(const char *s,uid_t u){(void)s;(void)u;return @{};}\n"
-        "static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d){(void)m;(void)u;(void)p;(void)g;(void)v;(void)b;(void)d;return 1;}\n"
+        "static int query_registered_ready(const char *m,uid_t u,NSDictionary *p,struct managed_guards *g,NSString *v,NSString *b,double d,ready_cause *c){(void)m;(void)u;(void)p;(void)g;(void)v;(void)b;(void)d;(void)c;return 1;}\n"
         f'#include "{header}"\n'
         "int main(void){@autoreleasepool {struct managed_guards g={-1,-1,7};"
         'int r=observe_registered_recovery("unused",0,@{@"program":@"target",@"management_owner":@0},&g,1);'
@@ -112,6 +116,8 @@ def test_recovery_invalid_clock_never_reports_exact(tmp_path, failure_call, inva
             "-fobjc-arc",
             "-framework",
             "Foundation",
+            "-I",
+            str(header.parent),
             str(source),
             "-o",
             str(binary),
