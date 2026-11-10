@@ -88,6 +88,55 @@
 恢复成功只表示"已重新加载"，token 是 `AI_DEVICE_UPGRADE_RECOVERED_LOADED_NOT_READY_V1`，
 **不声称 ready**。
 
+## 三之二、`LOADED_NOT_READY` 之后磁盘已经是新树（2026-11-10 实测）
+
+上表 [E] 行的"已换新"不是推测。构造一次 ready 必然失败的安装后实测确认：
+**`LOADED_NOT_READY` 抛出时，程序树已经完成替换，失败的是新树的自证，不是发布本身。**
+
+构造方式：包装 `rewrite_client_identity`，在真实 rewrite 之后、inventory 生成之前
+把 `client-identity.json` 改成不匹配的假 digest。运行时指纹不包含该 JSON，所以
+清单仍然自洽（校验通过），但 ready 比对必然不等。这是唯一能走到轮询并失败的构造
+方式——直接改包内 JSON 会先被 `verify_resource_tree` 拦下，只得到 `REFUSED_V1`。
+
+实测输出（`/var/log/install.log`，installer 耗时约 123 秒）：
+
+```
+./postinstall: upgrade not ready: runtime_version mismatch; expected version 0.3.6
+    build sha256:eeee...(after 707 attempts)
+./postinstall: AI_DEVICE_UPGRADE_LOADED_NOT_READY_V1
+```
+
+失败后的现场：
+
+| 观察项 | 值 |
+|---|---|
+| `/opt/ai-device-client/client-identity.json` | 测试包的假 digest |
+| 该树运行时实际指纹 | 测试包的真实 digest（与 live 目录一致） |
+| launchd job | 已加载，`state = running`，`never exited` |
+| 中心连接 | 正常建立 |
+| 配置与 token | 未变 |
+
+即：**服务在跑，但它报的身份和登记的身份不一致**。这正是该次失败的含义——不是
+"没装上"，而是"装上了但新树与期望身份不符"。修复手段是装一个身份自洽的包，
+不是回滚。
+
+### 用重装修复时先清 stage
+
+直接重装正常包会失败在 `preinstall`：
+
+```
+PROGRAM_INSTALL_RESIDUE_V1: stage path exists and is not empty;
+    its content cannot be attributed, remove it and retry
+```
+
+因为失败的那次升级留下了自己的 stage 目录（约 2466 条），preinstall 拒绝在
+无法归属的残留上继续。清掉该目录再装即可，本轮实测清掉后同一条命令安装成功、
+`READY_EXACT_V1`、身份一致、配置哈希未变。
+
+因此"重装修复"的准确步骤是：确认 live 目录的实际身份 → 删除身份不一致的残留
+stage → 重装身份自洽的包 → 核对 live JSON 与运行时指纹一致。跳过第二步会得到
+一个指向残留的报错，而不是安装失败的真实原因。
+
 ## 四、锁确认的实际强度（不得夸大）
 
 新增 `registered_management_confirmed`：在 `registered_management_current` 之上叠加
@@ -123,10 +172,18 @@
 
 **未交付**：
 
-- 真实 `launchctl` / GUI 生命周期验收（未授权，且 PKG 禁安装）。
-- A→B 实机升级、Installer 写入期互斥、完整 wheel/tree/PKG 重建。
 - 恢复路径的真实锁竞争验收（当前用真实 `private_lock_held` 逻辑但无并发对手）。
 - 独立审核对本轮改动的复核。
+
+**已补做的实机验收**（2026-11-10，macminim6）：
+
+- A→B 实机升级：签名并公证的包升级成功，`READY_EXACT_V1`，身份精确匹配，
+  配置与 token 哈希不变，launchd `running`。
+- 同包二次安装：同样 `READY_EXACT_V1`，PID 更新，幂等。
+- `LOADED_NOT_READY` 现场：见"三之二"节，确认失败时新树已发布，以及清 stage
+  再重装的修复路径。
+- `REFUSED_V1` 的一条实测成因：包内 `client-identity.json` 与内嵌 inventory 不符
+  时，在请求旧实例退出**之前**即拒绝，设备零改动。
 
 ## 六、仍然存在的边界
 
