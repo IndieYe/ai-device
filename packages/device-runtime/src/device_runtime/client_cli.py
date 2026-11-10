@@ -121,9 +121,15 @@ def main(argv=None, *, lease_exit=False):
         # configuration, so show it rather than the generic unavailable text.
         parser.exit(2, f"device-runtime client: {exc}\n")
     except (ValueError, RuntimeError, ImportError, OSError) as exc:
+        # The cause is included because this is the only thing a failing service
+        # start leaves behind: launchd has no console, so the device log is the
+        # whole record. These exceptions come from configuration validation and
+        # local I/O, whose messages name a field or a path and never carry the
+        # token itself -- the token is checked for shape, not echoed.
         parser.exit(
             2,
-            f"device-runtime client: {type(exc).__name__}: configuration or runtime unavailable\n",
+            f"device-runtime client: {type(exc).__name__}: configuration or runtime "
+            f"unavailable: {exc}\n",
         )
 
 

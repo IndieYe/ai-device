@@ -203,6 +203,11 @@ def test_cli_errors_do_not_expose_input_or_traceback(config, field):
     assert sensitive not in output
     assert "Traceback" not in output
     assert "configuration or runtime unavailable" in result.stderr
+    # The cause has to survive: a service start that fails under launchd leaves
+    # this line as its entire record, and the generic wording alone gives an
+    # operator nothing to act on.
+    assert ValueError.__name__ in result.stderr
+    assert result.stderr.rstrip().split(": ")[-1], "the validation message was dropped"
 
 
 @pytest.mark.parametrize("stage", ["directory", "token", "complete"])
