@@ -27,7 +27,9 @@ Mac 侧代码包含 13 个 `client_macos_*.py` 模块、`scripts/build-client-pk
    但胜者仍可能把运行树换成自己的版本，两个安装器不会排队。
    详见 [`client-native-macos-concurrent-install-design.md`](client-native-macos-concurrent-install-design.md)。
 2. **多用户、非管理员路径**未验证。
-3. **签名与公证**未完成，不能公开发布。
+3. **签名与公证**：构建器已支持完整流程，但从未产出过真实的签名包，也未提交过公证。
+   缺 Developer ID Installer 证书，`productsign` 无法执行。见下方
+   “签名与公证的调用方式”。
 
 > `pkgbuild` 的 5 条 `write: Permission denied` 已查明为固有 stderr 噪音，不再是阻塞项，
 > 见下文“pkgbuild 权限警告已定位”。
@@ -803,3 +805,156 @@ sshd 处理）后才能全程观察。**做登出类验收必须先确认观察�
 ### 仍未覆盖
 
 多用户、并发安装、非管理员路径、签名与公证。
+
+## 签名与公证的调用方式（2026-11-10）
+
+构建器在 `1d7beda` 加入三个可选参数，实现 `codesign` → `productsign` →
+`notarytool` 全流程。**这三个参数都还没有在真实证书下跑过**：单元测试覆盖了
+顺序、拒绝条件和标记切换，但没有产出过一个签名包。下面给的命令是设计意图，
+第一次执行时要按实际输出校准。
+
+### 前提
+
+| 项 | 用途 | 获取方式 |
+| --- | --- | --- |
+| Developer ID **Application** | 签 payload 里的 Mach-O | 开发者后台 → Certificates → **Developer ID Application** |
+| Developer ID **Installer** | `productsign` 签 .pkg 本身 | 同上，选 **Developer ID Installer**（不同证书） |
+| `notarytool` profile | 提交公证 | 需要 App Store Connect API Key 或 App 专用密码 |
+
+`productsign` 只认 Installer 证书。用 Application 证书代替会失败，两者签发对象
+不同，不通用。
+
+申请证书时，CSR 必须在**最终使用该证书的机器**上生成，否则私钥不在本机，
+`find-identity` 会显示 0。
+
+### 检查证书
+
+```bash
+security find-identity -v -p codesigning     # Developer ID Application
+security find-identity -v -p basic           # developer ID Installer 也在这里
+```
+
+两条都应列出带 Team ID 的身份。返回 `0 valid identities found` 先别继续，
+最常见的两个原因是私钥不在本机，或缺少 `Developer ID Certification Authority`
+（G2）中间证书。后者可从证书自身 AIA 字段声明的地址取回：
+
+```bash
+curl -o /tmp/devidg2.der http://certs.apple.com/devidg2.der
+openssl x509 -inform DER -in /tmp/devidg2.der -out /tmp/devidg2.pem
+security add-certificates -k ~/Library/Keychains/login.keychain-db /tmp/devidg2.pem
+```
+
+装完再跑一次 `find-identity`，应当从 0 变成 1。
+
+### 建立公证凭证
+
+凭证存进 keychain，命令只引用 profile 名称，密钥内容不进命令行、不进日志。
+
+```bash
+xcrun notarytool store-credentials "aidevice-notary" \
+  --key /path/to/AuthKey_XXXXXXXXXX.p8 \
+  --key-id XXXXXXXXXX \
+  --issuer 00000000-0000-0000-0000-000000000000
+```
+
+`.p8` 只能从 Apple 下载一次，存好。验证 profile 可用：
+
+```bash
+xcrun notarytool history --keychain-profile aidevice-notary
+```
+
+### 完整签名构建
+
+```bash
+cd packages/device-runtime
+
+uv run python scripts/build-client-pkg.py \
+  --tree /path/to/client-tree \
+  --output /path/to/output \
+  --version 0.4.3 \
+  --mode shipping \
+  --sign-identity "Developer ID Application: yuexiang feng (ATZDSN35HB)" \
+  --installer-identity "Developer ID Installer: yuexiang feng (ATZDSN35HB)" \
+  --notary-profile aidevice-notary
+```
+
+三个参数相互依赖，顺序给错会在命令行直接报错，不会产出半成品：
+
+- 只给 `--installer-identity` → 报错，因为外层已签、内容未签的包不会被公证接受
+- 只给 `--notary-profile` → 报错，未签名的包不能公证
+- `--mode inspection` 加任何签名参数 → 报错，inspection 包拒绝安装，签了会误导
+
+### 分步验证（第一次跑时建议）
+
+公证提交是异步的，`--wait` 会阻塞到出结果，失败时只给一个 submission ID。
+第一次跑建议拆开确认每一层：
+
+```bash
+# 1. 只签名，不公证
+uv run python scripts/build-client-pkg.py ... \
+  --sign-identity "..." --installer-identity "..."
+
+# 2. 抽查内层签名
+codesign -dv --verbose=4 /path/to/output/root/opt/ai-device-client-stage-*/runtime/bin/python3.13
+codesign --verify --strict --deep /path/to/output/root
+
+# 3. 检查外层包签名
+pkgutil --check-signature /path/to/output/ai-device-client-0.4.3-arm64.pkg
+
+# 4. 单独提交公证
+xcrun notarytool submit /path/to/output/ai-device-client-0.4.3-arm64.pkg \
+  --keychain-profile aidevice-notary --wait
+
+# 5. 被拒时读日志（给出的是 JSON，含每个文件的拒绝原因）
+xcrun notarytool log <submission-id> --keychain-profile aidevice-notary
+
+# 6. 装订并通过后验证
+xcrun stapler staple /path/to/output/ai-device-client-0.4.3-arm64.pkg
+spctl -a -vvv -t install /path/to/output/ai-device-client-0.4.3-arm64.pkg
+```
+
+`spctl` 输出 `accepted / source=Notarized Developer ID` 才算真正可分发。
+
+### 顺序为什么不能反
+
+`stage_upgrade_entry` 把 payload 的 sha256 清单编译进升级入口，安装时
+`verify_resource_tree` 按这张表逐项校验。`codesign` 会改写它签的每个文件，
+所以**签名必须在生成清单之前**。反过来的结果是：构建成功、签名有效、
+每次安装都在校验阶段被拒，错误信息指不回顺序问题。
+
+升级入口本身在清单之后才编译，不在 payload 扫描范围内，因此单独补签一次。
+它是安装时以 root 运行的 Mach-O，漏签的后果比其他文件都严重。
+
+测试 `test_signing_happens_before_the_inventory_is_hashed` 固定这个顺序，
+把签名挪到清单之后会失败。
+
+### 必须用 GUI 终端执行
+
+签名要访问 login keychain 里的私钥，而 keychain 解锁状态按会话隔离。
+SSH 会话和 system 域的后台服务都拿不到 GUI 会话的授权，表现为
+`errSecInternalComponent`：
+
+```
+s.bin: errSecInternalComponent
+```
+
+这不是证书坏了。`codesign -s -`（adhoc，不需要私钥）能成功就说明工具链正常，
+问题只在私钥访问。**签名构建所以在 macmini 本机屏幕或屏幕共享的终端里跑，
+不要在 SSH 里跑。**
+
+如果 GUI 终端里仍然失败，把私钥加入 partition list 允许指定工具免弹窗访问：
+
+```bash
+security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
+  ~/Library/Keychains/login.keychain-db
+```
+
+这条会提示输入登录密码，密码只在本机 keychain 内传递。不要写成 `-k <密码>`，
+那会把密码留在 shell 历史里。
+
+### 未验证的部分
+
+- 41 个 Mach-O 里包含 PIL 的 `.dylibs` 嵌套依赖，hardened runtime 下是否
+  全部能正常加载，没有实测过。公证被拒时这里是最可能的原因。
+- 出包后没有做过真实安装验收。签名不改变安装逻辑，但也没有证据说明它不影响。
+- `.p8` 凭证轮换、证书到期（Developer ID 有效期通常 5 年）未纳入流程。

@@ -277,6 +277,13 @@ CLI 的 bash 使用 --command，script 支持 --script 或 --script-file；--std
 
 包版本由构建时 `--version` 显式传入（如 `0.4.9`），与运行时 `__version__`（如 `0.3.6`）是两套体系，不可互相推导。
 
+PKG 支持签名与公证，通过 `--sign-identity`（Developer ID Application，签 payload 内每个
+Mach-O）、`--installer-identity`（Developer ID Installer，`productsign` 签包本身）、
+`--notary-profile`（`notarytool` profile）三步开启。三者互依赖，缺任一项都不产出可分发包，
+且签名构建必须在本机 GUI 终端执行。调用示例与前提见
+[macOS 开发记录](../../docs/client-native-macos-development.md#签名与公证的调用方式2026-11-10)。
+DEB 与 RPM 尚无签名支持。
+
 准确操作、制品与验收证据见 [Linux 指南](../../docs/client-native-linux-guide.md)、[macOS 指南](../../docs/client-native-macos-guide.md) 与 [Linux 开发记录](../../docs/client-native-linux-development.md)。
 
 当前限制：本地隔离开发包未签名未公证，不满足公开分发条件；macOS 仅 Apple Silicon、需已登录 GUI 用户；多用户与并发安装未验证。历史指南不能代替新包验收。
