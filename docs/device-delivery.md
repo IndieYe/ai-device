@@ -2,6 +2,11 @@
 
 > 三包迁移说明：本文保留来源项目的历史交付与验收记录，不代表新仓本次已完成相同平台验收。新包名称和当前支持范围以 [阶段C验收](stage-c-acceptance.md) 为准；AI 助手专属配置留在宿主仓库。
 
+> **路径区分**：本页描述的是 **bundle 独立实例**（含三份 wheel 的目录 + `instance install/rebuild`，适合中心、MCP 与开发者自定义实例）。
+> 面向终端设备的 **完整包**（DEB / RPM / PKG，自带 Python，目标机无需组装 venv）请见
+> [Linux 指南](client-native-linux-guide.md) 与 [macOS 指南](client-native-macos-guide.md)。
+> 两条路径共存，互不替代；安装设备客户端时不要按本页流程手工组装实例。
+
 运行版本查询自 Device 0.2.1 起提供，详见 [Device Runtime](device-runtime.md)。
 组件版本由 `__version__` 唯一定义；不同代码发布必须递增版本。交付包 `release_version`、
 制品 Hash 与进程运行版本职责不同，安装指针切换不证明既有进程已加载新版本。

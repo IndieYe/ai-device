@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "distribution": "uv",
+  "version": "0.13.5",
+  "target": "darwin-arm64",
+  "filename": "uv-0.13.5-py3-none-macosx_11_0_arm64.whl",
+  "sha256": "a42c85fa8156e1e5e2cecdbc77bb818ea1dcf5f78b8e2a8f84c7fe4f16f0702e",
+  "size": 14470685,
+  "url": "https://files.pythonhosted.org/packages/d2/26/9ac45211123244ea68be852775093af487a64debc13621a2de239f8ebe73/uv-0.13.5-py3-none-macosx_11_0_arm64.whl",
+  "source": "https://pypi.org/pypi/uv/0.13.5/json",
+  "license": "MIT OR Apache-2.0"
+}

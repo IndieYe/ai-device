@@ -14,11 +14,11 @@
 dpkg -i ai-device-native-client_0.3.2-2_amd64.deb
 /usr/bin/ai-device-native-install \
   --payload /opt/ai-device/packages/0.3.2-native2 \
-  --root /var/lib/device-managed/tencent-sh \
-  --instance-id tencent-sh \
-  --server-url wss://device.kongkongye.com \
+  --root /var/lib/device-managed/<instance> \
+  --instance-id <instance> \
+  --server-url wss://device.example.com \
   --username <实例账号> \
-  --environment-file /etc/device-client/tencent-sh.env \
+  --environment-file /etc/device-client/<instance>.env \
   --unit-dir /etc/systemd/system \
   --registry /var/lib/ai-device/native \
   --register --start
@@ -34,10 +34,10 @@ dpkg -i ai-device-native-client_0.3.2-2_amd64.deb
 需要三步，第二步有 8 个必需参数：
 
 ```bash
-systemctl stop ai-device-client-tencent-sh.service
+systemctl stop ai-device-client-<instance>.service
 /usr/bin/ai-device-native-update \
   --registry /var/lib/ai-device/native \
-  --instance-id tencent-sh \
+  --instance-id <instance> \
   --operation-id upg032b01 \
   --package /var/lib/ai-device/incoming/xxx.deb \
   --envelope /var/lib/ai-device/incoming/release-xxx.json \
@@ -45,7 +45,7 @@ systemctl stop ai-device-client-tencent-sh.service
   --bootstrap-version 0.3.2 \
   --bootstrap-tree 0.3.2-native2 \
   --stopped
-systemctl start ai-device-client-tencent-sh.service
+systemctl start ai-device-client-<instance>.service
 ```
 
 问题：
@@ -188,10 +188,10 @@ ai-device-native-update \
 ```bash
 ai-device-native-install \
   --payload ai-device-native-client_0.3.2-2_amd64.deb \
-  --instance-id tencent-sh \
-  --server-url wss://device.kongkongye.com \
+  --instance-id <instance> \
+  --server-url wss://device.example.com \
   --username device-client \
-  --environment-file /etc/device-client/tencent-sh.env \
+  --environment-file /etc/device-client/<instance>.env \
   --register --start
 ```
 

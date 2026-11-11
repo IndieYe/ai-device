@@ -10,7 +10,7 @@
 | packages/fs | ai-device-fs | mcp_server_fs | mcp-server-fs |
 | packages/device-runtime | ai-device | device_runtime | device-runtime / device-mcp |
 
-三个包已发布到 PyPI：ai-device-bash 0.2.0、ai-device-fs 0.2.0、ai-device 0.2.2。三个版本号在仓库内必须保持一致：`ai-device` 的 `client` extra 精确 pin 另两个包的版本，`STATE_COMPATIBILITY` 需显式登记新 device 版本；`tests/test_release_version_consistency.py` 会在漏改时报错。不要安装同名旧包代替本仓准确制品。
+三个包已发布到 PyPI：ai-device-bash 0.2.0、ai-device-fs 0.2.0、ai-device 0.2.2。三个版本号在仓库内必须保持一致：`ai-device` 的 `client` extra 精确 pin 另两个包的版本；持久状态格式按 `lifecycle.AUDITED_STATE_FORMATS` 审计，只有变更数据格式时才需登记新格式号。`tests/test_release_version_consistency.py` 会在漏改时报错。不要安装同名旧包代替本仓准确制品。
 
 ## 开发
 
@@ -28,6 +28,17 @@ uv run --no-sync python scripts/verify_artifacts.py --fs-python 3.10
 Bash/FS 的 MCP 服务使用各自的 `[mcp]` extra；Device extras 为 client、server、ops、mcp。FS 核心保留 Python >=3.10 声明，workspace 开发环境使用 >=3.13；具体验证范围见实施记录，不代表全平台支持承诺。
 
 ## 文档
+
+### 客户端安装升级
+
+- [Linux 客户端安装升级指南](docs/client-native-linux-guide.md)（Ubuntu/Debian amd64 DEB、RHEL 系 x86_64 RPM，systemd）
+- [macOS 客户端安装升级指南](docs/client-native-macos-guide.md)（Apple Silicon arm64，PKG/launchd）
+- [旧路径退役与保留清单](docs/client-native-legacy-inventory.md)
+- [旧路径删除核对记录](docs/client-native-legacy-deletion-review.md)
+- [Linux 客户端开发记录与验收证据](docs/client-native-linux-development.md)
+- [macOS 客户端开发记录](docs/client-native-macos-development.md)
+
+### 其他
 
 - [macOS Device 用户级部署、迁移与验收](docs/macos-ai-workstation-setup-and-verification.md)
 - [macOS 可选配套工具：tmux、Harness 与管理员配置](docs/macos-optional-tools.md)（非 Device 必需依赖）

@@ -24,6 +24,10 @@ def load(name, path):
 runtime = load("operator_runtime", ROOT / "operator/runtime.py")
 manifest_tool = load("operator_manifest", ROOT / "scripts/operator_manifest.py")
 
+# The operator entry no longer pins a centre address; it forwards whatever
+# server_url the private profile names. Tests supply their own fixture value.
+FIXTURE_SERVER_URL = "https://center.example.com"
+
 
 def private(path, data):
     path.write_text(json.dumps(data))
@@ -58,7 +62,7 @@ def profile(tmp_path):
             ).hexdigest(),
         },
     )
-    private(root / "config.json", {"server_url": runtime.CENTER})
+    private(root / "config.json", {"server_url": FIXTURE_SERVER_URL})
     private(root / "credentials.json", {"admin_token": "fixture-only-token-not-real"})
     return root
 
@@ -127,7 +131,7 @@ def test_exec_contract(profile, monkeypatch, role, args):
         assert "DEVICE_RUNTIME_ADMIN_TOKEN" not in env
         assert "DEVICE_RUNTIME_API_URL" not in env
     else:
-        assert env["DEVICE_RUNTIME_API_URL"] == runtime.CENTER
+        assert env["DEVICE_RUNTIME_API_URL"] == FIXTURE_SERVER_URL
         assert env["DEVICE_RUNTIME_ADMIN_TOKEN"] == "fixture-only-token-not-real"
 
 
@@ -356,7 +360,7 @@ def test_remote_remainder_injects_profile(profile, monkeypatch, suffix):
     ]
     runtime.run(profile, "ops", args)
     assert calls[0][1][-len(args) :] == args
-    assert calls[0][2]["DEVICE_RUNTIME_API_URL"] == runtime.CENTER
+    assert calls[0][2]["DEVICE_RUNTIME_API_URL"] == FIXTURE_SERVER_URL
     assert calls[0][2]["DEVICE_RUNTIME_ADMIN_TOKEN"] == "fixture-only-token-not-real"
 
 

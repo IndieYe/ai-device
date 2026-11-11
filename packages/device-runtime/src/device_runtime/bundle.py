@@ -14,6 +14,11 @@ from packaging.version import InvalidVersion, Version
 
 from .dependencies import inspect_dependencies
 
+# The persistent data format a release writes. Defined here because bundle,
+# installation and lifecycle all write or compare it, and this module is the
+# lowest of the three: nothing below it imports upward.
+STATE_FORMAT = 1
+
 COMPONENTS = {
     "device": ("ai-device", ("device_runtime/cli.py",)),
     "bash": ("ai-device-bash", ("mcp_server_bash/core.py",)),
@@ -273,7 +278,7 @@ def build_bundle(
                 # validated against this value rather than the version number:
                 # the installed code judges the candidate, so it cannot already
                 # know which version numbers will exist later.
-                "state_format": 1,
+                "state_format": STATE_FORMAT,
                 "target": target,
                 "roles": roles,
                 "components": entries,

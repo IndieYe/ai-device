@@ -13,6 +13,12 @@ from packaging.version import Version
 TARGET = {"system": "linux", "machine": "x86_64", "python": "cp313", "glibc": "2.17"}
 DARWIN_TARGET = {"system": "darwin", "machine": "arm64", "python": "cp313", "min_macos": "11.0"}
 
+# The glibc floor the packaged Linux tree is built and verified against. The
+# package builders and the install-time check all derive their declaration from
+# here so the dependency metadata cannot drift away from the real runtime
+# requirement.
+MINIMUM_GLIBC = TARGET["glibc"]
+
 
 # Retain the exact semantics of previously published 2.27 manifests.
 SUPPORTED_GLIBC = ("2.17", "2.27")

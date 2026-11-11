@@ -31,7 +31,7 @@
 - 当前候选基于main4f7891d，三包版本仍为0.2.2/0.2.0/0.2.0；是未发布候选，不等同历史0.2.3。
 - Pillow12.3.0源码新构建，auditwheel确认manylinux2.17。WebP源码采用固定Hash缓存；其余依赖在宿主按明确cp313/x86_64/2.17标签下载并核验PyPI摘要，未在宿主执行Linux wheel。容器直接下载曾TLS超时，日志保留。
 - 完整Device700、Bash184、FS116、版本一致性6项通过；ruff、bash-n和diff-check通过。
-- 证据目录：`/Users/kongkongye/data/project/handoffs/glibc217-ses14203`，含candidate.patch、candidate-source-note.json、candidate-bundle、build-v2/auditwheel.txt、container-acceptance-report.json。
+- 证据目录：`/Users/<user>/data/project/handoffs/glibc217-ses14203`，含candidate.patch、candidate-source-note.json、candidate-bundle、build-v2/auditwheel.txt、container-acceptance-report.json。
 - 真实3.10内核验收及正式安装已完成，详细证据与边界见下文；旧目录仍保留。
 - 真实验收包SHA256：05b8794b570b7a61cb35fce25718a7927034ed71c12baf4d9d3b00a04b791be3。
 - 传输曾因MacBook SSH地址变化而超时；最终通过会话Artifact下载至MacBook，经SSH传到wx_test并核验Hash，阻塞已解除。验收工具为持久Python3.13.16及独立uv0.12.24。
@@ -52,7 +52,7 @@
 
 本会话自审覆盖依赖清单/标签、旧2.27语义、宿主门禁、Hash完整性、生命周期与构建失败路径；未做独立子会话审核。57项关键回归重跑通过，准确wheel内22个device_runtime模块与任务源码逐字节一致。当前无阻塞安装问题。该审核发生在提交与本地集成前，未公开发布。
 
-用户明确授权正式安装后，新根为`/opt/device-runtime/wx_test-glibc217`，软件输入保留`/opt/device-runtime/wx_test-glibc217-software`，未复用验收实例状态。原凭证文件仍由systemd通过`/etc/device-runtime/wx_test.env`读取；未输出凭证，旧根完整保留。并发三项显式8，身份wx_test、中心device.kongkongye.com。继承原root运行方式，未扩大权限。
+用户明确授权正式安装后，新根为`/opt/device-runtime/wx_test-glibc217`，软件输入保留`/opt/device-runtime/wx_test-glibc217-software`，未复用验收实例状态。原凭证文件仍由systemd通过`/etc/device-runtime/wx_test.env`读取；未输出凭证，旧根完整保留。并发三项显式8，身份wx_test、中心device.example.com。继承原root运行方式，未扩大权限。
 
 首次安装传wss URL被安装器在创建实例前拒绝；核实HTTP(S)入口契约后改https，正确生成wss配置。安装完成后新增`/etc/systemd/system/device-wx_test.service.d/90-glibc217.conf`，使用持久Python绝对路径和稳定run入口。systemd-analyze verify通过（另有既有netdata LogNamespace无关警告），daemon-reload后只启动已停止服务，未stop/restart。
 

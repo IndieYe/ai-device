@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 
 from packaging.requirements import Requirement
 
-from .bundle import COMPONENTS, ROLES, inspect_bundle, with_dependencies
+from .bundle import COMPONENTS, ROLES, STATE_FORMAT, inspect_bundle, with_dependencies
 from .entrypoint import LAUNCHER, POINTER, RUNNER, RUNNER_BODY
 from .management_lock import management_lease
 
@@ -169,7 +169,7 @@ def _lifecycle_binding(root, active):
         "identity": json.loads((root / "instance.json").read_text()),
         "identity_sha256": _file_sha256(root / "instance.json"),
         "config_sha256": _file_sha256(root / "config" / "roles.json"),
-        "state_format": 1,
+        "state_format": STATE_FORMAT,
     }
 
 
@@ -846,35 +846,6 @@ def add_instance_parser(modes):
     from .lifecycle import add_lifecycle_parsers
 
     add_lifecycle_parsers(actions)
-    add_launchd_parsers(actions)
-
-
-def add_launchd_parsers(actions):
-    """macOS LaunchAgent deployment; refuses on any other host."""
-    parser = actions.add_parser(
-        "launchd", help="Install or remove the macOS LaunchAgent for this instance"
-    )
-    commands = parser.add_subparsers(dest="launchd_action", required=True)
-    for name in ("install", "uninstall", "status", "profile"):
-        command = commands.add_parser(name)
-        command.add_argument("--root", type=Path, required=True)
-        command.add_argument("--label", default=None)
-        if name in {"install", "uninstall", "profile"}:
-            command.add_argument("--dry-run", action="store_true")
-        if name == "install":
-            command.add_argument(
-                "--path-env",
-                default=None,
-                help="PATH the agent runs with; defaults to a fixed system path",
-            )
-            command.add_argument(
-                "--env-file",
-                type=Path,
-                default=None,
-                help="env file holding the device token; defaults to launchd/client.env",
-            )
-        if name == "profile":
-            command.add_argument("--allow-upgrade", action="store_true")
 
 
 def run_instance(args):
@@ -898,29 +869,6 @@ def run_instance(args):
             runtime_archive=getattr(args, "runtime_archive", None),
             runtime_lock=getattr(args, "runtime_lock", None),
         )
-    elif args.instance_action == "launchd":
-        from . import launchd_deploy
-
-        handlers = {
-            "install": lambda: launchd_deploy.install(
-                args.root,
-                label=args.label,
-                path_env=args.path_env,
-                env_file=args.env_file,
-                dry_run=args.dry_run,
-            ),
-            "uninstall": lambda: launchd_deploy.uninstall(
-                args.root, label=args.label, dry_run=args.dry_run
-            ),
-            "status": lambda: launchd_deploy.status(args.root, label=args.label),
-            "profile": lambda: launchd_deploy.write_profile(
-                args.root,
-                label=args.label,
-                allow_upgrade=args.allow_upgrade,
-                dry_run=args.dry_run,
-            ),
-        }
-        result = handlers[args.launchd_action]()
     else:
         from .lifecycle import run_lifecycle
 

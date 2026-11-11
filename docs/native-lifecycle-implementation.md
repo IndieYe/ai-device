@@ -6,13 +6,13 @@
 
 - 创建日期：2026-10-26。
 - 当前会话：`ses-14204`；工作标识：`device-native-lifecycle`。
-- 源码仓库：`/Users/kongkongye/data/project/ai-device`。
-- 任务 Worktree：`/Users/kongkongye/data/project/ai-device-wt-native-lifecycle-ses14204`。
+- 源码仓库：`/Users/<user>/data/project/ai-device`。
+- 任务 Worktree：`/Users/<user>/data/project/ai-device-wt-native-lifecycle-ses14204`。
 - 任务分支：`feat/native-lifecycle-ses14204`。
 - 本地集成目标：`main`；记录目标不表示已授权自动集成或推送。
 - 起始基线：`4f7891d1fc27eeab20cc60f7e5298cb1ab187045`。
 - 权威需求：ai-assistant 仓库 `doc/requirements/device-native-installation-pairing-and-remote-upgrade.md`，需求提交 `7be75392c352151d6cb29cbdad2770f2694dcedd`。
-- 当前需求文件本机入口：`/Users/kongkongye/data/project/ai-assistant/doc/requirements/device-native-installation-pairing-and-remote-upgrade.md`。该路径仅为导航；新环境先核实仓库与准确版本，不依赖本机目录永久存在。
+- 当前需求文件本机入口：`/Users/<user>/data/project/ai-assistant/doc/requirements/device-native-installation-pairing-and-remote-upgrade.md`。该路径仅为导航；新环境先核实仓库与准确版本，不依赖本机目录永久存在。
 
 用户已要求开始在 Worktree 开发。本地源码、测试与设计准备属于当前开发范围；正式设备、发布、部署、远程 Git、删除、真实服务操作以及重大未决架构取舍保持独立门禁。需求放在宿主仓库，实际实现留在 ai-device，不复制回宿主。
 
@@ -64,7 +64,7 @@ uv sync --python 3.13 --locked --all-packages --all-extras --group dev
 
 ### 3.1 在途工作冲突
 
-另一个 Worktree `/Users/kongkongye/data/project/ai-device-wt-glibc217-ses14203` 在核查时有未提交的 glibc 2.17 相关修改，涉及：
+另一个 Worktree `/Users/<user>/data/project/ai-device-wt-glibc217-ses14203` 在核查时有未提交的 glibc 2.17 相关修改，涉及：
 
 - `packages/device-runtime/src/device_runtime/dependencies.py`
 - `packages/device-runtime/src/device_runtime/installation.py`

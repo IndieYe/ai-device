@@ -20,7 +20,7 @@ from functools import wraps
 from pathlib import Path
 
 from . import installation as install
-from .bundle import ROLES, BundleError, inspect_bundle, with_dependencies
+from .bundle import ROLES, STATE_FORMAT, BundleError, inspect_bundle, with_dependencies
 from .installation import InstallationError
 from .tasks import (
     OUTPUT_MAP_FILE,
@@ -35,30 +35,24 @@ PERSISTENT = ("instance.json", "config", "state", "run", "run-runner")
 # must reproduce it: the launcher reads it before anything else, and the copied
 # releases are the only ones that will exist after the restore.
 POINTER_FILES = ("current",)
-# Explicitly audited Device versions, NOT an inference from an installation format.
-# Widen this map only after validating a new version's persistent data contract.
+# Persistent-state formats whose data contract has been audited by a human.
 #
-# This list cannot be the gate for an upgrade: the code that validates a
-# candidate release is the code already installed, so it cannot know the version
-# number of a release published after it. Pinning the gate to this map made every
-# future upgrade fail with "no validated state-format-1 compatibility", which is
-# an upgrade refused by its predecessor rather than by any real incompatibility.
-# What a candidate must prove is the data format it writes, and that is declared
-# by the release manifest and checked below.
-STATE_COMPATIBILITY = {
-    "0.2.0": 1,
-    "0.2.1": 1,
-    "0.2.2": 1,
-    "0.2.4": 1,
-    "0.2.5": 1,
-    "0.2.6": 1,
-    "0.2.7": 1,
-    "0.3.4": 1,
-}
-
-# The only state format this code can read and write. A release that declares a
-# different one is refused regardless of its version number.
-STATE_FORMAT = 1
+# A version number is not the right thing to audit: bumping __version__ alone
+# says nothing about whether the bytes on disk still parse. Auditing the format
+# number instead means a release that changes persistent data must add an entry
+# here and confirm the contract, while a release that only bumps the version is
+# correctly left alone.
+#
+# This list is NOT the gate for an upgrade. The code that validates a candidate
+# release is the code already installed, so it cannot know which versions will
+# exist later; what a candidate must prove is the data format it writes, and
+# that is declared by the release manifest and checked below. Pinning the gate to
+# a version allow-list made every future upgrade fail with "no validated
+# state-format-1 compatibility" -- an upgrade refused by its predecessor rather
+# than by any real incompatibility.
+#
+# Widen this list only after validating the new format's persistent data contract.
+AUDITED_STATE_FORMATS = (1,)
 
 
 def _compatible(manifest):
@@ -334,7 +328,7 @@ def _binding(root, active, identity):
         "identity": identity,
         "identity_sha256": _tree(root / "instance.json")["instance.json"]["sha256"],
         "config_sha256": _tree(root / "config" / "roles.json")["roles.json"]["sha256"],
-        "state_format": 1,
+        "state_format": STATE_FORMAT,
     }
 
 
@@ -405,7 +399,7 @@ def rollback_release(root, release, *, stopped=False):
         candidate = _check_release(root, release, active["roles"])
         # Format 1 only. No data rollback or migration is performed or implied.
         pointer = _publish(root, candidate)
-        return {"status": "software_rollback", "state_format": 1, **pointer}
+        return {"status": "software_rollback", "state_format": STATE_FORMAT, **pointer}
 
 
 @contextmanager
@@ -645,7 +639,7 @@ def backup_instance(root, destination, *, stopped=False):
         )
         manifest = {
             "format_version": 1,
-            "state_format": 1,
+            "state_format": STATE_FORMAT,
             "active": active,
             "inventory": before,
             "task_outputs": task_outputs,
@@ -679,7 +673,7 @@ def _validate_backup(root):
         or complete["manifest_sha256"]
         != hashlib.sha256((root / "backup.json").read_bytes()).hexdigest()
         or manifest["format_version"] != 1
-        or manifest["state_format"] != 1
+        or manifest["state_format"] != STATE_FORMAT
         or {p.name for p in root.iterdir()}
         != {
             *PERSISTENT,

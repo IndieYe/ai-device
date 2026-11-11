@@ -2,13 +2,13 @@
 
 ## 1. 状态、来源与执行入口
 
-- 状态：需求已确认，待实施。本文不是功能已经完成或制品已经通过验收的声明。
-- 日期：2026-11-04。
-- 仓库：`ai-device`；当前本机路径 `/Users/kongkongye/data/project/ai-device`。路径只是本机定位，换环境以实际 checkout 为准。
+- 状态：需求已确认，正在实施。阶段一（Linux DEB）已交付并上生产；阶段二（macOS PKG）代码层已完成，**真实 PKG 安装升级尚未实测**。本文不是功能已经完成或制品已经通过验收的声明。
+- 日期：2026-11-04 创建；2026-11-06 按实施结果同步。
+- 仓库：`ai-device`；当前本机路径 `/Users/<user>/data/project/ai-device`。路径只是本机定位，换环境以实际 checkout 为准。
 - 分析基线：`61388b2375d18b1200376a344263e61f0538dba2`。实施前检查最新源码和工作区，不回退基线、不覆盖他人修改。
 - 需求讨论来源：`ses-14497`；参考历史 `ses-14204`。本文包含实施所需决策，不要求新会话读取历史聊天。
 - 用户最终选择：按推荐方案；只做客户端；Mac 不需要未登录运行；允许新实现替代旧升级代码，新路径验收后删除旧路径。
-- 当前仅提交需求，尚未实施、构建或部署。后续用户要求按本文开发时，按本文范围实施；真实部署、真实服务启停、发布远程制品及 Git push 仍须遵守当时有效的独立授权和安全规则。
+- 实施分支：`feat/client-native-install-ses14497`，worktree `/Users/<user>/data/project/ai-device-wt-client-native-ses14497`。真实部署、真实服务启停、发布远程制品及 Git push 仍须遵守当时有效的独立授权和安全规则。
 
 ### 新会话开始顺序
 
@@ -49,6 +49,14 @@
 
 macOS 最低系统版本须在构建前依据所选 Python 与原生依赖的实际支持范围确定并记录，不臆造支持范围；安装前拒绝不支持的系统。Linux 如确需扩大范围，先报告需求变化，不悄悄增加 RPM 或其他架构。
 
+**Linux 平台兼容扩展（2026-11-08 起，分三阶段推进）：** 上表 Linux 行描述的是首发验收环境，不是运行时的最低要求。包内运行时实际只需 **glibc 2.17**，DEB 的依赖声明已据此从 2.39 下调（详见 `docs/client-native-linux-development.md` 的「宿主 glibc 基线」）。进一步扩大 cgroup v1 与 RPM 支持的三个完整阶段见：
+
+- `client-linux-platform-compat-phase1-glibc217.md`
+- `client-linux-platform-compat-phase2-cgroup-v1.md`
+- `client-linux-platform-compat-phase3-rpm.md`
+
+各阶段完成前不得声称对应能力已交付；glibc 2.17 满足不等于系统受支持，cgroup 与 systemd 版本另有要求。
+
 ### 3.2 本次不做
 
 - 中心下发升级、设备群批量更新、远程更新协议、自动检查更新。
@@ -62,7 +70,7 @@ macOS 最低系统版本须在构建前依据所选 Python 与原生依赖的实
 
 ## 4. 已查证现状与代码入口
 
-以下是基线的静态事实，实施时复核，不把历史设计文档当作已实现事实。
+以下是基线的静态事实，实施时复核，不把历史设计文档当作已实现事实。**本节保持基线原样，不随后续实施更新**；例如末行“未发现 pkgbuild/productbuild 实现”在当时成立，实现现已存在（`packages/device-runtime/scripts/build-client-pkg.py`），下文各节描述当前状态。
 
 | 入口 | 已确认事实与影响 |
 | --- | --- |
@@ -114,11 +122,13 @@ macOS 最低系统版本须在构建前依据所选 Python 与原生依赖的实
 
 ```bash
 # Ubuntu，首次安装和升级都安装同一种 DEB
-sudo apt install ./ai-device_<version>_amd64.deb
+sudo apt install ./ai-device-client_<version>_amd64.deb
 
 # macOS，首次安装和升级都安装同一种 PKG
-sudo installer -pkg ./ai-device-<version>-arm64.pkg -target /
+sudo installer -pkg ./ai-device-client-<version>-arm64.pkg -target /
 ```
+
+macOS 的可交付包由 `build-client-pkg.py --mode shipping` 产出，文件名不带模式后缀；`inspection`、`verification`、`stage_only` 三个演练产物各自带后缀，因此只有一个包叫这个名字。
 
 不要求新增 `device upgrade` 命令。若为目标用户上下文、维护闸门或服务协调必须提供薄安装入口，应使用同一套包生命周期逻辑，并提供一条明确命令；不得同时维护手动安装与专用升级两套实现。直接安装包的路径也必须安全，不能只有外层 wrapper 才能防止活动任务被中断。
 
@@ -140,6 +150,35 @@ sudo installer -pkg ./ai-device-<version>-arm64.pkg -target /
 
 macOS 已配置用户已登录时，升级必须正确卸载/加载该用户服务，避免 KeepAlive 在替换窗口重启旧进程。系统安装器负责的程序写入和用户服务操作边界要清晰，不新增常驻提权 helper。桌面/辅助功能等 OS 权限不自动授予，缺失时如实提示。
 
+**升级要求用户已登录（2026-11-06 确认）：** 当前实现中，升级协调器需要向一个正在运行的实例发出空闲退出请求，并待其自行退出后才继续卸载、替换与启动。因此未登录、已登录但作业未运行、或程序已损坏到无法应答时，协调器会拒绝而不是猜测，安装失败、旧程序留在原位。
+
+这一限制是本轮有意接受的设计结果，不是缺陷，但必须区别于产品要求：需求只要求“不要求未登录运行”和“未登录时升级不强行启动 GUI 域服务”，并未要求“升级必须依赖运行中的实例”。当前实现比需求更严。已登录但服务未运行时的修复路径（`repair-registered-program`）目前只有手动入口，PKG 未接入自动修复，因此这条路仍不覆盖。
+
+**首次安装与升级走不同发布原语（2026-11-06）：** 未注册状态下 `postinstall` 按 `/opt/ai-device-client` 是否存在分流：不存在时调 `first-program`（管理锁 + 内嵌清单校验 + 只读 host 冲突探测，严格 create-only，以 `copyfile` 发布）；已存在时调 `commit`（单次 `renamex_np`，不取锁、不做冲突探测）。分流是必需的：`first-program` 拒绝已存在目标，全部走它会让同包重装不再可能。两条分支均通过携带内嵌清单的升级入口执行，负载内的 `commit` 二进制本身不含清单。
+
+`first-program` 的目标路径是编译期常量，因此 installable 构建会拒绝与 `/opt/ai-device-client` 不一致的 `program` 参数；否则首装与升级会发布到不同位置。
+
+**实现边界（2026-11-05）：** 服务加载/卸载使用 `launchctl bootstrap <gui/UID> <注册的plist>` 与 `launchctl bootout gui/UID/local.ai-device.client`，仅针对已登记的唯一目标，不使用 `-k`、`disable`、进程信号或服务集合清理；非零退出、超时与无响应一律为 unknown，不重试、不回滚、不推断为相反状态。升级窗口顺序为：确认旧实例完整退出（租约自退出证据）→ `bootout` 卸载 → 替换程序 → 释放 `start`/`runtime` 锁 → `bootstrap` 重新加载并按其 `RunAtLoad` 启动，**不再另发 `kickstart`**。释放锁的必要性与两种锁的具体语义见 §7.1.1。
+
+**升级协调器的交付形态（2026-11-06，一份树）：** 执行该窗口的原生入口 `upgrade-registered-program` 编译在 `client-macos-installer.m` 内，由 `build-client-pkg.py` 产出 `/opt/ai-device-client-upgrade` 层，安装后为 `installer-inspection` 单个可执行文件，**不再携带同级 `resources/client-tree`**。一份包只装一份程序树（在 stage 路径），升级入口把这份树内嵌清单（约 300 KB 哈希表）编进自身，通过 argv 接收 stage 路径来校验和发布。它仍**不能**放进被升级的程序树：该树正是本操作替换的对象，且其 stage 路径逐构建变化。该层不发布任何程序，发布仍是协调器的运行时动作；入口自身仍拒绝忙实例并要求 `--confirm-idle-instance-exits`/`--confirm-legacy-clients-disabled`。
+
+同理，全部原生 verb（`first-program`、`observe-unregistered-program`、`repair-registered-program`、`upgrade-registered-program`）均改为 `argc==4` 并接收绝对 stage 路径，不再依赖 `locate_bound_resources` 自定位。`service_relay_relay` 与恢复观察同样改为显式树参数：一份树布局下入口旁已无树可定位。
+
+两个约束必须同时满足，否则顺序不成立：
+
+- `runtime`/`start` 锁必须在 `bootstrap` **之前**按正确方式释放或转换。`runtime.lock` 是独占锁，与 launcher 必冲突；`start.lock` 由 launcher 以 `LOCK_SH` 共享获取，协调方若同样用共享锁则**不阻塞启动**，只有以独占方式持有时才阻塞（§7.1.1 真机实测）。两种冲突的共同后果都是 launcher 退出 0 且不 `exec`，而 `KeepAlive: {SuccessfulExit: false}` 不因零退出重启，作业因此静默停摆。所以“全程持锁直到 ready”是错误实现，`management` 锁跨重载保留。
+- `bootstrap` 只保证作业被加载，不保证目标已在服务。就绪必须以只读状态查询在调用方 deadline 内**有界观察**得到；这是观察，不是重放启动请求。身份不匹配与“尚未就绪”在查询层不可区分，因此失败一律以耗尽 deadline 收敛并判失败。
+
+`bootout` 具有服务终止效应，可能强杀进程，不能仅因 argv 中没有 `kill` 就描述为“无信号”；`bootout` 的实际影响范围是否满足停止保证仍为 unknown，生产放行前必须另行确认。
+
+尚未闭环：真实 GUI 登录会话中的 `bootstrap/bootout` 与 KeepAlive 竞争、`loaded` 定义等价、系统 Installer 中的写入期互斥装配，以及真实双平台验收；这些都需要另行授权的真实动作。
+
+坏程序修复入口已在源码层实现（`repair-registered-program --confirm-service-not-running`）：只以 `RENAME_SWAP` 替换程序树，不依赖旧程序可启动，不触碰配置/凭证/身份，且实例若应答 ready 即拒绝。但“服务已停止”仍只是调用方断言，入口只能做负向否决（应答即拒），不能证明停止；实例在运行却恰好不应答时断言与不应答会同时成立。因此 §179 的“结合服务状态确认”尚未满足，保持 unknown。
+
+写入期互斥已改为消除写入期而非锁住写入期：包 payload 写入 stage 路径 `/opt/ai-device-client-stage-<包版本>-<build_id 前12位>`（例如 `/opt/ai-device-client-stage-0.3.4.12-a453baca9c3a`，由 `build-client-pkg.py` 的 `stage_for()` 从 tree 的 `client-identity.json` 推导），`postinstall` 以一次 `renamex_np`（`RENAME_SWAP`/`RENAME_EXCL`）原子发布到 `/opt/ai-device-client`，因此两个脚本之间不存在对运行路径的写入间隙。`preinstall`/`postinstall` 仍是两个独立进程，脚本锁仍随退出释放——这正是不能用锁方案的原因；现行方案不依赖跨进程持锁。
+
+发布原语按注册状态分派（详见 §6.3）：已注册走 `upgrade-registered-program`（含退出、卸载、替换、加载全流程）；未注册按目标是否存在分别走 `first-program`（create-only，带管理锁与 host 冲突探测）或 `commit`（单次重命名）。`commit` 只做一次重命名，不注册、不启停、不回滚，也不取管理锁（取锁会暗示已排除并发安装器，而它无法验证这一点）。`RENAME_SWAP` 是交换，旧树会留在 stage 路径，需由调用方处理。失败时退出码无法区分“未发生”与“已发生但未验证”，因此记录原始状态、不重试。真实 PKG 安装仍未经实测，此段仅描述已实现并在离线测试中验证的结构。
+
 ## 7. 升级、互斥与活动任务
 
 ### 7.1 标准顺序
@@ -148,12 +187,65 @@ macOS 已配置用户已登录时，升级必须正确卸载/加载该用户服�
 2. 获取本机升级互斥；与配置写入等可能冲突的管理操作保持明确互斥，不并行执行两个升级。
 3. 若客户端运行，在与新任务准入共享的协调边界内检查是否空闲。
 4. 忙则拒绝升级，保持正常接入，不停止、不强杀、不排队等待。
-5. 空闲则短暂关闭新任务准入，通过系统服务管理停止客户端，并确认已停止。
+5. 空闲则短暂关闭新任务准入并正常停止客户端：Linux 通过系统服务管理器停止；macOS 通过持有空闲租约的同一连接请求该实例正常退出，再由 launchd 协调服务卸载与后续启动。必须确认完整退出并取得跨实例启动保护，才可替换程序。
 6. 安装新程序，保留配置、身份与状态。
 7. 按配置和平台登录状态启动服务，执行本机就绪检查。
 8. 输出明确结果，释放本次控制资源。
 
 不是所有步骤必须是独立命令或持久状态。包管理器已有互斥和错误处理尽量复用，不再建立候选/批准/激活/回执多套升级事务。
+
+#### 7.1.1 加载与就绪不是同一件事（真机实测）
+
+`launchctl bootstrap` 成功只表示作业被加载，不表示目标已在服务。这一区别在真机上被反复重现（macminim6、gui/501、真实 launcher 与手工 plist）：
+
+| 锁状态 | bootstrap | launchd 报告 | 实际 |
+| --- | --- | --- | --- |
+| 锁空闲 | 0 | `state = spawn scheduled` | launcher 取锁并 exec，正常进入客户端 |
+| runtime 被独占，或 start 被独占 | 0 | `state = not running`，`last exit code = 0` | **未 exec**，无日志输出 |
+| start 仅被共享持有 | 0 | `state = spawn scheduled` | launcher 正常 exec |
+
+因此：
+
+- **不能把 `bootstrap` 返回 0 或作业存在当作启动成功。** 就绪必须由只读状态查询在调用方 deadline 内**有界观察**得出；这是观察，不是重放启动请求。身份不匹配与"尚未就绪"在查询层不可区分，失败一律以耗尽 deadline 收敛。
+- **launcher 遇锁忙时退出 0 且不 `exec`。** 配合 `KeepAlive: {SuccessfulExit: false}`，零退出不触发重启，作业会永久停在 `not running` 且**静默不自愈**。这比反复重启更难发现——反复重启至少有日志，静默停摆要等到检查就绪才暴露。
+- **`runtime` 锁必须在 `bootstrap` 前释放，`start` 锁则不必然。** `runtime.lock` 是独占锁，与 launcher 必冲突；`start.lock` 由 launcher 以 `LOCK_SH` 共享获取，协调方若同样使用共享锁则**不阻塞启动**，只有以独占方式持有时才阻塞。"全程持锁直到就绪"是错误实现。
+- 本节结论来自离线锁竞争与手工 plist 测试，**不包含**真实客户端连接、任务准入、GUI 登录登出或未登录更新；这些仍需另行授权的真机验收，不因本节存在而视为已验收。
+
+#### 7.1.2 升级窗口端到端实测（2026-11-06，macminim6）
+
+条件：真实已登记 LaunchAgent（`register()` 建立 `registration.json` + 用户 plist）+ 本地假中心提供连接，非手工 plist。
+
+| 场景 | 入口输出 | rc | 结果 |
+| --- | --- | ---: | --- |
+| 空闲 | `AI_DEVICE_UPGRADE_READY_EXACT_V1` | 0 | 旧 pid 退出，`bootout` → 发布 → `bootstrap`，新 pid 就绪 |
+| 忙（有活动任务） | `AI_DEVICE_UPGRADE_REFUSED_V1` | 70 | pid 不变，程序未动，任务继续并成功完成 |
+
+- 成功路径已逐项核实：旧 pid 消失、新 pid 不同、`status.ready=true`、`runtime.lock` 由新实例的 fd 3 持有（而非协调器保留），`/opt/ai-device-client` 树 digest 未变（本次源与目标同一棵树）。
+- 忙拒绝后**新任务准入保持**：被拒时正在执行的 `sleep 25` 任务照常 `succeeded`，随后 `acquire` 恢复 `true`。
+- 一个已修复的缺陷：此前忙与“退出未确认”都被报成 `EXIT_UNKNOWN`（协调器只判断 `!= LEASE_ACCEPTED`，丢弃了 lease 层已有的 `LEASE_BUSY`）。两者的操作契约相反——`REFUSED` 可重试，`EXIT_UNKNOWN` 禁止重放——忙报 unknown 会让调用方以为产生了副作用。
+
+**仍未覆盖**：真实中心与真实设备凭证、GUI 登录/退出/重新登录、用户未登录时更新、卸载保数据、带真实不同版本 A→B 的完整窗口、中心/MCP 回归。本节只证明“空闲升级”与“忙拒绝且保持准入”两条路径在有真实 launchd 托管与真实维护 socket 的条件下成立。
+
+#### 7.1.3 AFTER_UNLOAD 恢复加载（2026-11-06 修复）
+
+发布失败后，协调器会在 `AFTER_UNLOAD` 阶段尝试一次 `bootstrap` 恢复原服务。该路径曾存在一个阻断性缺陷：
+
+- `service_relay_relay` 用**当前构建内嵌的清单**校验传入的树。`AFTER_UNLOAD` 时什么都没发布，`paths[@"program"]` 仍是**旧树**，因此校验必然失败，且失败发生在 `launchctl` 之前。
+- 结果是：卸载已完成、恢复被拒、进程停在停止状态，磁盘上还留着一个看似就绪的 stage。可恢复的失败变成了不可恢复的故障。
+- 该逻辑本身正确，错误在强度：relay 只需要一个能 import `client_macos_service_load_entry` 的解释器，那个模块只调 `launchctl bootstrap`，**不读树内容**。要求旧树与新版逐字节相同属于过度约束。
+
+修复方式是按阶段区分校验强度：
+
+| 阶段 | 加载的树 | 校验 |
+| --- | --- | --- |
+| `bootout`（卸载） | stage 新树 | 内嵌清单 + 属主 |
+| forward load（发布后） | 刚发布的树 | 内嵌清单 + 属主 |
+| `AFTER_UNLOAD` 恢复 | live 旧树 | 仅属主与结构（无清单） |
+| `AFTER_HANDOFF` 恢复 | 已发布的新树 | 内嵌清单 + 属主 |
+
+非清单校验并未取消：`tree_owner_valid` 仍要求属主正确、无组/其他写位、无硬链接、目录可读，这是 helper 实际依赖的性质。
+
+该缺陷在 2000+ 项测试下未暴露，因为 relay 测试都把 `verify_resource_tree` 桩成恒返回 1——那些测试验证的是超时、回收和锁持有，不是清单。**被桩掉的路径就是未测试的路径**，新增测试改用真实清单编译校验器，以新旧两树交叉验证固定该行为。
 
 ### 7.2 忙闲与异常恢复
 
@@ -162,9 +254,30 @@ macOS 已配置用户已登录时，升级必须正确卸载/加载该用户服�
 - 拒绝时说明有活动任务，可返回有限数量/计数，不泄露命令内容或凭证。
 - 不复用旧 drain 的“忙也关门”语义；忙时必须保持或恢复准入。
 - 在服务尚未停止时，安装进程异常退出/控制连接丢失不能造成永久关门。使用最小的本机持有期机制或有界恢复方案，说明所有者、失效条件与竞态，不为此引入持久升级状态机。
-- 停止必须通过服务管理器及正常收口，不绕过失败强杀。无法确认已停止则不覆盖运行程序。
+- 停止必须正常收口，不绕过失败强杀。Linux 由服务管理器发起；macOS 升级维护允许持有空闲租约的实例自行正常退出，随后由 launchd 协调卸载及启动。该调整不改变普通 SIGTERM、退出登录或系统关闭语义。无法确认已停止或缺少启动保护则不覆盖运行程序。
+- macOS 退出请求的提交点与任务准入共享协调边界：提交前连接丢失释放租约，提交后退出承诺不可因断连撤回。确认回包仅表示请求已接受，不证明完整退出；响应丢失视为结果未知，不向新实例自动重放。
 - 管理上拒绝通过 Device 自己的远程执行任务升级自己；本期是本机管理员入口，不能为自升级请求增加例外。
 - 客户端不运行时，支持安装/修复；不能把“控制 socket 不通”一律当作进程已停止。结合服务状态及必要的本机运行互斥确认；状态未知时失败并提示。
+
+**当前实现与该条的范围差（2026-11-06）：** 上一条是需求，当前升级实现不等于已满足它。已注册状态下，升级协调器必须先向运行中的实例取得空闲退出承诺；没有实例应答就报 `EXIT_UNKNOWN` 并拒绝，不会继续。所以：
+
+| 机器状态 | 升级行为 | 是否符合需求 |
+| --- | --- | --- |
+| 已登录，实例空闲 | 正常升级 | 是 |
+| 已登录，实例忙 | 拒绝，保留准入 | 是 |
+| 已登录，实例未运行或不应答 | 拒绝 | **否**，需求要求可安装/修复 |
+| 用户未登录 | 拒绝 | 否，需求允许下次登录用新版本 |
+
+后两行的自动路径尚未实现：`repair-registered-program` 已有手动门禁入口，但 PKG 未接入自动修复，且它只做负向否决（应答即拒绝），不能自行证明服务已停止。补齐需在“无法应答”与“正在运行但拒答”之间做出可验证的区分，这仍是未解决的设计问题，不能靠降低门禁绕过。
+
+### 7.3 macOS 停止保证范围（用户批准方案 A）
+
+- macOS 的“完全停止”覆盖客户端进程及其受管活动任务；已成功完成命令显式脱离的后代进程不纳入此保证，不为升级追杀这些进程。
+- 不把仍在受管后台执行的任务、尚未完成或状态未知的任务当作上述例外；忙时仍立即拒绝并保持准入。不得为绕过停止条件而提前将任务标为成功或改变共享 Bash 完成语义。
+- 空闲租约只证明当前受管任务为空，不承诺追溯所有历史命令的后代。Linux 已有 systemd cgroup 停止要求保持不变。
+- 客户端自身退出、服务卸载、KeepAlive 与重新登录引起的启动竞争仍必须处理；程序替换前必须取得明确停止和启动保护证据，未知则拒绝。
+- 验收增加：已成功命令显式脱离的有限后代可以自然继续且不被强杀；受管前台/后台任务仍触发忙拒绝；停止超时、控制断开和重新启动竞争不得导致边运行边替换。
+- 本范围确认不授予真实 Mac 安装或服务操作权限，不代表 PKG 生命周期已经验收。
 
 ## 8. 失败、数据与成功语义
 
@@ -243,8 +356,13 @@ macOS 已配置用户已登录时，升级必须正确卸载/加载该用户服�
 | 旧布局/旧服务冲突 | 拒绝且无破坏，不同时运行新旧客户端 |
 | 普通卸载 | 服务移除，配置与业务数据保留 |
 | 中心/MCP 回归 | 原部署/启动能力不因客户端清理失效 |
+| Mac 首次安装后未注册 | 程序发布成功，输出待配置提示含配置路径与注册命令，不静默成功、不自行选择用户 |
+| Mac 同包重装（已注册） | 登录取空闲退出承诺后完成替换，配置/身份/日志保留 |
+| Mac 发布失败后恢复 | 返回明确失败码，服务处于已知状态，不留下“看似就绪”的 stage |
 
 验证必须包含：核心单元/并发回归、包内容和依赖检查、真实 DEB 生命周期、真实 arm64 PKG/LaunchAgent 生命周期。至少两个有区别的测试版本验证升级；记录版本、SHA256、平台、命令、结果和未测项，证据不得包含凭证。服务适配器 mock 测试作为补充，不替代真实服务管理器行为。
+
+**证据强度提醒（2026-11-06）：** 已发生过一次“2000+ 测试全绿但恢复路径实际不可用”的情况（§7.1.3），原因是相关测试把清单校验桩成恒真。因此对任何“验证通过”的结论，必须同时说明该路径的校验是否被桩掉；真实 PKG 安装升级仍为未实测，不得以当前测试结果代替。
 
 ## 12. 实施顺序与阶段门禁
 
@@ -260,6 +378,29 @@ macOS 已配置用户已登录时，升级必须正确卸载/加载该用户服�
 - 阶段结束标记 Linux 可用、macOS 尚未交付。是否继续下一阶段遵循用户本轮授权与适用开发工作流，不把本阶段结束误报整个需求完成。
 
 ### 阶段二：完整 macOS arm64 交付与最终清理
+
+**当前进度（2026-11-09）：** 真机验收已完成四项，代码层与构建链闭合：
+
+- **A→B 升级**：0.3.6→0.4.0，identity `84f64def`→`eaf47863`，config/token 哈希不变，中心侧 build_id 与安装树一致
+- **忙拒绝**：中心下发真实后台任务后 `AI_DEVICE_UPGRADE_REFUSED_V1`（exit 70），拒绝后包/PID/live 树/连接/业务任务全部保持；任务结束后同包重装成功
+- **卸载与重新注册**：`AI_DEVICE_UNINSTALL_SERVICE_REMOVED_V1`，删除 plist/job/程序树/registration，保留 config/token/state（两个 sqlite integrity ok）
+- **登录/登出生命周期**：登出 `EXITED code=0`、`job state=removed`、无孤儿；登录后 `RunAtLoad` 自动拉起
+
+**仍未完成：**
+
+- ~~**macOS 用户指南**~~：已补 `docs/client-native-macos-guide.md`（交付物 2）
+- ~~**登录后约 63 秒空窗**~~：已查清为 launchd 域级 `on-demand-only` 节流（`gui/<uid>` 整个域含 Apple 自家 job 一并挂起，恰好 60 秒后集中拉起），非客户端缺陷，无需修复；已写入 `docs/client-native-macos-guide.md`
+- ~~**旧路径最终清理**~~：旧 macOS 部署链（`launchd_deploy.py`、`instance launchd` 子命令、专属测试）已删除，净减 417 行，全量 2199 passed / 20 skipped。核对过程与保留理由见 `docs/client-native-legacy-deletion-review.md`；清单 `docs/client-native-legacy-inventory.md` 已同步
+- ~~**README / 正式交付文档 / 操作技能 / 版本一致性测试（交付物 6）**~~：根 README 补 macOS 指南并去除“阶段二进行中”过时表述；`packages/device-runtime/README.md` 完整包章节由“重构中 / 不提供 RPM / Mac 尚未实现”改为三平台现状表；`docs/device-delivery.md` 开头区分 bundle 实例与完整包两条路径；`skills/device-operations/SKILL.md` 修正两处不存在的 `doc/docs/` 路径并补指向两份指南；新增 3 项版本一致性测试（DEB/RPM 字符集分歧、发行版本交集、包版本独立于 `__version__`），全量 2202 passed / 20 skipped
+- **并发安装**：preinstall 已改为 `mkdir` 原子占位，冲突明确拒绝并写入 `preinstall-token`
+  （`BUSY` / `RESIDUE`），10 进程实测 1 放行 9 拒绝；仍未串行化，胜者仍可能替换运行树。
+  多用户、非管理员路径未验证；签名与公证未完成。详见
+  `docs/client-native-macos-concurrent-install-design.md`
+
+旧未受管实例的升级退路（`upgrade_supervisor._runner_bound` 的 launchd 段）刻意保留，
+待旧实例全部退役后可单独评估，不属本次清理范围。
+
+全量单元测试绿不等于本节完成；上述遗留项闭合后才算阶段二结束。
 
 - 复用阶段一已稳定的配置语义、客户端运行与最小本机协调，不照搬 systemd 的平台实现。
 - 新增 arm64 构建、PKG、指定用户配置及 LaunchAgent 安装升级卸载。
