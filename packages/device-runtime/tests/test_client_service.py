@@ -234,6 +234,8 @@ def test_unsafe_shutdown_policy_is_rejected(sigkill, killmode):
 @pytest.mark.parametrize("populated", ["1", "0", None])
 def test_stopped_state_checks_descendant_cgroup(tmp_path, monkeypatch, populated):
     monkeypatch.setattr(client_service, "CGROUP_ROOT", tmp_path)
+    # The unified hierarchy is recognised by this file, not by the mount point.
+    (tmp_path / "cgroup.controllers").write_text("cpuset cpu io memory\n")
     directory = tmp_path / "system.slice/client.service"
     directory.mkdir(parents=True)
     if populated is not None:
@@ -250,3 +252,106 @@ def test_stopped_state_checks_descendant_cgroup(tmp_path, monkeypatch, populated
     else:
         with pytest.raises(client_service.ServiceError):
             service.state()
+
+
+def _v1_layout(root):
+    """Build a legacy hierarchy the way a v1 host actually lays it out."""
+    (root / "systemd").mkdir(parents=True)
+    # v1 has no cgroup.controllers anywhere.
+    return root / "systemd/system.slice/client.service"
+
+
+def test_cgroup_version_detection(tmp_path, monkeypatch):
+    monkeypatch.setattr(client_service, "CGROUP_ROOT", tmp_path)
+    assert client_service.cgroup_v2() is None  # neither layout present
+    (tmp_path / "cgroup.controllers").write_text("cpu\n")
+    assert client_service.cgroup_v2() is True
+    (tmp_path / "cgroup.controllers").unlink()
+    (tmp_path / "systemd").mkdir()
+    assert client_service.cgroup_v2() is False
+
+
+@pytest.mark.parametrize("procs", ["", "\n", "1234\n", "1234\n5678\n"])
+def test_v1_populated_uses_cgroup_procs(tmp_path, procs):
+    """A v1 group is empty only when cgroup.procs holds no process."""
+    directory = tmp_path / "unit"
+    directory.mkdir()
+    (directory / "cgroup.procs").write_text(procs)
+    assert client_service.cgroup_group_populated(directory, False) is bool(procs.strip())
+
+
+def test_v1_populated_is_unknown_when_procs_missing(tmp_path):
+    """Absent file is 'cannot tell', never 'empty'."""
+    directory = tmp_path / "unit"
+    directory.mkdir()
+    assert client_service.cgroup_group_populated(directory, False) is None
+
+
+def test_v1_unit_directory_resolves_under_systemd_mount(tmp_path, monkeypatch):
+    monkeypatch.setattr(client_service, "CGROUP_ROOT", tmp_path)
+    (tmp_path / "systemd").mkdir()
+    resolved = client_service.cgroup_unit_directory("/system.slice/client.service")
+    assert resolved == tmp_path / "systemd/system.slice/client.service"
+
+
+def test_stopped_state_refuses_when_v1_group_has_processes(tmp_path, monkeypatch):
+    """The check must actually run on v1, where it previously passed silently."""
+    monkeypatch.setattr(client_service, "CGROUP_ROOT", tmp_path)
+    directory = _v1_layout(tmp_path)
+    directory.mkdir(parents=True)
+    (directory / "cgroup.procs").write_text("4242\n")
+
+    def run(argv, **kwargs):
+        if "--property=ControlGroup" in argv:
+            return SimpleNamespace(returncode=0, stdout="/system.slice/client.service")
+        return reply("failed")
+
+    with pytest.raises(client_service.ServiceError, match="live processes"):
+        client_service.SystemdClient(run=run).state()
+
+
+def test_stopped_state_allows_empty_v1_group(tmp_path, monkeypatch):
+    monkeypatch.setattr(client_service, "CGROUP_ROOT", tmp_path)
+    directory = _v1_layout(tmp_path)
+    directory.mkdir(parents=True)
+    (directory / "cgroup.procs").write_text("")
+
+    def run(argv, **kwargs):
+        if "--property=ControlGroup" in argv:
+            return SimpleNamespace(returncode=0, stdout="/system.slice/client.service")
+        return reply("failed")
+
+    assert client_service.SystemdClient(run=run).state() == "stopped"
+
+
+def test_absent_group_directory_warns_instead_of_silently_passing(tmp_path, monkeypatch, capsys):
+    """This is the branch that made the protection vanish on v1.
+
+    The old code returned without a word whenever /sys/fs/cgroup<group> was
+    missing, which is what always happens under the legacy hierarchy. The
+    behaviour stays permissive for hosts without a matching mount, but it must
+    no longer be silent.
+    """
+    monkeypatch.setattr(client_service, "CGROUP_ROOT", tmp_path)
+    (tmp_path / "systemd").mkdir()
+
+    def run(argv, **kwargs):
+        if "--property=ControlGroup" in argv:
+            return SimpleNamespace(returncode=0, stdout="/system.slice/client.service")
+        return reply("failed")
+
+    assert client_service.SystemdClient(run=run).state() == "stopped"
+    assert "nothing to verify" in capsys.readouterr().err
+
+
+def test_unrecognisable_hierarchy_warns(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(client_service, "CGROUP_ROOT", tmp_path)
+
+    def run(argv, **kwargs):
+        if "--property=ControlGroup" in argv:
+            return SimpleNamespace(returncode=0, stdout="/system.slice/client.service")
+        return reply("failed")
+
+    assert client_service.SystemdClient(run=run).state() == "stopped"
+    assert "cgroup hierarchy" in capsys.readouterr().err
+

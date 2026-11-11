@@ -62,6 +62,12 @@ class DeviceClient:
         self.journal = Journal(Path(state_dir) / "operations.sqlite3", owner=self.url)
         self.executor = executor
         self.reconnect_delay = reconnect_delay
+        # Connection state is logged on change, not on every attempt. The
+        # reconnect loop runs once a second, so per-attempt logging would write
+        # 86k lines a day for a device that is simply unreachable -- and would
+        # bury the transition that actually explains an outage. None means no
+        # outcome yet, so the first one always logs even if it is a failure.
+        self._connected = None
         self._socket = None
         self._send_lock = asyncio.Lock()
         self._lifecycle_lock = asyncio.Lock()
@@ -75,6 +81,8 @@ class DeviceClient:
         if active_path.is_file():
             self._loaded_release = json.loads(active_path.read_text()).get("release")
         self._maintenance_id = None
+        self._maintenance_exit_callback = None
+        self._maintenance_exit_committed = False
         self._maintenance_server = None
         self._maintenance_enabled = (
             maintenance or (self.state_dir.parent.parent / "upgrade-profile.json").is_file()
@@ -156,14 +164,44 @@ class DeviceClient:
                 self._maintenance_id = owner
             return {"acquired": acquired, "active_requests": requests, "active_tasks": tasks}
 
-    async def maintenance_release(self, owner):
+    async def maintenance_exit(self, owner):
+        """Commit normal exit for this live lease only, never a service label.
+
+        The installed Mac entry opts in with a synchronous cancellation
+        scheduler. The lifecycle lock is the linearization boundary shared
+        with admission. An acknowledged request is NOT proof of process exit.
+        """
         async with self._lifecycle_lock:
-            if self._maintenance_id == owner:
+            if self._maintenance_exit_callback is None:
+                raise ValueError("lease exit is not enabled")
+            if (
+                self._closed.is_set()
+                or not self._initialized
+                or self._maintenance_id != owner
+                or self._maintenance_exit_committed
+            ):
+                raise ValueError("lease exit is not available")
+            if self._tasks or await self.executor.tasks.active_count():
+                raise ValueError("client is not idle")
+            self._maintenance_exit_committed = True
+            self._closed.set()
+            # Callback schedules cancellation; never awaits cleanup under the
+            # lifecycle lock. A later disconnect cannot reopen admission.
+            self._maintenance_exit_callback()
+            return {"exit_committed": True}
+
+    async def maintenance_release(self, owner):
+        # Monotonic on the same event loop: committed exit can never resume.
+        # Do not wait behind executor cleanup merely to release a dead lease.
+        if self._maintenance_exit_committed:
+            return
+        async with self._lifecycle_lock:
+            if self._maintenance_id == owner and not self._maintenance_exit_committed:
                 self._maintenance_id = None
 
     async def maintenance_resume(self, upgrade_id):
         async with self._lifecycle_lock:
-            if self._maintenance_id != upgrade_id:
+            if self._maintenance_id != upgrade_id or self._maintenance_exit_committed:
                 raise ValueError("maintenance owner mismatch")
             self._maintenance_id = None
             return {"upgrade_id": upgrade_id, "resumed": True}
@@ -291,6 +329,7 @@ class DeviceClient:
                         welcome = json.loads(await asyncio.wait_for(socket.recv(), 10))
                         if welcome != {"v": 1, "type": "welcome", "device_id": self.device_id}:
                             raise ValueError("invalid welcome")
+                        self._log_connection(f"connected to {self.url}", connected=True)
                         # Read acknowledgements concurrently with replay, otherwise
                         # a large outbox can deadlock both directions on backpressure.
                         replay = asyncio.create_task(self._reconcile())
@@ -315,9 +354,21 @@ class DeviceClient:
                         finally:
                             replay.cancel()
                             await asyncio.gather(replay, return_exceptions=True)
-                except (ConnectionClosed, OSError, TimeoutError):
-                    pass
+                except (ConnectionClosed, OSError, TimeoutError) as exc:
+                    # A dropped connection is retried forever by design, so it
+                    # cannot be an error the process dies on. It still has to be
+                    # visible: without this, "idle and healthy" and "cannot
+                    # reach the center" are the same empty file.
+                    self._log_connection(
+                        f"disconnected: {type(exc).__name__}: {exc}; retrying every "
+                        f"{self.reconnect_delay}s",
+                        connected=False,
+                    )
                 except InvalidStatus as exc:
+                    self._log_connection(
+                        f"center rejected the connection: HTTP {exc.response.status_code}",
+                        connected=False,
+                    )
                     if exc.response.status_code not in (429, 500, 502, 503, 504):
                         raise RuntimeError(
                             "device pairing or connection endpoint rejected"
@@ -333,6 +384,23 @@ class DeviceClient:
             await self.close()
         if self._failure is not None:
             raise self._failure
+
+    def _log_connection(self, message, *, connected):
+        """Report a connection state change to stderr, once per transition.
+
+        launchd redirects both stdout and stderr into client.log, so this is the
+        device's only durable account of whether it reached the center. Dedupe
+        is on the state, not the message, because a device that cannot resolve
+        DNS produces an identical line every second.
+
+        The token is sent as a header, never as part of the URL, so no message
+        may need redaction. Callers must still keep payloads out: this text is
+        durable.
+        """
+        if connected == self._connected:
+            return
+        self._connected = connected
+        print(f"ai-device-client: {message}", file=sys.stderr, flush=True)
 
     async def close(self):
         self._closed.set()

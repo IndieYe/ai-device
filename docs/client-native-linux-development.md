@@ -2,8 +2,14 @@
 
 > 实施中，未完成阶段交付。仅 Ubuntu 24.04 amd64；本页不是生产部署授权。
 > 权威需求：`../doc/requirements/client-native-install-upgrade.md`。
+> **面向使用者的安装/升级/卸载操作见 [`client-native-linux-guide.md`](client-native-linux-guide.md)**；本页是开发实施记录与验收证据。
 
-## 当前交付检查点（dev24）
+## 当前交付检查点（2026-11-06）
+
+- 源码状态：HEAD `e2231ba`，与远端 `feat/client-native-install-ses14497` 一致，工作区干净；实现已全部推送。
+- 功能验收：第 11 节矩阵的 Linux 部分已完成实物验证，含干净目标安装、首次配置、注册、A→B 升级、忙拒绝、异常恢复、损坏修复、unknown 不重放、并发安装、普通用户、旧布局冲突、卸载、中心/MCP 回归。
+- 交付文档：已补 `client-native-linux-guide.md`（面向使用者的完整操作说明），全部命令在隔离容器实测。
+- 本页下方 `dev1`–`dev24` 逐版本记录为**历史证据**，制品 SHA 与 PID 均属当时快照，不代表当前状态。
 
 本节是当前摘要；下方逐版本记录为历史证据，不把旧的“待确认”“即将重启”视为当前状态。
 
@@ -70,6 +76,14 @@ sudo apt remove ai-device-client
 
 在独立目标平台构建环境执行，不在承载实际客户端的主机上构建或启动测试实例。
 
+### 宿主 glibc 基线
+
+包的 libc 依赖声明由 `scripts/build-client-deb.py` 的 `MINIMUM_GLIBC` 决定，值为 **2.17**。这个数字不是构建机的版本，而是包内二进制的真实需求：解包现有制品解析全部 ELF 的 `.gnu.version_r`，最高需求为 `GLIBC_2.17`（由 `libpython3.13.so.1.0`、`python3.13`、`_dbm`、`liblzma` 引入），其余库不高于 2.12；依赖锁 `native/dependency-lock.json` 的 target 也声明 `glibc: 2.17`，13 个 wheel 全部为 `manylinux_2_17` 或更低。
+
+曾长期写成 `2.39`（Ubuntu 24.04 构建机的版本），后果是 `dpkg` 在解包前拒绝所有低于 2.39 的主机，包括实际能跑 2.17 基线的机器。修改基线时需同时更新 `device_runtime.dependencies.MINIMUM_GLIBC`、`client_host_glibc.MINIMUM_GLIBC` 与构建脚本字面量；`test_declared_glibc_floor_matches_the_runtime_requirement` 会拦住只改一处的情况。
+
+客户端启动时会再次核对宿主 glibc（`device_runtime/client_host_glibc.py`）：低于基线则给出含所需/检测版本的明确错误并退出；探测不到（如 musl）不阻断，交由动态链接器报错。之所以要这一层，是因为新客户端由 systemd 用绝对路径直接启动，从不经过包管理器，仅靠 `Depends` 无法覆盖手工启动与服务重启路径。
+
 1. 当前源码用 `uv build --all-packages --wheel --out-dir <inputs>/wheels` 构建三个业务 wheel。
 2. 准备 `<inputs>/python.tar.gz`、`uv.whl`、`dependencies/*.whl`。来自仓库 `native/runtime-lock.json`、`tool-lock.json`、`dependency-lock.json` 的准确输入；脚本会校验大小与 SHA256。不要把旧业务 wheel 当成当前源码产物。
 3. 在 Linux amd64 构建容器执行：
@@ -85,6 +99,57 @@ python3 packages/device-runtime/scripts/build-client-deb.py \
 输出目录必须新建，避免覆盖旧制品。uv 只用于构建，不进入运行目录；目标安装不安装 wheel、不创建 venv、不下载依赖。构建禁用 uv wheel 缓存，避免开发阶段同一 Python 版本号对应的旧源码被缓存复用。正式发布必须变更准确发布版本，不靠禁用缓存容忍同版本重发。
 
 开发包未签名，不代表已满足正式发布、许可审查和来源认证条件。
+
+### 用当前源码重建 tree 并验收（0.4.9）
+
+之前所有实验包的 tree 是 0.4.2 时期的复制品，再手工覆盖几个文件拼出来的，
+既不含 `6034ee6`（glibc 2.17 声明）、`974a5a1`/`0e4edd3`（cgroup v1 与
+`-s` 修复），也没有重新计算 identity。本次走完整流程重建：
+
+```
+本机 d99c407（工作区干净）
+  uv build --all-packages --wheel --out-dir <inputs>/wheels   → 3 个业务 wheel
+  → Linux x86_64 上用 build-client-tree.py 装配（按 runtime/tool/dependency
+    三个 lock 校验 python.tar.gz / uv.whl / 13 个依赖 wheel 的 size 与 sha256）
+  → 12 个包全部来自锁定的 wheel
+  → build-client-rpm.py 打包
+```
+
+结果：
+
+```
+identity: {"version":"0.3.6","build_id":"sha256:8de772ba..."}
+
+0.4.8 → 0.4.9 升级：
+  client confirmed stopped
+  installed; client locally ready
+  pkg=0.4.9  state=active  NRestarts=0
+  安装后 identity 与构建时一致（8de772ba...）
+  config / token 哈希不变
+```
+
+中心下发命令在设备上执行并返回同一个 identity，确认这是当前源码产物而不是拼接树。
+
+**版本号的两个体系容易混淆**：源码 `device_runtime.__version__` 是 `0.3.6`，
+RPM 的 `Version:` 是构建时通过 `--version` 另外传入的（本次 0.4.9）。所以中心
+上报 `runtime_version=0.3.6` 是正确行为，不是旧树残留。早先据此判断"树是旧产物"
+是错的；真正的证据是 `build_id` 和文件内容，不是包版本号。若要让两者对齐，需要
+在发布流程里把 RPM 版本与 `__version__` 绑定，这属于发布规范，未在本轮改动。
+
+**构建期注意**：`build-client-tree.py` 用了 `tarfile.extractall(filter="data")`，
+需要 Python 3.12+ 运行；ali-sh 系统 Python 3.10 会直接 TypeError。构建时使用输入中
+自带的 3.13 解释器，不要让系统 Python 运行构建脚本。
+
+## 已知限制与未充分验证项
+
+以下为证据偏弱项，构造真实故障场景成本高，已记为已知限制而非宣称通过：
+
+- **业务忙时拒绝升级**：用 `idle_lease` 模拟维护占用，未构造真实前台/后台业务任务期间执行 `dpkg`。
+- **停止失败/状态未知**：只验证 preflight 拒绝路径，未制造真实 `systemctl stop` 超时或残留 cgroup。
+- **客户端重启后旧 unknown 操作**：只验证 journal 状态转换，未通过真实中心观测是否重放。
+- **维护期安装器异常退出**：验证辅助进程 SIGKILL 后租约释放，非 `dpkg` 中途崩溃或断电全过程。
+- **错平台/错架构/权限不足**：未测。
+- **真实网络故障**：中心离线仅验证本机 ready 与连接失败分离，未做网络分区实验。
 
 ## 目前证据与剩余工作
 
@@ -174,6 +239,24 @@ python3 packages/device-runtime/scripts/build-client-deb.py \
 
 进一步按函数审阅 `307b8cd..HEAD` 的installation差异：主要为锁定私有解释器准备/迁移与重建、平台要求检查、入口参数及launchd管理。journal/tasks存储格式未改；现有共享私有runtime、重建与备份恢复回归通过。尚未进行跨全部历史版本数据样本的迁移实测，不将该静态审阅及当前测试等同于0.3.4人工兼容批准。
 
+#### 该门禁已改为按格式审计（上述版本登记问题已关闭）
+
+上面的失败源于 `STATE_COMPATIBILITY` 按**版本号**记录人工审核结果：每升一次 `__version__` 就要求重新登记，哪怕持久化数据一个字都没变。0.3.4 之后 0.3.5、0.3.6 都未登记，门禁长期挂起。
+
+审计版本号本身是错位的：升版本号并不说明磁盘上的字节还能不能读。真正会破坏升级的是**数据格式**变化，而格式已由 release manifest 的 `state_format` 声明并在 `_compatible` 中校验。
+
+现改为：
+
+- 删除按版本的 `STATE_COMPATIBILITY`，改用 `lifecycle.AUDITED_STATE_FORMATS`——已人工审阅过数据契约的格式号清单。
+- `STATE_FORMAT` 收敛到最底层模块 `bundle.py` 单点定义，installation/lifecycle 均引用；不再在各处写 `"state_format": 1` 字面量。
+- 根级两个测试分别保证：当前 `STATE_FORMAT` 必须已登记；包内除定义处外不得出现该字段的字面量（防止升格式时只改一半）。
+
+效果：改版本号不再触发失败（已模拟 0.3.7 验证）；真改数据格式仍必须显式登记新格式号，人工确认点没有丢，只是落到了正确的位置。
+
+实测：根级 `uv run --no-sync pytest tests -q` **111 passed**（此前 110 passed/1 failed）；device-runtime 全量 **2156 passed/20 skipped**；ruff 通过。
+
+需要说明的边界：0.3.4→0.3.6 之间 `journal.py`、`tasks.py`、`output_store.py` 均无改动，`STATE_FORMAT` 与 `OUTPUT_MAP_FORMAT` 未变，因此格式仍为 1 有据。但本次并未做跨全部历史版本的数据样本迁移实测，上述结论建立在格式常量与存储代码未变之上。
+
 ### dev17 服务归属一致性审核
 
 安装/卸载shell钩子从解释器路径前缀匹配改为完整客户端ExecStart行的固定字符串整行匹配，与Python激活校验一致。dev17仅钩子变化，复用已验证dev16运行树，不重复构建runtime。真实隔离unit同解释器但改为无关模块后安装在停止前拒绝、非零PID保持，unit已恢复；生成postrm在隔离路径执行，确认拒绝且未调用disable、未删除unit。Device全量922通过，日志 `/tmp/device-ses14497-runtime-tests-dev17.log`。SHA256：`ac6d10817bb3c58bd2e56b74b0b6b61594016c2f3efab7978c615134be876737`。
@@ -249,3 +332,366 @@ python3 packages/device-runtime/scripts/build-client-deb.py \
 dev23 SHA256 `75b5bdcfa7bd685da69eb32f1a1925f67562067c4531627d3df4b034e9da55d9`；重新构建并在deb容器升级ready，PID4168。三目录逐一植入自定义旧run client服务定义，注册（含确认）和激活均拒绝、PID保持，试件清除后检查正常。实测日志 `/Users/<user>/.ai-assistant/logs/bash-output/20261104-144302-d21773.log`。全量926通过 `/tmp/device-ses14497-dev23-final-tests.log`；ruff/diff通过。
 
 原审核者ses-14507限定复核通过：原问题1按批准发现边界关闭，未发现直接回归。冻结 `/tmp/device-ses14497-conflict-review23-831a7x_f`，manifest SHA256 `8354f641b74f18cbdd7982c7e0d133fc5dcbc46c983c7065123ef08319f5195d`，8文件一致，仅两文件较前次变化；未独立重跑测试/验包。原问题2忙提示此前已关闭。不是Linux整体通过声明；任意离线自定义root仍需管理员确认，人工0.3.4登记、最终交付核对及提交集成仍未完成。无在途审核/后台任务，源码未提交，Mac未开始。clean仍dev22 PID450，不把其验收标成dev23。
+
+### RPM 脚本语义实测（2026-11-09，rockylinux:9 / RPM 4.16.1.3）
+
+阶段三需求文档要求先实测再实现，不能照抄 dpkg 语义。以下为实测输出，样本是 `noarch` 探针包，不是产品包。
+
+**调用顺序与参数**（`rpm -i` → `rpm -U` → `rpm -e`）：
+
+```
+### 首次安装
+PRE   v1 arg1=[1]
+POST  v1 arg1=[1]
+### 升级 1->2
+PRE   v2 arg1=[2]
+POST  v2 arg1=[2]
+PREUN v1 arg1=[1]
+POSTUN v1 arg1=[1]
+### 卸载
+PREUN v2 arg1=[0]
+POSTUN v2 arg1=[0]
+```
+
+`arg2` 在所有场景都未设置（脚本里的 `${2:-unset}` 始终输出 `unset`）。RPM 4.14/4.16 不传第二个参数，不要依据它判断。
+
+**`$1` 是实例计数，且升级时新包脚本看到的是升级后的总数：**
+
+| 场景 | `%pre` | `%post` | `%preun` | `%postun` |
+| --- | --- | --- | --- | --- |
+| 首次安装 | 1 | 1 | — | — |
+| 升级（新包） | **2** | **2** | — | — |
+| 升级（旧包） | — | — | **1** | **1** |
+| 卸载 | — | — | 0 | 0 |
+
+因此：
+- 判断「是否升级」：`%pre`/`%post` 里 `$1 -gt 1`；`%preun`/`%postun` 里 `$1 -ge 1`
+- 判断「彻底卸载」：`%preun`/`%postun` 里 `$1 -eq 0`
+
+**升级顺序是「新包先跑，旧包后停」**：
+
+```
+new %pre → [解包] → new %post → old %preun → old %postun
+```
+
+这是和 dpkg 最实质的差异。dpkg 是 `old-prerm upgrade → old-postrm upgrade → new-preinst upgrade → new-postinst configure`，即旧包先停、再装新包；RPM 相反。**后果**：不能在 `%preun` 里停服务——那时新包已经解开并跑过 `%post`，停掉的是刚启动的新版本。停止动作必须在**新包的 `%pre`**（解包之前）完成。
+
+**`%pre` 拒绝后原包完好**（忙拒绝的成立前提）：
+
+```
+before: version=1 payload=payload-1
+upgrade refused, rc=1
+  error: %prein(aiprobe-2-1) scriptlet failed, exit status 1
+  error: aiprobe-1-1: erase skipped
+after : version=1 payload=payload-1
+rpm -V: clean
+rpm -U --replacepkgs <旧包> -> 成功
+```
+
+`%pre` 失败时解包未开始、旧包未擦除，`rpm -V` 干净，`--replacepkgs` 重试可收敛。忙拒绝放在 `%pre` 是正确位置。注意：如果安装时用了 `--nodeps` 之类跳过，或 `%pre` 成功但解包中途失败，语义不同，不能外推。
+
+**`%post` 失败不会让 `rpm -U` 返回非零**：
+
+```
+POST v2 failing
+warning: %post(aiprobe-2-1) scriptlet failed, exit status 1
+```
+
+`rpm -U` 返回 **0**，包已是 v2、payload 已替换、`rpm -V` 干净，只有 warning。重跑 `--replacepkgs` 仍返回 0。
+
+这直接影响「重装可修复」的语义：**RPM 里 `%post` 失败是静默的**。如果 `%post` 负责启动服务或做 ready 检查，失败时调用方以为成功。可选项：
+
+- 在 `%post` 失败时写标记文件，由外部验收读取（但 RPM 不提供失败信号）
+- 把关键检查留在 `%pre`（会真正阻断）
+- 接受该限制并在文档写明，`ready` 由包外流程验证
+
+DEB 的 `postinst` 失败会让 dpkg 返回非零，行为不同。这是移植时必须显式决定的产品取舍，不能默认「照搬即可」。
+
+**环境说明**：Apple container，`rockylinux:9` 镜像（未固定 digest），容器内 `dnf install rpm-build` 获得 4.16.1.3。样本包为纯 `noarch`，不涉及真实 payload、systemd 或客户端进程。这是脚本语义证据，不是产品包验收。
+
+### RPM 构建与事务验收（2026-11-09）
+
+`packages/device-runtime/scripts/build-client-rpm.py`。`STOP` 与 DEB 共用
+`scripts/client_package_stop.sh` —— 两份安全逻辑分开维护就会漂移，本轮已经因为
+复制式修改出过一次错（`-s` 判断），所以改成单一来源，由测试钉住两者相等。
+
+**spec 与 dpkg 版一致的部分**：payload 布局（`/opt/ai-device-client`、两个 `/usr/bin`
+入口）、`ca-certificates`/`util-linux` 依赖、卸载保留配置与 state、`__pycache__` 清理。
+
+**必须不同的部分**：
+
+| 动作 | DEB | RPM | 原因 |
+| --- | --- | --- | --- |
+| 停止客户端 | `preinst` + `prerm` | 只在 `%pre` | `%preun` 运行时新 payload 已解包、`%post` 已启动新版本 |
+| 首次安装 | `preinst` 无条件跑 | `%pre` 在 `$1 = 1` 时直接 `exit 0` | 首次安装没有已装 payload，`client_package stop` 会 127 失败并中止安装 |
+| 启动客户端 | `postinst configure` | `%post` | — |
+| 删除配置 | `purge` 动词 | **无对应物** | `%postun` 只在 `$1 = 0` 时清理 unit 与空目录，不删 `/etc/ai-device-client` |
+
+**首次安装必须跳过守卫**：`%pre` 在解包之前运行，`STOP` 里调的是
+`/opt/ai-device-client/runtime/bin/python3`（**已安装**的那份）。首次安装时它不存在，
+实测报 `No such file or directory`、退出 127、整个 `rpm -i` 失败。加 `$1 = 1` 早退后正常。
+
+**容器端到端结果**（rockylinux:9，aarch64 构建，systemctl 与 python3 为桩）：
+
+```
+### 首次安装
+ver=0.4.3
+calls=client_package activate
+
+### 忙拒绝（cgroup.procs 有 PID）
+client process group still has live processes; refusing replacement
+error: %prein(...0.4.4...) scriptlet failed, exit status 1
+error: ...0.4.3...: erase skipped
+ver=0.4.3          ← 版本未变
+marker=none        ← payload 未被替换
+calls=client_package stop   ← 只有停止尝试，无 activate
+
+### 清空 procs 后重试
+ver=0.4.4  marker=v2        ← payload 正确替换
+calls=client_package stop | client_package activate
+
+### 卸载
+payload=gone
+```
+
+忙拒绝发生在解包前，旧包保持 `0.4.3` 且未被擦除，这与 §「RPM 脚本语义实测」的
+`%pre` 拒绝实验一致。`rpm -V` 在各阶段均干净。
+
+**已验证的边界**：
+
+- 依赖声明生效：容器缺 systemd 时 `rpm -i` 报 `Failed dependencies` 并拒绝，装上后才可安装
+- 同版本 `rpm -U --replacepkgs` 重装成功，`%post` 再次执行 activate
+- 空 cgroup 组放行；有 PID 拒绝 —— 与 DEB 侧同一 `STOP` 文本
+
+**未验证 / 已知限制**（不可据此声明阶段三完成）：
+
+1. 全程在**容器**内，systemctl 与客户端 python3 都是桩。没有真实 systemd、没有真实客户端进程、没有真实中心连接。
+2. 构建用 `--buildarch aarch64`（容器是 arm64）。产品目标是 amd64，**尚未产出 amd64 RPM**。
+3. 树是 `runtime/bin/python3` 一个假文件的**最小 tree**，不是真实客户端树，因此没有验证真实 payload 体积、真实 python 启动、`__pycache__` 清理的实际效果。
+4. 未测：`%pre` 与 `%pretrans` 的交互、依赖不满足时的解包时机、`rpm -V` 对真实整树的报缺（历史风险见需求文档 §11）。
+5. `%post` 失败仍使 `rpm -U` 返回 0（见上一节实测）。当前 `%post` 只调 activate，activate 失败不会让 rpm 报错——**ready 必须由包外复核**，这一点尚未在 rpm 路径上落实。
+6. 未在真实 alinux3 / Rocky 机器上验收。ali-sh 有 rpm 但无 rpmbuild、无容器，且跑着现网 0.2.3 实例。
+
+### amd64 RPM 真实构建（2026-11-09，ali-sh / alinux3 / RPM 4.14.3）
+
+ali-sh 装 `rpm-build` 后，用 0.4.2 真实 tree 构建 amd64 包。**构建过程中暴露三个
+容器阶段没暴露的缺陷**，前两个会让包直接不可用。
+
+**产物**：`ai-device-client-0.4.3-1.x86_64.rpm`，38,360,228 字节，
+sha256 `5415bff7580e5cebaed7820960f3c3817d76d884fe2c50833fd0838d66ef1768`，
+5301 个文件，`/root/rpmbuild-work/out/`。
+
+**缺陷一：shebang 被改写。**
+rpm 的 brp 脚本遍历 payload 改写解释器行。实测输出：
+
+```
+mangling shebang in .../timeit.py from /usr/bin/env python3 to #!/usr/libexec/platform-python
+*** ERROR: ambiguous python shebang in .../rot_13.py: #!/usr/bin/env python
+error: Bad exit status from ... (%install)
+```
+
+`platform-python` 是宿主解释器，不是包里自带的那份；而且含糊 shebang 直接让构建失败。
+自含运行时的包必须原样交付树内容，关掉 `__brp_mangle_shebangs` / `__brp_check_shebang`。
+
+**缺陷二：strip 改坏了带符号的二进制。**
+`__os_install_post` 默认 strip 并重链 ELF。实测对比同一文件打包前后：
+
+```
+原树 python3.13: 31624264 字节，运行 OK 3.13.17
+包内 python3.13: 31624808 字节，2,051,694 字节差异
+运行时: symbol lookup error: undefined symbol
+```
+
+**注意方向**：是打包把能跑的树改坏了，不是树本身有问题。关掉 `__os_install_post`
+与 `__strip` 后，`cmp` 确认 python3.13 与 libpython3.13.so.1.0 逐字节一致，
+解包后直接 `./runtime/bin/python3` 输出 `python 3.13.17`，`import device_runtime` 正常。
+
+**缺陷三：自动依赖把包内私有库当成系统依赖。**
+依赖发现扫出 payload 里的 libpng/libavif/libtiff/libzstd 等，生成 **67 个 soname
+Requires**，其中包含 `libtcl9.0.so` —— 这根本不是系统库。任何 RPM 宿主都无法满足。
+这些库本来就在包内（`pillow.libs/`）。改为 `AutoReqProv: no` 并保留四个显式依赖后，
+Requires 降到 8 条（4 条是 rpm 自己加的 `/bin/sh` 脚本解释器）：
+
+```
+ca-certificates
+glibc >= 2.17
+systemd
+util-linux
+```
+
+**验证方式**：`rpm -i --test` 返回 0（依赖全部满足，未解包、未改系统）；
+`rpm2cpio | cpio -idm` 解包到 `/root/payload-check` 后验证二进制一致性与 import。
+
+**传输污染（非产品问题，但会毁掉验收）**：macOS 打包上传时带出 5298 个 `._*`
+AppleDouble 文件，第一次构建的包里占了近一半文件。已在 ali-sh 侧清理后重建。
+后续从 macOS 往 Linux 传目录必须排除 `._*` 与 `.DS_Store`。
+
+**尚未做的**：
+
+1. **没有实际安装到 ali-sh**。ali-sh 跑着 0.2.3 现网客户端（PID 1569203/1569204），
+   本轮授权是「装 rpm-build 来构建」，不含安装产品包。因此忙拒绝、A→B 升级、
+   真实 systemd 启停、ready、中心业务连通**全部未在真实机器验证**。
+2. 树是 0.4.2 时期产物，不含 `6034ee6`（glibc 2.17 声明）、`974a5a1`/`0e4edd3`
+   （cgroup v1）、`b62f99c` 等新修复。包的 `%pre`/`%preun` 脚本是新的，payload 是旧的。
+   这不是最新源码的完整可信构建。
+3. 树本身缺 `httpx`、`yaml`（原树就缺，非打包问题）——旧 0.4.2 树的既有状态。
+
+### 首次真实机器安装（2026-11-09，ali-sh 替换 0.2.3）
+
+用户确认 0.2.3 未正式使用后，卸载旧客户端并安装 0.4.3/0.4.4 RPM。**这一步暴露了三个
+容器与纯构建阶段都看不到的缺陷。**
+
+**卸载旧实例**：旧客户端由 `/etc/systemd/system/device-ali-sh.service` 拉起
+（`ExecStart=... /var/lib/device-managed/ali-sh/run client`）。先 `cp -a` 整个
+`/var/lib/device-managed/ali-sh`（47M，含 state）到 `/root/ali-sh-legacy-0.2.3-20261109-131715`，
+再 `systemctl disable --now`、`kill -TERM` supervisor（2 秒内干净退出，未强杀），
+最后删除目录与 unit 文件。
+
+**缺陷一：`client_management` 硬编码 dpkg 锁。**
+`management_lock()` 无条件打开 `/var/lib/dpkg/lock-frontend`，RPM 宿主没有该文件，
+于是 `FileNotFoundError` —— `activate` 和 `register` 在 alinux3 上**根本跑不起来**，
+`%post` 只能静默失败。改法：按 `package_manager()` 探测（dpkg 锁存在 → dpkg；
+`/var/lib/rpm` 存在 → rpm），rpm 侧不再取 dpkg 锁（rpm 事务本身已持锁）。
+
+**缺陷二：rpm scriptlet 里没有任何 `RPM_*` 环境变量。**
+用探针包实测 `%post` 的完整环境：只有 `HOME/PATH/PWD/USER` 等，**没有** `RPM_INSTALL_PREFIX`、
+`RPM_SCRIPTLET`。原来的 `in_package_script()` 只看 `DPKG_MAINTSCRIPT_*`，在 rpm 下恒为
+False，于是试图去取不存在的 dpkg 锁。改法：
+- 包脚本显式传 `--from-package-script`（DEB 与 RPM 都传）
+- fallback 用 `/proc/<ppid>/comm == "rpm"`（实测 scriptlet 的父进程就是 rpm）
+
+**缺陷三：tree 里 `client_host_glibc.py` 是 0600。**
+服务以 `device-client` 运行，导入该模块时 `PermissionError`，服务 exit 1，
+`%post` 的 readiness 检查随之超时失败。构建 tree 里只有这一个文件是 0600。
+改法：`%install` 里统一规范化权限（目录 0755、文件 0644、原本可执行的 0755）。
+
+**其他安装期问题**（操作层面，非代码缺陷）：
+- `client.json` 的 `state_dir` 必须恰好是 `/var/lib/ai-device-client`——`validate_config`
+  里硬断言该路径，写成 `.../state` 会被判为配置不可用。
+- token 文件属主必须与服务用户一致且 0600；以 root 建完要 `chown device-client`。
+- `/var/lib/ai-device-client/state` 需要预先存在，缺了会在 `maintenance.start()` 抛
+  `FileNotFoundError`。
+- 旧 unit `device-ali-sh.service` 未删除时，`register` 会报
+  "another client service detected"。
+
+**已验证成功**：`rpm -U` 升级 0.4.3→0.4.4 完成，服务 `active`，进程正常，
+与中心 `<center-host>:443` 建立 ESTAB 连接。
+
+**已验证的忙拒绝**：服务运行中（PID 2175657，`cgroup.procs` 含该 PID）执行
+`rpm -U --replacepkgs`，`%pre` 报 "client process group still has live processes"、
+rc=1、旧包 `erase skipped`；**PID 未变、python3.13 的 md5 未变、服务仍 active**。
+这是 cgroup v1 检查在真实 v1 主机（kernel 5.10 + cgroup v1）上第一次真正生效。
+
+**尚未验证**：A→B 真实升级（当前两个版本 payload 相同）、ready 检查在 `%post`
+内成功、`%post` 失败后服务留在 `inactive` 的恢复路径、卸载后配置保留。
+
+**一处重要教训**：升级时 `%post` 停掉客户端后失败，服务留在 `inactive`。
+这正是之前实测的「`%post` 失败 rpm 仍返回 0」的后果——调用方以为成功，实际服务没起来。
+ready 必须由包外复核，这一点在真实安装中已经发生，不再是理论风险。
+
+### A→B 升级与卸载验收（2026-11-09，ali-sh）
+
+**A→B 成功**（0.4.6 → 0.4.7）：
+
+```
+note: stopping the client; if unpacking then fails it stays stopped — ...
+client confirmed stopped            ← %pre 停止旧客户端
+installed; client locally ready     ← %post 成功，无 warning
+pkg=0.4.7  state=active  NRestarts=0
+config 保持: YES   token 保持: YES
+```
+
+这是 `%post` ready 路径第一次走通。之前三次失败依次是：dpkg 锁硬编码、
+scriptlet 无 `RPM_*` 变量导致取错锁、`client_host_glibc.py` 是 0600。
+
+**权限规范化的顺序陷阱**（新发现）：第一版 `%install` 写成
+
+```sh
+find ... -type f -exec chmod 0644 {} +
+find ... -type f -perm -u+x -exec chmod 0755 {} +
+```
+
+`chmod 0644` 把可执行位清掉后，第二个 `-perm -u+x` 匹配不到任何文件，
+`python3.13` 变成 0644，之后所有 scriptlet 报 `Permission denied`（退出 126）。
+必须先用 `-perm /111` 捕获原本可执行的文件，再对剩余文件设 0644。
+
+**卸载残留进程**（本轮的 bug）：`%preun` 在 `$1=0` 时分支为空，什么都没做。
+`rpm -e` 删掉 unit 文件后，客户端进程仍在跑，systemd 显示为
+`not-found` 但 `active (running)` —— 成了孤儿。`%postun` 救不了，它跑在
+payload 删除之后。改为在 `%preun` 的 erase 分支里 `systemctl stop`。
+升级分支（`$1=1`）仍必须什么都不做，否则会停掉 `%post` 刚启动的新版本。
+
+**卸载其余行为正确**：payload 删除、unit 与 enable 链接删除、配置文件、
+token、state 目录全部保留。
+
+### 卸载修复的真机复验（0.4.8）
+
+第一版 `%preun` 写的是 `systemctl stop ... || true`。`|| true` 会吞掉三类拒绝：
+busy 客户端、不安全关机策略、进程组非空 —— 也就是说客户端还活着时卸载仍然
+报成功，孤儿进程问题换个形式又回来了。改为在 erase 分支里复用 `%pre`
+同一份 `client_package_stop.sh`，erase 时 payload 还在，这些检查都能真正执行。
+
+0.4.7 → 0.4.8 升级，观察顺序确认升级分支没有误停：
+
+```
+note: stopping the client; ...      ← %pre
+client confirmed stopped
+Updating / installing... 0.4.8
+installed; client locally ready     ← %post
+Cleaning up / removing... 0.4.7     ← 旧 %preun 未干扰
+pid=2246975  state=active  NRestarts=0
+```
+
+`rpm -e` 卸载：
+
+```
+note: stopping the client; ...      ← %preun 真的在停
+client confirmed stopped
+Removed /etc/systemd/system/multi-user.target.wants/ai-device-client.service
+RC=0
+
+卸载后：state=inactive  procs=0  unit 不存在  /opt 不存在
+       config 哈希不变  token 哈希不变
+       operations.sqlite3 integrity ok、mtime 未被改写
+```
+
+进程数 0、unit 与 payload 均已删除、配置凭证状态保留，孤儿进程不再出现。
+
+**注意**：`/var/lib/ai-device-client` 的目录项数会在 4 和 6 之间浮动，这是
+SQLite 的 `-shm`/`-wal` 在连接关闭时被清理、下次打开又重建，不是数据丢失。
+判断是否保留应该看主库文件、`PRAGMA integrity_check` 和 mtime，不要看 `ls | wc -l`。
+
+**遗留**：删除 unit 后重装需要重新 `register`（`%preun` 会删 unit），
+这是当前设计而不是缺陷；但 `%preun` 删 unit 与 `%postun` 再删一次的职责
+有重叠，值得在后续整理。
+
+### busy 客户端下的卸载拒绝（真机，0.4.8）
+
+真实占用不是桩造出来的：通过中心给设备下发 `sleep 180` 后台命令，客户端
+`requests` 或 `tasks.active_count()` 非零，然后执行 `rpm -e`：
+
+```
+note: stopping the client; ...
+client is busy with active tasks; retry when tasks finish; service kept running
+error: %preun(ai-device-client-0.4.8-1.x86_64) scriptlet failed, exit status 1
+error: ai-device-client-0.4.8-1.x86_64: erase failed
+RC=1
+```
+
+拒绝之后准入没有被破坏：包仍为 0.4.8、服务 active、PID 未变、unit 与
+`/opt` 都在、业务进程 `sleep 180` 继续运行。这是需求要的"立即拒绝且保持
+准入"，而不是停掉再报错。
+
+任务自然结束后（中心回执 `succeeded`、`exit_code=0`、输出 `done`）再执行
+同一个 `rpm -e`：
+
+```
+client confirmed stopped
+RC=0
+pkg 已卸载  state=inactive  procs=0  unit 与 /opt 均已删除
+config 哈希不变  token 哈希不变
+```
+
+两次对照说明拒绝是临时的、由真实任务状态驱动，不是永久性阻断。
+
+**仍未覆盖**：`%preun` 停止超时后进程组仍非空的拒绝路径，目前只有 unit 层单测。

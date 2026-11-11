@@ -68,8 +68,8 @@ def load(path):
         raise ValueError("client configuration or private token file is invalid") from exc
 
 
-def initialize(directory, *, server_url, device_id, state_dir, token):
-    """Create a new private configuration directory, never update an existing one.
+def initialize(directory, *, server_url, device_id, state_dir, token, resume=False):
+    """Create private configuration, or explicitly complete matching missing files.
 
     This intentionally does not select a service user, start a service, mutate
     existing configuration or create business state. Run as the intended user;
@@ -90,24 +90,61 @@ def initialize(directory, *, server_url, device_id, state_dir, token):
         "state_dir": str(state_dir),
         "token_file": str(directory / "token"),
     }
+    if resume:
+        return _resume_initialization(directory, value, token)
     # mkdir is the no-overwrite boundary; a concurrent initializer cannot win
     # and then have its configuration overwritten by this invocation.
     directory.mkdir(mode=0o700)
-    created = []
-    try:
-        for name, text in (("token", token + "\n"), ("client.json", json.dumps(value) + "\n")):
-            path = directory / name
-            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            created.append(path)
-            with os.fdopen(descriptor, "w") as stream:
-                stream.write(text)
-                stream.flush()
-                os.fsync(stream.fileno())
-        return directory / "client.json"
-    except BaseException:
-        # Only this invocation's newly created files are removed. No existing
-        # user configuration or business state can reach this cleanup path.
-        for path in reversed(created):
-            path.unlink(missing_ok=True)
-        directory.rmdir()
-        raise
+    # Retain even incomplete files: another explicit resume may already have
+    # validated them. Cleanup here could invalidate its successful result.
+    for name, text in (("token", token + "\n"), ("client.json", json.dumps(value) + "\n")):
+        path = directory / name
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+    return directory / "client.json"
+
+
+def _resume_initialization(directory, value, token):
+    """Complete only missing files; preserve every existing byte on failure."""
+    info = directory.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise ValueError("incomplete configuration directory is not private")
+    if {p.name for p in directory.iterdir()} - {"token", "client.json"}:
+        raise ValueError("configuration contains unrecognized files; explicit inspection required")
+    expected = (("token", token + "\n"), ("client.json", json.dumps(value) + "\n"))
+    # Validate ALL existing files before creating anything. Symlinks and damaged
+    # partial writes remain for explicit inspection, never overwritten or removed.
+    missing = []
+    for name, text in expected:
+        path = directory / name
+        try:
+            existing = path.lstat()
+        except FileNotFoundError:
+            missing.append((name, text))
+            continue
+        if (
+            not stat.S_ISREG(existing.st_mode)
+            or existing.st_uid != os.getuid()
+            or existing.st_mode & 0o077
+            or existing.st_nlink != 1
+        ):
+            raise ValueError("incomplete configuration file is not private")
+        content = _read_regular(path, 65536, private=True)
+        if name == "token":
+            matches = content == text
+        else:
+            matches = json.loads(content) == value
+        if not matches:
+            raise ValueError("existing configuration differs; resume refused")
+    for name, text in missing:
+        path = directory / name
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+    load(directory / "client.json")
+    return directory / "client.json"

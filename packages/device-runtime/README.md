@@ -40,7 +40,8 @@ editable 开发目录的修改须重新启动相应进程才能得到新快照�
 发布不同 Device 代码时递增唯一的 `__version__`（PEP 440，例如 `0.2.1`），构建新 wheel；
 不以同名同版本文件覆盖旧发布制品。交付 `release_version` 可独立标识整套包，
 `bundle_sha256` 标识准确制品，二者均不冒充某个进程的组件运行版本。
-新增 Device 版本须验证持久状态契约，并按验证结果维护 `STATE_COMPATIBILITY`；
+新增 Device 版本须验证持久状态契约，并按验证结果维护 `lifecycle.AUDITED_STATE_FORMATS`；
+只有变更数据格式时才需登记新格式号。
 0.2.1 未更改持久格式，沿用格式 1。版本上报不表示回退或数据恢复自动安全。
 
 本功能只识别和查询版本，不探测发布源、不自动判断“最新”、不自动下载、部署、停止或重启。
@@ -261,13 +262,31 @@ CLI 的 bash 使用 --command，script 支持 --script 或 --script-file；--std
 
 隔离跨阶段验收使用FakeModel驱动真实Agent→ServerPool→stdio Device MCP→HTTP中心→WebSocket客户端→真实Bash/FS，不调用付费模型。动态验证在macOS；Linux实机、远程TLS/异机、Windows/发布另行验收。
 
-## Linux 客户端完整包交付（重构中）
+## 客户端完整包交付（DEB / RPM / PKG）
 
-Ubuntu 24.04 amd64 客户端采用自带 Python/依赖的 DEB，构建时预装，目标机不再组装实例 venv。安装、重装、升级共用 apt/dpkg 路径；忙时拒绝、停止确认后替换，本机就绪与连接中心分别报告。
+三个平台均采用自带 Python 与依赖的完整包，目标机不再组装实例 venv。安装、重装、升级共用包管理器路径；忙时拒绝、停止确认后替换，本机就绪与连接中心分别报告。
 
-构建入口为 `scripts/build-client-tree.py` 和 `scripts/build-client-deb.py`，稳定客户端入口为 `ai-device-client`。旧 `build-native-linux.sh` 与旧 payload 组装脚本已退役，不再提供 RPM 构建或旧候选/helper 包主路径。
+| 平台 | 制品 | 构建入口 |
+| --- | --- | --- |
+| Ubuntu/Debian amd64 | DEB | `scripts/build-client-deb.py` |
+| RHEL 系 x86_64 | RPM | `scripts/build-client-rpm.py` |
+| macOS Apple Silicon arm64 | PKG | `scripts/build-client-pkg.py` |
 
-准确操作、制品与剩余门禁见 [Linux 完整包开发指南](../../docs/client-native-linux-development.md)。当前仍为未签名开发包、阶段未最终验收；Mac 新 PKG 尚未实现，中心/MCP 和共享旧实例能力没有因此删除。历史 Linux 指南不能代替新包验收。
+三者共用运行树构建入口 `scripts/build-client-tree.py`，稳定客户端入口为 `ai-device-client`。
+旧 `build-native-linux.sh`、旧 payload 组装脚本与旧 macOS `launchd_deploy` 部署链均已退役。
+
+包版本由构建时 `--version` 显式传入（如 `0.4.9`），与运行时 `__version__`（如 `0.3.6`）是两套体系，不可互相推导。
+
+PKG 支持签名与公证，通过 `--sign-identity`（Developer ID Application，签 payload 内每个
+Mach-O）、`--installer-identity`（Developer ID Installer，`productsign` 签包本身）、
+`--notary-profile`（`notarytool` profile）三步开启。三者互依赖，缺任一项都不产出可分发包，
+且签名构建必须在本机 GUI 终端执行。调用示例与前提见
+[macOS 开发记录](../../docs/client-native-macos-development.md#签名与公证的调用方式2026-11-10)。
+DEB 与 RPM 尚无签名支持。
+
+准确操作、制品与验收证据见 [Linux 指南](../../docs/client-native-linux-guide.md)、[macOS 指南](../../docs/client-native-macos-guide.md) 与 [Linux 开发记录](../../docs/client-native-linux-development.md)。
+
+当前限制：本地隔离开发包未签名未公证，不满足公开分发条件；macOS 仅 Apple Silicon、需已登录 GUI 用户；多用户与并发安装未验证。历史指南不能代替新包验收。
 
 ## 低层 Bash 提交的短暂等待（非新版执行工具）
 

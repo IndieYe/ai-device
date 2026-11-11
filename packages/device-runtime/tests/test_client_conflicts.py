@@ -127,3 +127,19 @@ def test_global_user_service_paths_are_in_discovery_contract(directory):
     from pathlib import Path
 
     assert Path(directory) in m.UNIT_DIRS
+
+
+def test_dangling_service_alias_is_not_a_conflict(discovery):
+    """Ubuntu ships retired dbus aliases; an unreadable link cannot start anything."""
+    _, _, units = discovery
+    (units / "dbus-org.freedesktop.timesync1.service").symlink_to(units / "absent.service")
+    m.check_conflicts()
+
+
+def test_unreadable_regular_unit_still_fails(discovery):
+    _, _, units = discovery
+    target = units / "closed.service"
+    target.write_text("[Service]\nExecStart=/bin/true\n")
+    target.chmod(0o000)
+    with pytest.raises(m.ClientConflict):
+        m.check_conflicts()

@@ -113,6 +113,11 @@ def check_conflicts():
             for unit in directory.glob("*.service"):
                 if unit == OWN_UNIT or unit.resolve() == Path("/dev/null"):
                     continue  # own registration is separately validated; masked units cannot start
+                if not unit.is_file():
+                    # A dangling alias such as a retired dbus-*.service cannot start
+                    # anything; treating it as unreadable would block every host
+                    # that ships one. Real unreadable files still fail below.
+                    continue
                 if _unit_client(_read(unit).decode("utf-8")):
                     raise ClientConflict(
                         "another client service detected; disable its registration explicitly"
