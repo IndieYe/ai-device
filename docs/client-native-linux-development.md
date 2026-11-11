@@ -199,9 +199,9 @@ python3 packages/device-runtime/scripts/build-client-deb.py \
 
 ### dev19 补充拒绝与并发验收
 
-- 准确Ubuntu验收容器对截断为64字节的dev19派生包、同包名arm64测试控制包、普通用户安装分别拒绝（退出1/1/2），均未进入Unpacking，原PID3368及配置/token摘要不变。arm64试件仅验证dpkg架构拒绝，不是可运行arm64制品；截断试件仅覆盖早期格式损坏，不承诺任意载荷损坏均在停机前被发现。日志：`/Users/kongkongye/.ai-assistant/logs/bash-output/20261104-135059-1eb17f.log`。
-- dev19真实前台与后台命令忙拒绝，非零PID保持、任务完成；随后同版重装本机ready、配置/token摘要保持，PID3575。日志：`/Users/kongkongye/.ai-assistant/logs/bash-output/20261104-135129-27699b.log`。
-- 准确安装的dev19租约持有子进程在取得acquire并确认服务显示owner后以 `os._exit(7)` 异常退出，服务自动清除owner、ready=true、PID3575保持；没有杀服务或用resume强行解锁。日志：`/Users/kongkongye/.ai-assistant/logs/bash-output/20261104-135411-726e81.log`。
+- 准确Ubuntu验收容器对截断为64字节的dev19派生包、同包名arm64测试控制包、普通用户安装分别拒绝（退出1/1/2），均未进入Unpacking，原PID3368及配置/token摘要不变。arm64试件仅验证dpkg架构拒绝，不是可运行arm64制品；截断试件仅覆盖早期格式损坏，不承诺任意载荷损坏均在停机前被发现。日志：`/Users/<user>/.ai-assistant/logs/bash-output/20261104-135059-1eb17f.log`。
+- dev19真实前台与后台命令忙拒绝，非零PID保持、任务完成；随后同版重装本机ready、配置/token摘要保持，PID3575。日志：`/Users/<user>/.ai-assistant/logs/bash-output/20261104-135129-27699b.log`。
+- 准确安装的dev19租约持有子进程在取得acquire并确认服务显示owner后以 `os._exit(7)` 异常退出，服务自动清除owner、ready=true、PID3575保持；没有杀服务或用resume强行解锁。日志：`/Users/<user>/.ai-assistant/logs/bash-output/20261104-135411-726e81.log`。
 - 新增确定性交错回归：active_count等待期间新请求无法进入journal/执行；租约建立后新请求维护拒绝，释放后可执行。租约专项9项、Device全量908项通过。本轮仅新增测试与文档，运行源码未变，无需重建dev19。
 
 ### Linux 验收矩阵对照（非最终通过声明）
@@ -246,6 +246,6 @@ python3 packages/device-runtime/scripts/build-client-deb.py \
 
 重启后原execution/隐私/开关确认有效，dev22全量923通过、静态检查通过；两个专属服务PID4040/450保持。原审核者复核指出遗漏全局用户服务目录，已补 `/etc/systemd/user`、`/usr/lib/systemd/user`、`/run/systemd/user` 及3项路径契约测试。
 
-dev23 SHA256 `75b5bdcfa7bd685da69eb32f1a1925f67562067c4531627d3df4b034e9da55d9`；重新构建并在deb容器升级ready，PID4168。三目录逐一植入自定义旧run client服务定义，注册（含确认）和激活均拒绝、PID保持，试件清除后检查正常。实测日志 `/Users/kongkongye/.ai-assistant/logs/bash-output/20261104-144302-d21773.log`。全量926通过 `/tmp/device-ses14497-dev23-final-tests.log`；ruff/diff通过。
+dev23 SHA256 `75b5bdcfa7bd685da69eb32f1a1925f67562067c4531627d3df4b034e9da55d9`；重新构建并在deb容器升级ready，PID4168。三目录逐一植入自定义旧run client服务定义，注册（含确认）和激活均拒绝、PID保持，试件清除后检查正常。实测日志 `/Users/<user>/.ai-assistant/logs/bash-output/20261104-144302-d21773.log`。全量926通过 `/tmp/device-ses14497-dev23-final-tests.log`；ruff/diff通过。
 
 原审核者ses-14507限定复核通过：原问题1按批准发现边界关闭，未发现直接回归。冻结 `/tmp/device-ses14497-conflict-review23-831a7x_f`，manifest SHA256 `8354f641b74f18cbdd7982c7e0d133fc5dcbc46c983c7065123ef08319f5195d`，8文件一致，仅两文件较前次变化；未独立重跑测试/验包。原问题2忙提示此前已关闭。不是Linux整体通过声明；任意离线自定义root仍需管理员确认，人工0.3.4登记、最终交付核对及提交集成仍未完成。无在途审核/后台任务，源码未提交，Mac未开始。clean仍dev22 PID450，不把其验收标成dev23。

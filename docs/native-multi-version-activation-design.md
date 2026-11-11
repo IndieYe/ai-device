@@ -1,7 +1,7 @@
 # 多版本激活协议（设计稿）
 
 > 状态：草案，未实现。基于 `e3034c9` 的实际代码与需求文档
-> `/Users/kongkongye/data/project/ai-assistant/doc/requirements/device-native-installation-pairing-and-remote-upgrade.md` §5.4、§7.5。
+> `/Users/<user>/data/project/ai-assistant/doc/requirements/device-native-installation-pairing-and-remote-upgrade.md` §5.4、§7.5。
 
 ## 1. 必须先解决的冲突
 

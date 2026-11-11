@@ -4,8 +4,8 @@
 > 创建时间：2026-08-06
 > 涉及仓库：
 >
-> - FS MCP Server：`/Users/kongkongye/data/project/ai-device-fs`
-> - AI Assistant：`/Users/kongkongye/data/project/ai-assistant`
+> - FS MCP Server：`/Users/<user>/data/project/ai-device-fs`
+> - AI Assistant：`/Users/<user>/data/project/ai-assistant`
 >
 > 本文档用于在全新会话中直接接续实施。实施时不要只完成 FS MCP 返回图片；最终目标是让 OpenAI Responses 模型真正收到并理解工具返回的图片，同时保证会话保存、重载和前端展示闭环。
 
@@ -321,7 +321,7 @@ def read_image(
 
 ## 6. FS MCP Server 实施方案
 
-仓库：`/Users/kongkongye/data/project/ai-device-fs`
+仓库：`/Users/<user>/data/project/ai-device-fs`
 
 ### 6.1 预计新增文件
 
@@ -390,7 +390,7 @@ class ImageInfo:
 当前 FS MCP 没有 Pillow。使用项目规定的 `uv` 添加：
 
 ```bash
-cd /Users/kongkongye/data/project/ai-device-fs
+cd /Users/<user>/data/project/ai-device-fs
 uv add pillow
 ```
 
@@ -557,7 +557,7 @@ remote_read_image(...)
 
 ## 8. AI Assistant 端到端集成方案
 
-仓库：`/Users/kongkongye/data/project/ai-assistant`
+仓库：`/Users/<user>/data/project/ai-assistant`
 
 开始修改前必须遵守该仓库：
 
@@ -833,7 +833,7 @@ web/src/components/chat/toolCallPresentation.ts
 建议测试：
 
 ```bash
-cd /Users/kongkongye/data/project/ai-device-fs
+cd /Users/<user>/data/project/ai-device-fs
 uv run pytest tests/core -q
 uv run pytest -q
 ```
@@ -862,7 +862,7 @@ uv run pytest -q
 建议测试：
 
 ```bash
-cd /Users/kongkongye/data/project/ai-device-fs
+cd /Users/<user>/data/project/ai-device-fs
 uv run pytest tests/remote/test_host.py tests/remote/test_infra.py -q
 uv run pytest tests/remote/test_integration.py -q
 uv run pytest -q
@@ -903,7 +903,7 @@ backend/tests/test_tool_execution_complete_hook.py
 建议测试：
 
 ```bash
-cd /Users/kongkongye/data/project/ai-assistant/backend
+cd /Users/<user>/data/project/ai-assistant/backend
 uv run pytest tests/test_server_pool.py -q
 uv run pytest tests/test_agent.py -q
 uv run pytest tests/test_openai_responses_model.py -q
@@ -931,7 +931,7 @@ uv run pytest
 前端测试：
 
 ```bash
-cd /Users/kongkongye/data/project/ai-assistant/web
+cd /Users/<user>/data/project/ai-assistant/web
 pnpm test:run
 ```
 
@@ -1085,7 +1085,7 @@ pnpm test:run
 
 ```text
 请读取并严格按照以下工作文档分阶段实施：
-/Users/kongkongye/data/project/ai-device-fs/docs/READ_IMAGE_END_TO_END_WORK_PLAN.md
+/Users/<user>/data/project/ai-device-fs/docs/READ_IMAGE_END_TO_END_WORK_PLAN.md
 
 先完成阶段 0 盘点并汇报，不要跳过阶段门禁，不要自动重启真实服务，不要提交或推送代码，除非我后续明确要求。
 ```

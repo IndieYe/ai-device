@@ -7,8 +7,6 @@ import re
 import stat
 import subprocess
 
-CENTER = "https://device.kongkongye.com"
-
 
 def read_json(path, private=False):
     info = path.lstat()
@@ -104,13 +102,15 @@ def run(root, role, args):
     if not help_only:
         config = read_json(root / "config.json", private=True)
         token = read_json(root / "credentials.json", private=True)["admin_token"]
+        server_url = config.get("server_url")
         if (
-            config["server_url"] != CENTER
+            not isinstance(server_url, str)
+            or not server_url
             or not isinstance(token, str)
             or len(token) < 16
         ):
             raise ValueError("private profile unavailable")
-        env["DEVICE_RUNTIME_API_URL"] = CENTER
+        env["DEVICE_RUNTIME_API_URL"] = server_url
         env["DEVICE_RUNTIME_ADMIN_TOKEN"] = token
     module_args = (
         ["device_runtime.mcp_server"]
