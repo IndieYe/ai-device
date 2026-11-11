@@ -2,7 +2,7 @@
 license = "MIT"
 license-files = ["LICENSE"]
 name = "ai-device-bash"
-version = "0.2.0"
+version = "0.2.1"
 description = "Reusable local execution core with an optional FastMCP server"
 readme = "README.md"
 requires-python = ">=3.13"

@@ -58,7 +58,7 @@ macOS 使用系统版本，架构来自客户端运行环境。采集不到的�
 
 ## 安装与边界
 
-Python >=3.13，依赖/测试只用 `uv`。当前受控组合为 Device / Bash / FS **0.2.0**，Device 的 `client` extra 显式声明两份核心的精确版本。独立中心使用 `server`，独立 stdio MCP 使用 `mcp`；这两个角色不安装 Bash/FS。客户端默认包不含 MCP 服务器，FS 的图片核心依赖 Pillow。
+Python >=3.13，依赖/测试只用 `uv`。仓库候选组合为 Device **0.3.7** / Bash **0.2.1** / FS **0.2.1**，尚未发布；Device 的 `client` extra 显式声明两份核心的精确版本。独立中心使用 `server`，独立 stdio MCP 使用 `mcp`；这两个角色不安装 Bash/FS。客户端默认包不含 MCP 服务器，FS 的图片核心依赖 Pillow。
 
 正式交付必须使用 bundle 中带来源与 Hash 的准确三份 wheel；不要仅凭同名 PyPI 版本判断 core API 可用。三包尚未远程发布，bundle 提供准确制品，第三方依赖允许联网。
 

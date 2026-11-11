@@ -83,7 +83,7 @@ dev = [
 
 [[package]]
 name = "ai-device-bash"
-version = "0.2.0"
+version = "0.2.1"
 source = { editable = "packages/bash" }
 dependencies = [
     { name = "psutil" },
@@ -105,7 +105,7 @@ provides-extras = ["mcp"]
 
 [[package]]
 name = "ai-device-fs"
-version = "0.2.0"
+version = "0.2.1"
 source = { editable = "packages/fs" }
 dependencies = [
     { name = "pillow" },

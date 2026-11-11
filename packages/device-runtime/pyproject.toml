@@ -9,7 +9,7 @@ requires-python = ">=3.13"
 dependencies = ["pydantic>=2.12.5", "websockets>=15.0", "packaging>=24.2"]
 
 [project.optional-dependencies]
-client = ["ai-device-bash==0.2.0", "ai-device-fs==0.2.0"]
+client = ["ai-device-bash==0.2.1", "ai-device-fs==0.2.1"]
 server = ["fastapi>=0.115.0", "uvicorn>=0.35.0"]
 ops = ["httpx>=0.28"]
 mcp = ["mcp>=1.26.0,<2", "httpx>=0.28"]

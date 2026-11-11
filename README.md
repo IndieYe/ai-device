@@ -10,7 +10,7 @@
 | packages/fs | ai-device-fs | mcp_server_fs | mcp-server-fs |
 | packages/device-runtime | ai-device | device_runtime | device-runtime / device-mcp |
 
-三个包已发布到 PyPI：ai-device-bash 0.2.0、ai-device-fs 0.2.0、ai-device 0.2.2。三个版本号在仓库内必须保持一致：`ai-device` 的 `client` extra 精确 pin 另两个包的版本；持久状态格式按 `lifecycle.AUDITED_STATE_FORMATS` 审计，只有变更数据格式时才需登记新格式号。`tests/test_release_version_consistency.py` 会在漏改时报错。不要安装同名旧包代替本仓准确制品。
+三个包已发布到 PyPI：ai-device-bash 0.2.0、ai-device-fs 0.2.0、ai-device 0.2.2。仓库中的 `ai-device` 的 `client` extra 必须精确 pin 另两个包各自的版本，版本号不必相同；持久状态格式按 `lifecycle.AUDITED_STATE_FORMATS` 审计，只有变更数据格式时才需登记新格式号。`tests/test_release_version_consistency.py` 会在漏改时报错。不要安装同名旧包代替本仓准确制品。
 
 ## 开发
 
