@@ -14,6 +14,7 @@ from websockets.exceptions import ConnectionClosed, InvalidStatus
 from .journal import Conflict, Journal
 from .limits import DEFAULT_CONCURRENCY, positive_limit
 from .protocol import MAX_MESSAGE_BYTES, Ack, Execute, Identifier, Operation, Report, canonical
+from .system_info import SYSTEM_INFO_HEADER, collect_system_info, system_info_header
 from .version import VERSION_HEADER, version_header
 
 
@@ -267,6 +268,7 @@ class DeviceClient:
                 if not self._closed.is_set():
                     await self.journal.initialize()
                     self._initialized = True
+            system_header = await asyncio.to_thread(lambda: system_info_header(collect_system_info()))
             while not self._closed.is_set():
                 try:
                     async with connect(
@@ -274,6 +276,7 @@ class DeviceClient:
                         additional_headers={
                             "Authorization": "Bearer " + self.token,
                             VERSION_HEADER: version_header(),
+                            SYSTEM_INFO_HEADER: system_header,
                         },
                         max_size=MAX_MESSAGE_BYTES,
                         open_timeout=10,

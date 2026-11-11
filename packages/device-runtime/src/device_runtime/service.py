@@ -11,10 +11,11 @@ class ServiceError(ValueError):
 
 
 class Peer:
-    def __init__(self, websocket, hello: Hello, runtime_version=None):
+    def __init__(self, websocket, hello: Hello, runtime_version=None, system_info=None):
         self.websocket = websocket
         self.hello = hello
         self.runtime_version = runtime_version
+        self.system_info = system_info
         self._send_lock = asyncio.Lock()
 
     async def send(self, message):
@@ -155,6 +156,12 @@ class DeviceService:
             {
                 "device_id": device_id,
                 "online": device_id in self.peers,
+                "platform": self.peers[device_id].hello.platform if device_id in self.peers else None,
+                "system_info": (
+                    self.peers[device_id].system_info.model_dump()
+                    if device_id in self.peers and self.peers[device_id].system_info is not None
+                    else None
+                ),
                 "runtime_version": (
                     self.peers[device_id].runtime_version.model_dump()
                     if device_id in self.peers and self.peers[device_id].runtime_version is not None

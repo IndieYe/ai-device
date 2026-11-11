@@ -11,6 +11,7 @@ from pydantic import TypeAdapter, ValidationError
 from .journal import Conflict, Journal
 from .protocol import MAX_MESSAGE_BYTES, Hello, Identifier, Operation, Report
 from .service import DeviceService, Peer, ServiceError
+from .system_info import SYSTEM_INFO_HEADER, parse_system_info_header
 from .version import VERSION_HEADER, parse_version_header, runtime_version
 
 
@@ -89,7 +90,8 @@ def create_app(state_dir: Path, *, admin_token: str, device_tokens: dict[str, st
                 raise ServiceError("message_too_large")
             hello = Hello.model_validate_json(raw)
             peer = Peer(
-                websocket, hello, parse_version_header(websocket.headers.get(VERSION_HEADER))
+                websocket, hello, parse_version_header(websocket.headers.get(VERSION_HEADER)),
+                parse_system_info_header(websocket.headers.get(SYSTEM_INFO_HEADER)),
             )
             await service.attach(device_id, peer)
             await peer.send({"v": 1, "type": "welcome", "device_id": device_id})

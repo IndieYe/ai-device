@@ -14,6 +14,7 @@ from websockets.asyncio.client import connect
 from device_runtime import __version__
 from device_runtime.client import DeviceClient
 from device_runtime.http_client import DeviceAPI, DeviceAPIError
+from device_runtime.system_info import SYSTEM_INFO_HEADER, SystemInfo, parse_system_info_header
 from device_runtime.version import (
     VERSION_HEADER,
     parse_version_header,
@@ -51,7 +52,8 @@ def test_invalid_optional_identity_is_unknown(value):
     assert parse_version_header(value) is None
 
 
-async def test_client_reports_identity_and_disconnect_does_not_claim_running(live_server, tmp_path):
+async def test_client_reports_identity_and_disconnect_does_not_claim_running(live_server, tmp_path, monkeypatch):
+    monkeypatch.setattr("device_runtime.client.collect_system_info", lambda: SystemInfo(version="Test OS 1", architecture="arm64"))
     url, service, http = live_server
     client = DeviceClient(
         server_url=url,
@@ -69,6 +71,8 @@ async def test_client_reports_identity_and_disconnect_does_not_claim_running(liv
         await eventually(online)
         device = (await http.get("/v1/devices")).json()[0]
         assert device["runtime_version"] == runtime_version()
+        assert device["platform"] == sys.platform
+        assert device["system_info"] == {"version": "Test OS 1", "architecture": "arm64"}
         async with DeviceAPI(url.replace("ws:", "http:"), ADMIN) as api:
             assert (await api.list_devices())["devices"][0]["runtime_version"] == runtime_version()
             assert await api.get_version() == {"role": "center", **runtime_version()}
@@ -82,7 +86,9 @@ async def test_client_reports_identity_and_disconnect_does_not_claim_running(liv
         return "laptop-one" not in service.peers
 
     await eventually(offline)
-    assert (await http.get("/v1/devices")).json()[0]["runtime_version"] is None
+    offline = (await http.get("/v1/devices")).json()[0]
+    assert offline["runtime_version"] is None
+    assert offline["platform"] is None and offline["system_info"] is None
 
 
 @pytest.mark.parametrize("header", [None, "invalid", "x" * 513])
@@ -105,6 +111,24 @@ async def test_old_or_malformed_client_connects_without_identity(live_server, he
         device = (await http.get("/v1/devices")).json()[0]
         assert device["online"] is True
         assert device["runtime_version"] is None
+        assert device["platform"] == "linux"
+        assert device["system_info"] is None
+
+
+@pytest.mark.parametrize("header", [None, "invalid", "x" * 2049, '{"version": 1}'])
+def test_invalid_system_info_is_optional(header):
+    assert parse_system_info_header(header) is None
+
+
+def test_system_info_collection_failure_is_nonfatal(monkeypatch):
+    from device_runtime import system_info
+
+    monkeypatch.setattr(system_info.sys, "platform", "linux")
+    def fail():
+        raise OSError("unavailable")
+    monkeypatch.setattr(system_info.platform, "freedesktop_os_release", fail)
+    monkeypatch.setattr(system_info.platform, "machine", fail)
+    assert system_info.collect_system_info().model_dump() == {"version": None, "architecture": None}
 
 
 async def test_new_client_preserves_exact_legacy_hello(tmp_path):
@@ -113,6 +137,7 @@ async def test_new_client_preserves_exact_legacy_hello(tmp_path):
     received = asyncio.Future()
 
     async def legacy(socket):
+        assert parse_system_info_header(socket.request.headers.get(SYSTEM_INFO_HEADER)) is not None
         hello = json.loads(await socket.recv())
         received.set_result(hello)
         assert hello == {
