@@ -1,6 +1,6 @@
 # macOS arm64 客户端完整包开发记录
 
-> 面向使用者的安装、配置、升级、卸载操作说明见 [`client-native-macos-guide.md`](client-native-macos-guide.md)。本文是实现与验收记录。
+> 面向使用者的安装、配置、升级、卸载操作说明见 [`client-native-macos-guide.md`](../guide/client-native-macos-guide.md)。本文是实现与验收记录。
 
 ## 当前状态
 
@@ -8,7 +8,7 @@
 
 Mac 侧代码包含 13 个 `client_macos_*.py` 模块、`scripts/build-client-pkg.py` 构建器；
 本节下方各节记录了演进过程，其中“改动未提交”“未接入生产路径”类描述均已过时，
-实时状态以 [需求文档阶段二](../doc/requirements/client-native-install-upgrade.md) 为准。
+实时状态以 [需求文档阶段二](../requirements/client-native-install-upgrade.md) 为准。
 
 已完成的真机验收（macminim6，Apple Silicon，macOS 27.0.1）：
 
@@ -25,7 +25,7 @@ Mac 侧代码包含 13 个 `client_macos_*.py` 模块、`scripts/build-client-pk
 1. **并发安装未串行化。** preinstall 已改为 `mkdir` 原子占位，冲突会被明确拒绝并写入
    `preinstall-token`（`BUSY` / `RESIDUE` 两种），不再只有安装器通用文案。
    但胜者仍可能把运行树换成自己的版本，两个安装器不会排队。
-   详见 [`client-native-macos-concurrent-install-design.md`](client-native-macos-concurrent-install-design.md)。
+   详见 [`client-native-macos-concurrent-install-design.md`](../design/client-native-macos-concurrent-install-design.md)。
 2. **多用户、非管理员路径**未验证。
 3. **签名与公证**：构建器已支持完整流程，但从未产出过真实的签名包，也未提交过公证。
    缺 Developer ID Installer 证书，`productsign` 无法执行。见下方
@@ -35,8 +35,8 @@ Mac 侧代码包含 13 个 `client_macos_*.py` 模块、`scripts/build-client-pk
 > 见下文“pkgbuild 权限警告已定位”。
 
 权威需求为 `doc/requirements/client-native-install-upgrade.md`；使用者操作说明见
-[`client-native-macos-guide.md`](client-native-macos-guide.md)；Linux 侧见
-[`client-native-linux-guide.md`](client-native-linux-guide.md)。
+[`client-native-macos-guide.md`](../guide/client-native-macos-guide.md)；Linux 侧见
+[`client-native-linux-guide.md`](../guide/client-native-linux-guide.md)。
 
 已完成构建准备：平台锁选择、arm64 uv 工具锁、离线预装运行树。
 `build/client-native/mac-tree1` 是本阶段早期构建，不包含后续新增 Mac 布局模块。

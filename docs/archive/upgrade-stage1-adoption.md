@@ -1,6 +1,6 @@
 # 阶段1显式纳管：审阅模板与交接契约
 
-> **旧实例路线历史资料**：本文不是新客户端完整包的安装、恢复或验收指南。当前 Linux 路线见 [完整包开发操作指南](client-native-linux-development.md)，权威需求见 [客户端安装升级需求](../doc/requirements/client-native-install-upgrade.md)。旧监督器仍有待拆分的 Linux/Mac 职责；保留历史不表示新包支持旧协议，不应将下文命令用于新 DEB。
+> **旧实例路线历史资料**：本文不是新客户端完整包的安装、恢复或验收指南。当前 Linux 路线见 [完整包开发操作指南](../development/client-native-linux-development.md)，权威需求见 [客户端安装升级需求](../requirements/client-native-install-upgrade.md)。旧监督器仍有待拆分的 Linux/Mac 职责；保留历史不表示新包支持旧协议，不应将下文命令用于新 DEB。
 
 状态：可生成、可本地校验，未在真实Linux/systemd安装验收。不是正式部署授权。
 不覆盖旧runner、不伪造installation、不从裸venv自动升级为标准实例。

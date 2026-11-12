@@ -31,22 +31,22 @@ Bash/FS 的 MCP 服务使用各自的 `[mcp]` extra；Device extras 为 client�
 
 ### 客户端安装升级
 
-- [Linux 客户端安装升级指南](docs/client-native-linux-guide.md)（Ubuntu/Debian amd64 DEB、RHEL 系 x86_64 RPM，systemd）
-- [macOS 客户端安装升级指南](docs/client-native-macos-guide.md)（Apple Silicon arm64，PKG/launchd）
-- [旧路径退役与保留清单](docs/client-native-legacy-inventory.md)
-- [旧路径删除核对记录](docs/client-native-legacy-deletion-review.md)
-- [Linux 客户端开发记录与验收证据](docs/client-native-linux-development.md)
-- [macOS 客户端开发记录](docs/client-native-macos-development.md)
+- [Linux 客户端安装升级指南](docs/guide/client-native-linux-guide.md)（Ubuntu/Debian amd64 DEB、RHEL 系 x86_64 RPM，systemd）
+- [macOS 客户端安装升级指南](docs/guide/client-native-macos-guide.md)（Apple Silicon arm64，PKG/launchd）
+- [旧路径退役与保留清单](docs/archive/client-native-legacy-inventory.md)
+- [旧路径删除核对记录](docs/archive/client-native-legacy-deletion-review.md)
+- [Linux 客户端开发记录与验收证据](docs/development/client-native-linux-development.md)
+- [macOS 客户端开发记录](docs/development/client-native-macos-development.md)
 
 ### 其他
 
-- [macOS Device 用户级部署、迁移与验收](docs/macos-ai-workstation-setup-and-verification.md)
-- [macOS 可选配套工具：tmux、Harness 与管理员配置](docs/macos-optional-tools.md)（非 Device 必需依赖）
+- [macOS Device 用户级部署、迁移与验收](docs/guide/macos-ai-workstation-setup-and-verification.md)
+- [macOS 可选配套工具：tmux、Harness 与管理员配置](docs/guide/macos-optional-tools.md)（非 Device 必需依赖）
 
-- [需求和验收](doc/requirements/ai-device-monorepo-migration.md)
-- [实施状态与验证边界](docs/implementation-status.md)
-- [阶段C验收矩阵](docs/stage-c-acceptance.md)
-- [D1本地发布准备与外部门禁](docs/release-preparation.md)
+- [需求和验收](docs/requirements/ai-device-monorepo-migration.md)
+- [实施状态与验证边界](docs/development/implementation-status.md)
+- [阶段C验收矩阵](docs/development/stage-c-acceptance.md)
+- [D1本地发布准备与外部门禁](docs/development/release-preparation.md)
 - [来源文件清单](docs/source-manifest.json)
 - [第三方许可补充资料与再分发边界](docs/third-party-licenses/README.md)
 - [Device 使用](packages/device-runtime/README.md)
@@ -54,6 +54,6 @@ Bash/FS 的 MCP 服务使用各自的 `[mcp]` extra；Device extras 为 client�
 - [FS 使用](packages/fs/README.md)
 - [Agent 操作技能](skills/device-operations/SKILL.md)
 
-MIT。第三方依赖按各自许可使用；完整第三方声明与对外发布审查仍须在发布前收口。`test.yml` 在 push/PR 运行测试与构建，不包含上传步骤；PyPI 发布由 `release.yml` 手动触发并逐包经过 Environment 审批，不会因 push 自动发布。详见 [D1本地发布准备](docs/release-preparation.md)。
+MIT。第三方依赖按各自许可使用；完整第三方声明与对外发布审查仍须在发布前收口。`test.yml` 在 push/PR 运行测试与构建，不包含上传步骤；PyPI 发布由 `release.yml` 手动触发并逐包经过 Environment 审批，不会因 push 自动发布。详见 [D1本地发布准备](docs/development/release-preparation.md)。
 
-- [本机 Operator 稳定入口与发布清单（待部署）](docs/operator-release.md)
+- [本机 Operator 稳定入口与发布清单（待部署）](docs/archive/operator-release.md)

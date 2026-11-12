@@ -3,7 +3,7 @@
 > 适用版本：客户端包 `ai-device-client` 0.4.x，运行时 0.3.6
 > 支持范围：**仅 Apple Silicon / arm64**。不支持 Intel Mac，不支持 Rosetta 运行路线，不支持降级安装。
 > 包版本与运行时版本相互独立，见第 5 节。
-> 本文是操作说明；实施细节与验收证据见 [`client-native-macos-development.md`](client-native-macos-development.md)，权威需求见 [`../doc/requirements/client-native-install-upgrade.md`](../doc/requirements/client-native-install-upgrade.md)。
+> 本文是操作说明；实施细节与验收证据见 [`client-native-macos-development.md`](../development/client-native-macos-development.md)，权威需求见 [`../requirements/client-native-install-upgrade.md`](../requirements/client-native-install-upgrade.md)。
 
 ## 1. 它是什么
 
@@ -602,8 +602,8 @@ Gatekeeper 拦截。见第 2 节，必须用 `sudo installer`。
 
 ## 10. 相关文档
 
-- 实施细节与全部真机验收证据：[`client-native-macos-development.md`](client-native-macos-development.md)
-- 权威需求与交付标准：[`../doc/requirements/client-native-install-upgrade.md`](../doc/requirements/client-native-install-upgrade.md)
-- 卸载后残留文件策略：[`client-native-macos-stage-cleanup-policy.md`](client-native-macos-stage-cleanup-policy.md)
-- 升级失败恢复契约：[`client-native-macos-upgrade-recovery-contract.md`](client-native-macos-upgrade-recovery-contract.md)
+- 实施细节与全部真机验收证据：[`client-native-macos-development.md`](../development/client-native-macos-development.md)
+- 权威需求与交付标准：[`../requirements/client-native-install-upgrade.md`](../requirements/client-native-install-upgrade.md)
+- 卸载后残留文件策略：[`client-native-macos-stage-cleanup-policy.md`](../design/client-native-macos-stage-cleanup-policy.md)
+- 升级失败恢复契约：[`client-native-macos-upgrade-recovery-contract.md`](../design/client-native-macos-upgrade-recovery-contract.md)
 - Linux 版对应指南：[`client-native-linux-guide.md`](client-native-linux-guide.md)

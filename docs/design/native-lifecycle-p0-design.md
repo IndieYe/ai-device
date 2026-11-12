@@ -4,7 +4,7 @@
 > 用户已认可首选方案，并要求先完成 P0。本文冻结本期产品与动作契约，不表示已实现或实机验收。
 > 权威需求：ai-assistant `doc/requirements/device-native-installation-pairing-and-remote-upgrade.md`，提交 `7be75392c352151d6cb29cbdad2770f2694dcedd`。
 > 当前实现基线：ai-device `4f7891d1fc27eeab20cc60f7e5298cb1ab187045`。
-> 工作现场、基线测试及后续进度见 [实施记录](native-lifecycle-implementation.md)。
+> 工作现场、基线测试及后续进度见 [实施记录](../archive/native-lifecycle-implementation.md)。
 
 ## 1. 冻结原则和范围
 

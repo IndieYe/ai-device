@@ -3,7 +3,7 @@
 > 适用版本：客户端包 `ai-device-client` 0.4.x，运行时 0.3.6
 > 支持范围：**仅 Ubuntu 24.04 amd64**。不支持其他发行版、其他架构、降级安装。
 > 包版本与运行时版本相互独立，见第 5 节。
-> 本文是操作说明；实施细节与验收证据见 [`client-native-linux-development.md`](client-native-linux-development.md)，权威需求见 [`../doc/requirements/client-native-install-upgrade.md`](../doc/requirements/client-native-install-upgrade.md)。
+> 本文是操作说明；实施细节与验收证据见 [`client-native-linux-development.md`](../development/client-native-linux-development.md)，权威需求见 [`../requirements/client-native-install-upgrade.md`](../requirements/client-native-install-upgrade.md)。
 
 ## 1. 它是什么
 
@@ -363,4 +363,4 @@ journalctl -u ai-device-client -n 50
 - 覆盖：干净目标安装、首次配置、注册、启动、A→B 升级、普通卸载、purge、损坏修复、普通用户运行、用户切换、**busy 时拒绝卸载及恢复**、**busy 时拒绝升级（状态保持 ii）**、**包版本与运行时版本解耦**
 - 未覆盖：真实网络故障、真实系统 halt/断电、跨大版本状态迁移、真实硬件性能
 
-详细证据与历史迭代记录见 [`client-native-linux-development.md`](client-native-linux-development.md)。
+详细证据与历史迭代记录见 [`client-native-linux-development.md`](../development/client-native-linux-development.md)。

@@ -1,10 +1,10 @@
 # Device 版本化交付包（Mac 首期）
 
-> 三包迁移说明：本文保留来源项目的历史交付与验收记录，不代表新仓本次已完成相同平台验收。新包名称和当前支持范围以 [阶段C验收](stage-c-acceptance.md) 为准；AI 助手专属配置留在宿主仓库。
+> 三包迁移说明：本文保留来源项目的历史交付与验收记录，不代表新仓本次已完成相同平台验收。新包名称和当前支持范围以 [阶段C验收](../development/stage-c-acceptance.md) 为准；AI 助手专属配置留在宿主仓库。
 
 > **路径区分**：本页描述的是 **bundle 独立实例**（含三份 wheel 的目录 + `instance install/rebuild`，适合中心、MCP 与开发者自定义实例）。
 > 面向终端设备的 **完整包**（DEB / RPM / PKG，自带 Python，目标机无需组装 venv）请见
-> [Linux 指南](client-native-linux-guide.md) 与 [macOS 指南](client-native-macos-guide.md)。
+> [Linux 指南](../guide/client-native-linux-guide.md) 与 [macOS 指南](../guide/client-native-macos-guide.md)。
 > 两条路径共存，互不替代；安装设备客户端时不要按本页流程手工组装实例。
 
 运行版本查询自 Device 0.2.1 起提供，详见 [Device Runtime](device-runtime.md)。
@@ -176,7 +176,7 @@ AI Assistant 工作目录的 `config/config.json` 使用顶层 **`mcp-servers`**
 
 替换为实际绝对 root，JSON command 内的空格是路径本身，**不额外嵌 shell 引号、不把 command 和 args 拼成 shell 字符串**。API URL 由 run 从 roles.json 读取；只有声明的 admin token 从宿主环境加入这次 stdio 的内存 env。名单只存名称，不保存解析值、不做 `${VAR}` 展开，不自动继承整个宿主环境；缺失或空值在 spawn 前拒绝，同名键不能同时存在于字面量 env。每次重连重新取值，不能把配置保存当成凭证已供给。
 
-此字段要求包含 `inherit_env` 实现的 Core；旧 Core 可能忽略未知字段，**仅写 JSON 不能越过宿主升级和连接验证门禁**。用户负责让实际启动 Core 的进程事先具有所需环境及 python3 PATH（终端 export 不会改变已运行的服务）。配置与组件生效规则见 [配置与生效边界](../README.md)；真实配置变更/服务重启不是隔离开发验收动作，仍须独立授权。这里不宣称当前线上 Core 已加载该实现。
+此字段要求包含 `inherit_env` 实现的 Core；旧 Core 可能忽略未知字段，**仅写 JSON 不能越过宿主升级和连接验证门禁**。用户负责让实际启动 Core 的进程事先具有所需环境及 python3 PATH（终端 export 不会改变已运行的服务）。配置与组件生效规则见 [配置与生效边界](../third-party-licenses/README.md)；真实配置变更/服务重启不是隔离开发验收动作，仍须独立授权。这里不宣称当前线上 Core 已加载该实现。
 
 标准 MCP Python SDK 使用 `StdioServerParameters`，`inherit_env` 是 AI Assistant 的宿主配置扩展，不能原样当作 SDK 字段。其他客户端的配置容器和环境注入规则以其自身契约为准；使用 SDK 时仅在内存传入值，例如：
 

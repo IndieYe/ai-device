@@ -1,7 +1,7 @@
 # 旧路径退役与保留清单
 
 > 对应需求 §13.5：说明已删除的旧代码、仍保留的部分及保留原因。
-> 这是**交付状态快照**，不是历史过程记录；逐批退役的验证细节见 [`client-native-linux-development.md`](client-native-linux-development.md)。
+> 这是**交付状态快照**，不是历史过程记录；逐批退役的验证细节见 [`client-native-linux-development.md`](../development/client-native-linux-development.md)。
 
 ## 1. 当前唯一正式入口
 

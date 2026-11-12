@@ -1,6 +1,6 @@
 # 阶段1人工恢复：先取证、后单步授权
 
-> **旧实例路线历史资料**：本文不是新客户端完整包的安装、恢复或验收指南。当前 Linux 路线见 [完整包开发操作指南](client-native-linux-development.md)，权威需求见 [客户端安装升级需求](../doc/requirements/client-native-install-upgrade.md)。旧监督器仍有待拆分的 Linux/Mac 职责；保留历史不表示新包支持旧协议，不应将下文命令用于新 DEB。
+> **旧实例路线历史资料**：本文不是新客户端完整包的安装、恢复或验收指南。当前 Linux 路线见 [完整包开发操作指南](../development/client-native-linux-development.md)，权威需求见 [客户端安装升级需求](../requirements/client-native-install-upgrade.md)。旧监督器仍有待拆分的 Linux/Mac 职责；保留历史不表示新包支持旧协议，不应将下文命令用于新 DEB。
 
 适用标准单client纳管实例。不是自动修复脚本，不授予真实服务操作权限。
 真实服务停止仍由用户亲自执行；AI不得stop/kill。启动/发布/权限修改依本次明确范围执行。

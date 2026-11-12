@@ -36,8 +36,8 @@ stat -f %Su /dev/console
 
 按交付版本文档安装客户端并完成配对：
 
-- [Device 安装与交付](device-delivery.md)
-- [Device 配对与运行](device-runtime.md)
+- [Device 安装与交付](../archive/device-delivery.md)
+- [Device 配对与运行](../archive/device-runtime.md)
 
 使用经过来源和摘要校验的受控交付包；不要用网上同名包替代配套 Bash/FS 执行核心。Device 的 Python 要求、bundle 与实例安装参数以交付文档为准，不能套用 Harness 的 Python 版本。
 
