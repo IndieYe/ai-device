@@ -194,6 +194,7 @@ installed; client locally ready
 | --- | --- |
 | 服务空闲 | 正常升级，配置与业务数据保留 |
 | 服务正在执行任务 | **拒绝升级**，服务与任务不受影响 |
+| 经本客户端通道执行升级命令 | **必然拒绝**：该命令本身就是活跃请求（见下） |
 | 同时执行多个安装 | 只有一个成功，其余被包管理锁拒绝 |
 | 正在升级 | 新注册/安装被拒绝，不排队 |
 | drop-in override 存在 | 拒绝，需先移除 |
@@ -206,6 +207,53 @@ client is busy with active tasks; retry when tasks finish; service kept running
 ```
 
 看到这条说明**任务仍在跑，服务没被动过**。等任务完成后再执行同一条 `dpkg -i` 即可。
+
+### 不要经客户端自己的通道执行升级
+
+空闲判定是 `active_requests == 0 && active_tasks == 0`，而**任何通过该客户端执行的命令都计入 `active_requests`**，包括远程执行通道。从客户端通道里跑 `dpkg -i` / `rpm -Uvh`，执行这条命令的客户端自己就成了障碍：它要等一个空闲实例，而它正忙着跑这条命令。
+
+这种用法会得到 `AI_DEVICE_UPGRADE_REFUSED_V1`。
+
+> **不要仅凭这个码断定原因。** 它是多个拒绝阶段的默认输出，服务忙、stage 残留等
+> 都会输出同一行。看到它只能说明升级被拒绝了，不能据此认为属于忙、没有副作用
+> 或制品有问题。要继续看安装日志和当前状态再判断。
+
+**先探测当前是否可升级**，不必反复尝试。下面的脚本通过维护 socket 申请一次租约：
+
+```bash
+python3 - <<'EOF'
+import socket
+p = '/var/lib/ai-device-client/maintenance.sock'
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.settimeout(5)
+s.connect(p)
+s.sendall(b'{"action":"acquire"}\n')
+d = b''
+while not d.endswith(b'\n'):
+    c = s.recv(4096)
+    if not c:
+        break
+    d += c
+print(d.decode().strip())
+s.close()
+EOF
+```
+
+`{"acquired": true, "active_requests": 0, "active_tasks": 0}` 表示此刻可以升级。
+
+使用安装包自带运行时（未装系统 python3 时）：将上面的 `python3` 换成
+`/opt/ai-device-client/runtime/bin/python3`。
+
+> **两点注意。** 一是 acquire 不是纯只读：申请成功后会**暂时占住准入**，直到连接关闭，
+> 期间其他安装/升级会被拒绝。脚本结束即关闭连接释放，不要长时间保持这个连接。
+> 二是它只是**瞬时快照**，返回 true 不保证紧接着的安装一定成功。
+
+**正确做法**：升级只在目标机器的本地终端或 SSH 会话里执行，不要经 Device 的远程命令通道。这要求该机器至少有一条不依赖待升级客户端的访问路径——升级前先确认它可用。
+
+> 若 `active_tasks` 长期不为 0，先只读对账：查操作 ID、对应进程和数据库记录，
+> 判断是仍在执行的任务还是没有收尾的残留。`ps` 没看到同名进程不足以证明已退出。
+> **不要为了清状态就重启客户端或改数据库**：重启会中断当前连接和正在跑的任务，
+> 需要先确认影响并取得同意。
 
 > **但要注意包状态会停在 `ri`。** prerm 以非零退出后，dpkg 保留包的"待删除"意图，`dpkg -l` 显示 `ri` 而不是 `ii`。这不会影响正在运行的服务，也不会被 `apt upgrade`、`dist-upgrade`、`autoremove`、`install -f` 自动处理；但之后显式执行 `apt remove ai-device-client` 会直接删除，不再就此处的 busy 情况询问。
 >
