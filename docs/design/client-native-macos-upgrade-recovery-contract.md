@@ -1,7 +1,7 @@
 # upgrade 失败恢复契约：方案 B（已实现）
 
 > 版本：3（2026-11-09）｜状态：已实现；离线测试通过，**A→B 升级已真机验收**
-> 依据：`doc/requirements/client-native-install-upgrade.md` 已明确"不自动回滚"（第 47、197–199 行）
+> 依据：`docs/requirements/client-native-install-upgrade.md` 已明确"不自动回滚"（第 47、197–199 行）
 > 用户决定：**选方案 B，锁确认不了就不恢复。**
 >
 > 版本 3 修正：版本 2 称“未做真实 launchd 验收”。macminim6 上已完成 0.3.6→0.4.0 升级，

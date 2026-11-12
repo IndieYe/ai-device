@@ -84,7 +84,7 @@ MCP `run_argv` 参数与严格设备协议保持一致：`timeout` 为整数1–
 
 准确 Device 包的 `ops` extra 提供 `device-runtime ops`，直接访问中心 HTTP API，覆盖当前 12 个 MCP 工具对应的操作，不依赖 MCP SDK、不导入设备执行器。现有 `server/client/bundle/instance` 命令不变，部署实例角色与稳定启动入口不变；操作 CLI 可在已安装 MCP 依赖的环境直接使用，或单独安装准确 wheel 的 `[ops]`。
 
-通过环境 `DEVICE_RUNTIME_API_URL` / `DEVICE_RUNTIME_ADMIN_TOKEN` 连接；`--server-url` / `--token-env` 位于操作子命令之前，后者只指定环境变量名称，不传 Token 值。远程使用 HTTPS，loopback 可用 HTTP。操作列表、参数、JSON 契约、退出码及可复制示例见[包说明](../third-party-licenses/README.md#中心操作-cli可选)。
+通过环境 `DEVICE_RUNTIME_API_URL` / `DEVICE_RUNTIME_ADMIN_TOKEN` 连接；`--server-url` / `--token-env` 位于操作子命令之前，后者只指定环境变量名称，不传 Token 值。远程使用 HTTPS，loopback 可用 HTTP。操作列表、参数、JSON 契约、退出码及可复制示例见[包说明](../../packages/device-runtime/README.md#中心操作-cli可选)。
 
 CLI stdout 默认单 JSON 对象 `ok/code/data`，所有动作保持稳定操作 ID 与设备归属，未完成返回退出码 5，结果未知返回 6，不自动重试或换 ID。执行结果以 `result.data.state` 与 `exit_code` 为准。图片默认保留 Base64，也可显式 `--save-image` 保存到不存在的本地目标；设备路径与本地输入/输出路径明确区分。CLI 调用中断或本地图片保存失败不会取消或重放远程操作。
 

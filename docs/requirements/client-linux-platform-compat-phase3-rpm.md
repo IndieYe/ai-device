@@ -7,8 +7,8 @@
 - 仓库：`ai-device`；worktree `/Users/<user>/data/project/ai-device-wt-client-native-ses14497`，分支 `feat/client-native-install-ses14497`。
 - 分析基线：`b10165b`。实施前检查最新源码与工作区。
 - 前置阶段：
-  - `doc/requirements/client-linux-platform-compat-phase1-glibc217.md`（glibc 2.17 基线）
-  - `doc/requirements/client-linux-platform-compat-phase2-cgroup-v1.md`（cgroup v1 与旧 systemd）
+  - `docs/requirements/client-linux-platform-compat-phase1-glibc217.md`（glibc 2.17 基线）
+  - `docs/requirements/client-linux-platform-compat-phase2-cgroup-v1.md`（cgroup v1 与旧 systemd）
   - **本阶段以前两阶段完成为前提**。若平台兼容未解决，RPM 装上后仍跑不起来，等于白做。
 - 需求讨论来源：`ses-14497`。本文自包含，不要求新会话读历史聊天。
 
@@ -304,7 +304,7 @@ RPM 没有 `purge` 动词。需要一个等价入口，可选：
 6. 文档同步：
    - `docs/client-native-linux-guide.md`：新增 RPM 章节
    - `docs/client-native-linux-development.md`：构建方式、脚本语义差异
-   - `doc/requirements/client-native-install-upgrade.md` §3.1：支持范围
+   - `docs/requirements/client-native-install-upgrade.md` §3.1：支持范围
 
 7. 提交
 

@@ -61,7 +61,7 @@ Ubuntu容器功能通过不代表其他CPU架构、systemd、主机重启恢复�
 
 Device源码回归399项通过（包含Linux专属21项），不等于全AI Assistant后端、所有文档或跨平台实机套件通过。Linux bundle为本地准确测试制品，未发布到PyPI、未合入本地主线、未用于正式公网部署。
 
-可复现隔离装置见 [Ubuntu容器验收示例](../third-party-licenses/README.md)。此次功能与维护结果分别取自一次真实功能验收和其后独立续验；不得把最终整合脚本的格式检查说成额外重跑了一轮端到端操作。
+可复现隔离装置见 [Ubuntu容器验收示例](../../packages/device-runtime/examples/linux-container/README.md)。此次功能与维护结果分别取自一次真实功能验收和其后独立续验；不得把最终整合脚本的格式检查说成额外重跑了一轮端到端操作。
 
 ### CentOS 7 固定依赖
 

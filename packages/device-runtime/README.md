@@ -62,7 +62,7 @@ Python >=3.13，依赖/测试只用 `uv`。仓库候选组合为 Device **0.3.7*
 
 正式交付必须使用 bundle 中带来源与 Hash 的准确三份 wheel；不要仅凭同名 PyPI 版本判断 core API 可用。三包尚未远程发布，bundle 提供准确制品，第三方依赖允许联网。
 
-Mac 用户按 [交付文档的顺序流程](../../docs/device-delivery.md) 操作：受控获取/校验准确 bundle → 无源码三角色安装 → 环境配对 → 稳定 run/stdio 配置 → 诊断 → 同 bundle 重建 → 软件切换/回退 → 停机备份与全新同身份恢复。该页是命令与失败出口的统一入口，不以迁移当前试用为验收前提。
+Mac 用户按 [交付文档的顺序流程](../../docs/archive/device-delivery.md) 操作：受控获取/校验准确 bundle → 无源码三角色安装 → 环境配对 → 稳定 run/stdio 配置 → 诊断 → 同 bundle 重建 → 软件切换/回退 → 停机备份与全新同身份恢复。该页是命令与失败出口的统一入口，不以迁移当前试用为验收前提。
 
 ## 版本化交付包与独立实例（Mac）
 
@@ -94,7 +94,7 @@ uv run --no-project --python 3.13 --with "$DEVICE_WHEEL" python -I -m device_run
 
 稳定 run 的 shebang 是 `#!/usr/bin/env python3`，调用方 PATH 须有可用的 python3 标准库解释器；角色 venv 要求 Python >=3.13，uv 准备角色环境不等于设置了宿主 PATH。AI command 固定为绝对 `<root>/run`、args 单独为 `["mcp"]`，根路径可含空格，不拼 shell 字符串、不依赖 release 内 Python。软件切换、回退、同版本重建不改 AI 路径；恢复到新 root 才更新根路径。首期不承诺无 Python、launchd 或开机自启。
 
-AI Assistant 的顶层配置是 `mcp-servers`，含新增字段的 Core 可声明 `inherit_env: ["DEVICE_RUNTIME_ADMIN_TOKEN"]`，仅在 stdio 建连时从实际宿主进程环境供给；名单不存值、缺/空变量在 spawn 前拒绝，不与字面量 env 同 key 并存。旧 Core 不能仅靠写该字段获得支持，也不展开 `${VAR}`。完整可用 JSON 与标准 MCP SDK 内存参数示例见 [交付文档](../../docs/device-delivery.md)；不将真凭证写入 roles/config、日志或聊天，不更改真实主服务来完成开发验收。
+AI Assistant 的顶层配置是 `mcp-servers`，含新增字段的 Core 可声明 `inherit_env: ["DEVICE_RUNTIME_ADMIN_TOKEN"]`，仅在 stdio 建连时从实际宿主进程环境供给；名单不存值、缺/空变量在 spawn 前拒绝，不与字面量 env 同 key 并存。旧 Core 不能仅靠写该字段获得支持，也不展开 `${VAR}`。完整可用 JSON 与标准 MCP SDK 内存参数示例见 [交付文档](../../docs/archive/device-delivery.md)；不将真凭证写入 roles/config、日志或聊天，不更改真实主服务来完成开发验收。
 
 ### 诊断、停机切换与备份恢复
 
@@ -124,7 +124,7 @@ device-runtime instance restore --backup /absolute/new-backup --destination /abs
 - 环境复核按角色server/mcp/client启用extra，并沿依赖边递归传播extra、检查基础marker；不启用无关可选extra。缺失uvicorn等必需依赖时诊断不可用，安装/重建/切换/回退拒绝发布。
 - 恢复的是**同身份实例**：用户必须避免与原在线实例同时运行。备份可能包含敏感数据，使用私有权限并妥善保管；损坏/未完成备份不可恢复。
 
-详细说明与无源码命令见 [`doc/docs/device-delivery.md`](../../docs/device-delivery.md)。源码测试通过不等于准确制品验收或整体验收完成；现有试用实例不自动迁移。
+详细说明与无源码命令见 [`docs/archive/device-delivery.md`](../../docs/archive/device-delivery.md)。源码测试通过不等于准确制品验收或整体验收完成；现有试用实例不自动迁移。
 
 ## 配对与信任
 
@@ -291,10 +291,10 @@ PKG 支持签名与公证，通过 `--sign-identity`（Developer ID Application�
 Mach-O）、`--installer-identity`（Developer ID Installer，`productsign` 签包本身）、
 `--notary-profile`（`notarytool` profile）三步开启。三者互依赖，缺任一项都不产出可分发包，
 且签名构建必须在本机 GUI 终端执行。调用示例与前提见
-[macOS 开发记录](../../docs/client-native-macos-development.md#签名与公证的调用方式2026-11-10)。
+[macOS 开发记录](../../docs/development/client-native-macos-development.md#签名与公证的调用方式2026-11-10)。
 DEB 与 RPM 尚无签名支持。
 
-准确操作、制品与验收证据见 [Linux 指南](../../docs/client-native-linux-guide.md)、[macOS 指南](../../docs/client-native-macos-guide.md) 与 [Linux 开发记录](../../docs/client-native-linux-development.md)。
+准确操作、制品与验收证据见 [Linux 指南](../../docs/guide/client-native-linux-guide.md)、[macOS 指南](../../docs/guide/client-native-macos-guide.md) 与 [Linux 开发记录](../../docs/development/client-native-linux-development.md)。
 
 当前限制：本地隔离开发包未签名未公证，不满足公开分发条件；macOS 仅 Apple Silicon、需已登录 GUI 用户；多用户与并发安装未验证。历史指南不能代替新包验收。
 
@@ -308,7 +308,7 @@ DEB 与 RPM 尚无签名支持。
 
 ### CentOS 7 固定依赖
 
-标准 `bundle build` 与 `instance install/prepare/rebuild` 支持 `--dependency-dir`。完整本地 wheel 清单、v3 快照、无索引安装、解释器前置条件和构建验收限制见 [Device交付说明](../../docs/device-delivery.md#centos-7-的本地依赖交付)。旧 v2 bundle 继续可用；不通过临时 uv 包装器或取消 UV 环境过滤实现。
+标准 `bundle build` 与 `instance install/prepare/rebuild` 支持 `--dependency-dir`。完整本地 wheel 清单、v3 快照、无索引安装、解释器前置条件和构建验收限制见 [Device交付说明](../../docs/archive/device-delivery.md#centos-7-的本地依赖交付)。旧 v2 bundle 继续可用；不通过临时 uv 包装器或取消 UV 环境过滤实现。
 
 ### get 等待截止与查询回执
 

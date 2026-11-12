@@ -1,6 +1,6 @@
 # macOS launchd 协调：最小条件与验证计划
 
-状态：待验证设计，不是安装说明或执行授权。事实索引：`client-native-macos-lifecycle-design.md` 末节；需求：`../doc/requirements/client-native-install-upgrade.md` §7、§11。
+状态：待验证设计，不是安装说明或执行授权。事实索引：`client-native-macos-lifecycle-design.md` 末节；需求：`../requirements/client-native-install-upgrade.md` §7、§11。
 
 ## 目标与边界
 

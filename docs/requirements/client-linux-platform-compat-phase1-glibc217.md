@@ -7,7 +7,7 @@
 - 仓库：`ai-device`；实施 worktree `/Users/<user>/data/project/ai-device-wt-client-native-ses14497`，分支 `feat/client-native-install-ses14497`。
 - 分析基线：`b10165b`。实施前检查最新源码和工作区，不回退基线、不覆盖他人修改。
 - 需求讨论来源：`ses-14497`。本文包含实施所需全部决策，**不要求新会话读取历史聊天**。
-- 上游需求：`doc/requirements/client-native-install-upgrade.md`（客户端交付主体）。本文只处理平台兼容扩展，不重定义安装升级主流程。
+- 上游需求：`docs/requirements/client-native-install-upgrade.md`（客户端交付主体）。本文只处理平台兼容扩展，不重定义安装升级主流程。
 
 ### 新会话开始顺序
 
@@ -82,7 +82,7 @@ Depends: systemd, libc6 (>= 2.39), ca-certificates, util-linux
 | `packages/device-runtime/src/device_runtime/client_package.py:20` `activate()` | **新客户端路径，不检查 glibc**。只做：unit 归属校验 → `validate_config()` → `check_conflicts()` → `service.start()` → 轮询 `package_ready` 与 `runtime_version()` 相等。 |
 | `packages/device-runtime/src/device_runtime/client_service.py:158-182` `render_unit()` | 生成 systemd unit，含 `StateDirectory`/`LogsDirectory`/`KillMode=control-group`/`SendSIGKILL=no`。 |
 | `packages/device-runtime/tests/test_client_deb_build.py` | 185 行，7 个测试：`test_build_hooks_and_layout`、`test_stop_explains_the_failure_consequence`、`test_invalid_version_before_writes`、`test_overrides_rejected_before_python_or_state_probe`、`test_same_interpreter_unrelated_service_refused_before_systemctl`、`test_postrm_rejects_unrelated_command_without_disabling`、`test_postrm_prunes_only_empty_directories`。**当前没有任何测试断言 `Depends` 内容。** |
-| `doc/requirements/client-native-install-upgrade.md` §3.1 | 当前支持范围写的是「Ubuntu 24.04 amd64，DEB；不是所有 Linux 的支持承诺」。本期会扩大实际可安装范围，需同步该处的表述。 |
+| `docs/requirements/client-native-install-upgrade.md` §3.1 | 当前支持范围写的是「Ubuntu 24.04 amd64，DEB；不是所有 Linux 的支持承诺」。本期会扩大实际可安装范围，需同步该处的表述。 |
 
 ### 重要事实：新客户端路径没有 glibc 门禁
 
@@ -170,7 +170,7 @@ Depends: systemd, libc6 (>= 2.17), ca-certificates, util-linux
 
 需要更新的文档（按实际情况判断，不机械全改）：
 
-- `doc/requirements/client-native-install-upgrade.md` §3.1：支持范围表述。当前写「Ubuntu 24.04 amd64」，需说明实际 glibc 最低要求是 2.17，并指出 cgroup/systemd 的额外限制留待阶段二。
+- `docs/requirements/client-native-install-upgrade.md` §3.1：支持范围表述。当前写「Ubuntu 24.04 amd64」，需说明实际 glibc 最低要求是 2.17，并指出 cgroup/systemd 的额外限制留待阶段二。
 - `docs/client-native-linux-guide.md`：若有 glibc 相关描述需同步。
 - `docs/client-native-linux-development.md`：同上。
 - `packages/device-runtime/README.md`：若提及平台要求。

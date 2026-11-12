@@ -116,9 +116,9 @@ bash/run/script 要求稳定 operation_id；timeout 是前台等待秒数（默�
 本项目源码为 `packages/device-runtime/`。需要完整参数、安装和交付说明时，从已核实项目根目录按需查阅：
 
 - `packages/device-runtime/README.md`：操作 CLI 与 MCP、退出码、任务语义。
-- `docs/device-runtime.md`：操作协议和可靠性约定。
-- `docs/device-delivery.md`：bundle 实例的版本化交付、安装与升级，不代表已获得部署授权。
-- `docs/client-native-linux-guide.md`、`docs/client-native-macos-guide.md`：完整包（DEB/RPM/PKG）的安装、升级、卸载与故障处理。
+- `docs/archive/device-runtime.md`：操作协议和可靠性约定。
+- `docs/archive/device-delivery.md`：bundle 实例的版本化交付、安装与升级，不代表已获得部署授权。
+- `docs/guide/client-native-linux-guide.md`、`docs/guide/client-native-macos-guide.md`：完整包（DEB/RPM/PKG）的安装、升级、卸载与故障处理。
 
 这些是仓库文档路径，不是本技能目录内的配套资源。技能不保存设备列表、Token 或固定历史操作 ID，实际可用性以当次发现和回执为准。
 

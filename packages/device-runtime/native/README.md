@@ -1,6 +1,6 @@
 # P1 原生运行时构建输入
 
-本目录保存准确的构建输入锁，不包含运行时二进制或用户凭证。当前 Linux 完整包构建仍读取其中的输入锁，操作指南见 [Linux 客户端完整包](../../../docs/client-native-linux-development.md)。本页后续 P1、候选、签名、DEB/RPM 多树包段落为历史资料，不是当前安装路径；Linux 仅交付新 DEB，Mac 新 PKG 尚未交付。
+本目录保存准确的构建输入锁，不包含运行时二进制或用户凭证。当前 Linux 完整包构建仍读取其中的输入锁，操作指南见 [Linux 客户端完整包](../../../docs/development/client-native-linux-development.md)。本页后续 P1、候选、签名、DEB/RPM 多树包段落为历史资料，不是当前安装路径；Linux 仅交付新 DEB，Mac 新 PKG 尚未交付。
 
 ## 构建锁
 
@@ -57,7 +57,7 @@ macOS 将 target 改为 `darwin-arm64`，使用对应归档。目的目录必须
 
 ## 旧 Linux 开发包路径（历史，已退役构建入口）
 
-> 以下仅保留历史设计记录，不是当前安装指南。旧 build-native-linux.sh 与 assemble-native-payload.py 已删除；新入口见 [完整包开发指南](../../../docs/client-native-linux-development.md)。
+> 以下仅保留历史设计记录，不是当前安装指南。旧 build-native-linux.sh 与 assemble-native-payload.py 已删除；新入口见 [完整包开发指南](../../../docs/development/client-native-linux-development.md)。
 
 新增 `native_install.py` 调用现有 `install_instance`，不复制release生命周期。安装器必须由选定普通用户执行，拒绝root创建实例；包内自带runtime、uv及离线client依赖。`installation.install_instance(runner_python=...)` 在发布active前写入绝对解释器shebang，旧调用不传参时行为保持。
 

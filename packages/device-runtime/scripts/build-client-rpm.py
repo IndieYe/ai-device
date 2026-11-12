@@ -3,7 +3,7 @@
 The tree, payload layout and stop guard are identical to the DEB build. Only
 the transaction scripting differs: RPM runs scriptlets in a different order with
 different arguments, and those differences are load-bearing here. See
-docs/client-native-linux-development.md, "RPM 脚本语义实测", for the measurements
+docs/development/client-native-linux-development.md, "RPM 脚本语义实测", for the measurements
 this module relies on:
 
 - upgrade order is new %pre, unpack, new %post, old %preun, old %postun

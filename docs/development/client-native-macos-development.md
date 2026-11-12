@@ -34,7 +34,7 @@ Mac 侧代码包含 13 个 `client_macos_*.py` 模块、`scripts/build-client-pk
 > `pkgbuild` 的 5 条 `write: Permission denied` 已查明为固有 stderr 噪音，不再是阻塞项，
 > 见下文“pkgbuild 权限警告已定位”。
 
-权威需求为 `doc/requirements/client-native-install-upgrade.md`；使用者操作说明见
+权威需求为 `docs/requirements/client-native-install-upgrade.md`；使用者操作说明见
 [`client-native-macos-guide.md`](../guide/client-native-macos-guide.md)；Linux 侧见
 [`client-native-linux-guide.md`](../guide/client-native-linux-guide.md)。
 

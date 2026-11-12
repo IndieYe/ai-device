@@ -3,7 +3,7 @@
 > 状态：**B1–B2 已实施（`fac99bb`），B3 与方案 D 已随指南更新完成**。
 > 对应未闭合项：`client-native-macos-development.md` 当前状态第 1 条、
 > `client-native-macos-installer-write-mutex.md` 第四节第 3 条。
-> 需求依据：`doc/requirements/client-native-install-upgrade.md` §9（新旧路径与并发）。
+> 需求依据：`docs/requirements/client-native-install-upgrade.md` §9（新旧路径与并发）。
 > 实施差异：token 文件实际落在管理目录而非原设计的 `/var/tmp`，原因见 B2 节。
 
 ## 一、问题与实测证据

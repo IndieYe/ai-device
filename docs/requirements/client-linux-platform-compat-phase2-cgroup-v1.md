@@ -6,7 +6,7 @@
 - 日期：2026-11-08 创建。
 - 仓库：`ai-device`；worktree `/Users/<user>/data/project/ai-device-wt-client-native-ses14497`，分支 `feat/client-native-install-ses14497`。
 - 分析基线：`b10165b`。实施前检查最新源码与工作区。
-- 前置阶段：`doc/requirements/client-linux-platform-compat-phase1-glibc217.md`。**须先完成阶段一**（或至少确认阶段一的结论仍然成立），本阶段以阶段的 2.17 基线为前提。
+- 前置阶段：`docs/requirements/client-linux-platform-compat-phase1-glibc217.md`。**须先完成阶段一**（或至少确认阶段一的结论仍然成立），本阶段以阶段的 2.17 基线为前提。
 - 需求讨论来源：`ses-14497`。本文自包含，不要求新会话读历史聊天。
 
 ## 2. 背景：一个真实的保护空洞
@@ -303,7 +303,7 @@ ali-sh 实测 `systemd 239`。当前 unit 用了这些指令（`client_service.p
 
 - `docs/client-native-linux-guide.md`：说明 cgroup v1/v2 两种布局的支持状态。
 - `docs/client-native-linux-development.md`：记录本节实现的探测方式与已知边界。
-- `doc/requirements/client-native-install-upgrade.md` §3.1：更新「支持范围」，说明 cgroup 要求。
+- `docs/requirements/client-native-install-upgrade.md` §3.1：更新「支持范围」，说明 cgroup 要求。
 
 ## 7. 验收矩阵
 

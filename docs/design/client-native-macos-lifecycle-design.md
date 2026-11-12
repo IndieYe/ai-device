@@ -1,6 +1,6 @@
 # macOS 客户端生命周期：待验证协议
 
-状态：设计未通过，不是安装操作说明。需求以 `doc/requirements/client-native-install-upgrade.md` 为准；本文件不修改需求。检查 PKG 的双重禁安装门禁必须保留。
+状态：设计未通过，不是安装操作说明。需求以 `docs/requirements/client-native-install-upgrade.md` 为准；本文件不修改需求。检查 PKG 的双重禁安装门禁必须保留。
 
 ## 已确认约束
 

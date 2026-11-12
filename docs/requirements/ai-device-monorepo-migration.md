@@ -121,7 +121,7 @@ ai-device/
   skills/device-operations/
   docs/
   scripts/
-  doc/requirements/
+  docs/requirements/
   pyproject.toml
   uv.lock
   .github/workflows/

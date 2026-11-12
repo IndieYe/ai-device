@@ -1,6 +1,6 @@
 # P1 Linux 管理 helper（daemon 已退役）
 
-> **完整包重构后的历史资料**：本文涉及的 `device_runtime.native_helper` 及其 register/recover/unregister 实现已随旧 Linux 升级链退役，下文“当前能力”仅指记录当时状态，不能作为现行调用入口。新客户端使用 [完整包开发指南](../../../docs/client-native-linux-development.md) 中的配置、注册与包生命周期；旧真实设备不自动迁移。
+> **完整包重构后的历史资料**：本文涉及的 `device_runtime.native_helper` 及其 register/recover/unregister 实现已随旧 Linux 升级链退役，下文“当前能力”仅指记录当时状态，不能作为现行调用入口。新客户端使用 [完整包开发指南](../../../docs/development/client-native-linux-development.md) 中的配置、注册与包生命周期；旧真实设备不自动迁移。
 
 > **2026-10-31：socket 守护进程已退役。** 本模块不再提供 `serve`/`call`/`recover-socket` 子命令，也不再有 peer 校验、凭据帧和请求派发。升级作业改由显式的一次性 root 命令驱动。以下保留的只是 `register`/`recover-registration`/`unregister` 与绑定校验、租约、systemd 观察能力。本文其余章节记录的是已退役方案的历史契约，仅供参考。
 

@@ -1,7 +1,7 @@
 # Linux 客户端完整包：开发操作与当前验收边界
 
 > 实施中，未完成阶段交付。仅 Ubuntu 24.04 amd64；本页不是生产部署授权。
-> 权威需求：`../doc/requirements/client-native-install-upgrade.md`。
+> 权威需求：`../requirements/client-native-install-upgrade.md`。
 > **面向使用者的安装/升级/卸载操作见 [`client-native-linux-guide.md`](../guide/client-native-linux-guide.md)**；本页是开发实施记录与验收证据。
 
 ## 当前交付检查点（2026-11-06）
