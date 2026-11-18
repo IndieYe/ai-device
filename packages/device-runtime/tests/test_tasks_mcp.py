@@ -225,3 +225,50 @@ async def test_real_bash_stdio_bounded_wait(live_server, tmp_path, delayed):
             assert not repeated.isError
             assert json.loads(repeated.content[0].text)["operation_id"] == "bash-wait-e2e"
             assert marker.read_text() == "once\n"
+
+
+@pytest.mark.parametrize("tool", ["read_file", "write_file", "edit_file", "insert_file"])
+async def test_file_tools_return_completed_result(tool, live_server, tmp_path):
+    """File tools must deliver the terminal receipt, not a bare acceptance notice."""
+    mcp = pytest.importorskip("mcp")
+    stdio_client = pytest.importorskip("mcp.client.stdio").stdio_client
+    url, _, _ = live_server
+    state_dir = tmp_path / "client"
+    executor = LocalExecutor(state_dir, "laptop-one")
+    target = tmp_path / "waited.txt"
+    target.write_text("first\n")
+    params = mcp.StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "device_runtime.mcp_server"],
+        env={
+            "DEVICE_RUNTIME_API_URL": url.replace("ws://", "http://"),
+            "DEVICE_RUNTIME_ADMIN_TOKEN": "test-only-admin-token-not-a-secret",
+            "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
+        },
+    )
+    arguments = {
+        "read_file": {"path": str(target)},
+        "write_file": {"path": str(target), "content": "written\n"},
+        "edit_file": {"path": str(target), "edits": [{"oldText": "first", "newText": "edited"}]},
+        "insert_file": {"path": str(target), "text": "!", "at_end": True},
+    }[tool]
+    async with (
+        running_client(live_server, state_dir, executor),
+        stdio_client(params) as (read, write),
+        mcp.ClientSession(read, write) as session,
+    ):
+        await session.initialize()
+        async with asyncio.timeout(10):
+            response = await session.call_tool(
+                tool, {"device_id": "laptop-one", "operation_id": f"file-wait-{tool}", **arguments}
+            )
+            assert not response.isError, response.content
+            receipt = json.loads(response.content[0].text)
+            assert receipt["state"] == "succeeded", receipt
+            assert receipt["result"] is not None
+            assert receipt["result"]["location"] == {
+                "namespace": "device",
+                "device_id": "laptop-one",
+            }
+    if tool == "read_file":
+        assert receipt["result"]["data"]["content"] == "first\n"

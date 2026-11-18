@@ -78,12 +78,16 @@ def create_mcp(url: str, token: str):
         """
         return operation_result(await api.get_operation(device_id, operation_id))
 
-    async def submit(device_id, operation_id, kind, arguments, *, wait_timeout_ms=0):
-        return await api.submit(
+    async def submit_and_wait(device_id, operation_id, kind, arguments):
+        """File operations finish quickly; wait for the result instead of returning 'sent'.
+
+        An unfinished receipt is still returned unchanged, so the stable ID stays the
+        only recovery handle; this never resubmits the operation.
+        """
+        return await api.submit_and_wait(
             Operation(
                 device_id=device_id, operation_id=operation_id, action=kind, arguments=arguments
-            ),
-            wait_timeout_ms=wait_timeout_ms,
+            )
         )
 
     @mcp.tool(annotations=action)
@@ -196,8 +200,12 @@ def create_mcp(url: str, token: str):
         limit: Annotated[int | None, Field(strict=True, ge=0)] = None,
         direction: Literal["forward", "backward"] = "forward",
     ) -> dict:
-        """Read absolute device path. Requires stable ID; query receipt, never use center FS on path."""
-        return await submit(
+        """Read absolute device path and return the completed result.
+
+        Waits for the file result within a bounded budget; an unfinished receipt keeps
+        the same operation_id for get_operation. Never reads through center FS.
+        """
+        return await submit_and_wait(
             device_id,
             operation_id,
             "fs.read_file",
@@ -219,7 +227,7 @@ def create_mcp(url: str, token: str):
         content: Annotated[str, Field(max_length=262144)],
     ) -> dict:
         """Write absolute device path. Stable ID deduplicates; unknown/failed may have side effects."""
-        return await submit(
+        return await submit_and_wait(
             device_id, operation_id, "fs.write_file", {"path": path, "content": content}
         )
 
@@ -233,7 +241,7 @@ def create_mcp(url: str, token: str):
         include_diff: Annotated[bool, Field(strict=True)] = False,
     ) -> dict:
         """Exact replacements only on explicit device path. Stable ID required; never blindly retry."""
-        return await submit(
+        return await submit_and_wait(
             device_id,
             operation_id,
             "fs.edit_file",
@@ -263,7 +271,7 @@ def create_mcp(url: str, token: str):
         dry_run previews without writing. Every changed request needs its own stable ID;
         never change ID to retry an uncertain execution. Diff may be omitted by result limits.
         """
-        return await submit(
+        return await submit_and_wait(
             device_id,
             operation_id,
             "fs.insert_file",
@@ -292,7 +300,7 @@ def create_mcp(url: str, token: str):
         ID to receive standard MCP image content. No resizing or silent format conversion.
         """
         return operation_result(
-            await submit(
+            await submit_and_wait(
                 device_id, operation_id, "fs.read_image", {"path": path, "max_bytes": max_bytes}
             )
         )

@@ -232,7 +232,8 @@ async def execute(args):
         if operation is None:
             receipt = await api.get_operation(args.device_id, args.operation_id)
         else:
-            receipt = await api.submit(operation)
+            # File operations finish quickly; wait so a fast result is not reported as pending.
+            receipt = await api.submit_and_wait(operation)
     if getattr(args, "save_image", None) is not None:
         receipt = save_image(receipt, args.save_image)
     return receipt

@@ -139,6 +139,24 @@ class DeviceAPI:
             receipt = await self.get_operation(device_id, operation_id)
         return receipt
 
+    async def submit_and_wait(self, operation: Operation, *, wait_seconds=5):
+        """Submit once, then poll the same ID until a terminal state or the deadline.
+
+        File operations complete quickly, so a missing result would otherwise look
+        like an unfinished command. The POST is never retried: an unfinished receipt
+        is returned as-is for the caller to reconcile with the same operation ID.
+        """
+        receipt = await self.submit(operation, wait_timeout_ms=0)
+        # Each short GET stays below the HTTP transport deadline.
+        deadline = time.monotonic() + wait_seconds
+        while (
+            receipt["state"] not in {"succeeded", "failed", "unknown"}
+            and time.monotonic() < deadline
+        ):
+            await asyncio.sleep(0.05)
+            receipt = await self.get_operation(operation.device_id, operation.operation_id)
+        return receipt
+
     async def get_execution(self, device_id, execution_id, *, timeout=0, output_bytes=200):
         if (
             isinstance(timeout, bool)

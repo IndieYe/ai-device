@@ -169,3 +169,38 @@ async def test_wait_parameter_is_transport_only():
     assert calls[0].url.params["wait_timeout_ms"] == "1500"
     assert json.loads(calls[0].content) == operation.model_dump()
     assert operation.digest == digest
+
+
+async def test_file_operation_waits_for_terminal_result():
+    """A fast file result must not be reported as an unfinished 'sent' receipt."""
+    calls = []
+    states = iter(["running", "succeeded"])
+
+    def handle(request):
+        calls.append(request)
+        if request.method == "POST":
+            return httpx.Response(200, json=record("sent"))
+        return httpx.Response(200, json=record(next(states)))
+
+    async with DeviceAPI("http://127.0.0.1:1", TOKEN, transport=httpx.MockTransport(handle)) as api:
+        receipt = await api.submit_and_wait(op())
+    assert receipt["state"] == "succeeded"
+    # Exactly one POST, then only same-ID reads: never a second submission.
+    assert sum(request.method == "POST" for request in calls) == 1
+    assert {request.method for request in calls[1:]} == {"GET"}
+    assert {request.url.path.rsplit("/", 1)[-1] for request in calls[1:]} == {"op-one"}
+
+
+async def test_file_operation_returns_unfinished_receipt_at_deadline():
+    """An unfinished receipt is returned unchanged; the caller keeps the same ID."""
+    calls = []
+
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(200, json=record("running"))
+
+    async with DeviceAPI("http://127.0.0.1:1", TOKEN, transport=httpx.MockTransport(handle)) as api:
+        receipt = await api.submit_and_wait(op(), wait_seconds=0.05)
+    assert receipt["state"] == "running"
+    assert receipt["operation_id"] == "op-one"
+    assert sum(request.method == "POST" for request in calls) == 1
