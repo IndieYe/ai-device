@@ -270,7 +270,7 @@ def build_macos_commit_entry(output):
         ],
         check=True,
     )
-    subprocess.run(["/usr/bin/lipo", "-verify_arch", "arm64", str(target)], check=True)
+    subprocess.run(["/usr/bin/lipo", str(target), "-verify_arch", "arm64"], check=True)
     target.chmod(0o755)
 
 
@@ -296,7 +296,7 @@ def build_macos_launcher(output):
         ],
         check=True,
     )
-    subprocess.run(["/usr/bin/lipo", "-verify_arch", "arm64", str(target)], check=True)
+    subprocess.run(["/usr/bin/lipo", str(target), "-verify_arch", "arm64"], check=True)
     target.chmod(0o755)
 
 

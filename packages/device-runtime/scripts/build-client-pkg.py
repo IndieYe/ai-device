@@ -1215,7 +1215,7 @@ def stage_upgrade_entry(tree, root, build_directory, *, run=None, entry_name=Non
     if not entry.is_file():
         raise ValueError(f"upgrade entry {entry.name} was not produced")
     entry.chmod(0o755)
-    execute(["/usr/bin/lipo", "-verify_arch", "arm64", str(entry)], check=True)
+    execute(["/usr/bin/lipo", str(entry), "-verify_arch", "arm64"], check=True)
     return entry
 
 

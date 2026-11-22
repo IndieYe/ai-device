@@ -96,7 +96,10 @@ def test_macos_launcher_build_contract(tmp_path, monkeypatch):
     assert calls[0][-3] == str(SCRIPT.parents[1] / "native/client-macos-launcher.c")
     assert "-arch" in calls[0] and "arm64" in calls[0]
     assert not any(arg.startswith("-D") for arg in calls[0])
-    assert calls[1] == ["/usr/bin/lipo", "-verify_arch", "arm64", str(binary)]
+    # File first: Xcode 26.6's lipo rejects the arch-first spelling outright
+    # ("unknown architecture specification flag: <path>"), while older lipo
+    # accepts both orders.
+    assert calls[1] == ["/usr/bin/lipo", str(binary), "-verify_arch", "arm64"]
     assert binary.stat().st_mode & 0o777 == 0o755
 
 
