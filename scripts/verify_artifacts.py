@@ -14,8 +14,8 @@ from verify_delivery import execute
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def run(args, cwd, env):
-    print(execute(args, cwd, env, timeout=240), flush=True)
+def run(args, cwd, env, timeout=240):
+    print(execute(args, cwd, env, timeout=timeout), flush=True)
 
 
 def main():
@@ -31,7 +31,13 @@ def main():
             env.pop(key, None)
     env["UV_NO_CACHE"] = "1"
     with tempfile.TemporaryDirectory(prefix="ai-device-artifacts-") as directory:
-        work = Path(directory)
+        # Resolve the temp root: on macOS TMPDIR is under the /tmp -> private/tmp
+        # symlink, so an unresolved path makes Path(__file__) (as pytest reports
+        # it) and Path(__file__).resolve() (as the build scripts use it) disagree
+        # on a path that points at the same file. One launcher-build test compares
+        # those two spellings directly. Resolving here keeps them identical and
+        # is a no-op where the temp root has no symlink.
+        work = Path(directory).resolve()
         wheels = work / "wheels"
         wheels.mkdir()
         for archive in sorted((ROOT / "dist").glob("*.tar.gz")):
@@ -210,17 +216,27 @@ asyncio.run(main())
             work,
             env,
         )
-        shutil.copytree(
-            ROOT / "packages/device-runtime/scripts",
-            work / "scripts",
-            ignore=shutil.ignore_patterns("__pycache__"),
-        )
-        tests = work / "tests"
-        shutil.copytree(
-            ROOT / "packages/device-runtime/tests",
-            tests,
-            ignore=shutil.ignore_patterns("__pycache__"),
-        )
+        # The tests resolve their fixtures as Path(__file__).parents[1], so the
+        # checkout directories they read must sit next to the copied tests. They
+        # also need native/ (C sources) and src/ (package sources used via
+        # PYTHONPATH in subprocess scenarios), not just scripts/.
+        #
+        # They go under ctx/ rather than directly in work/, because
+        # device_runtime.version walks up fixed parents from the *installed*
+        # package to find native/ and fold those bytes into build_id. Placed at
+        # work/native it would become part of the running build's fingerprint,
+        # and the ready-state identity assertions would compare a digest of the
+        # checkout's sources against one computed from the installed wheel.
+        # Under ctx/ that root stays absent, matching a Linux-style tree.
+        ctx = work / "ctx"
+        ctx.mkdir()
+        for name in ("scripts", "tests", "native", "src"):
+            shutil.copytree(
+                ROOT / "packages/device-runtime" / name,
+                ctx / name,
+                ignore=shutil.ignore_patterns("__pycache__"),
+            )
+        tests = ctx / "tests"
         (work / "pytest.ini").write_text(
             "[pytest]\nasyncio_mode = auto\nasyncio_default_fixture_loop_scope = function\n"
         )
@@ -237,6 +253,9 @@ asyncio.run(main())
             ],
             work,
             env,
+            # The full installed-wheel suite takes ~5 minutes on an arm64 Mac;
+            # the default 240s cap cuts a passing run off mid-suite.
+            timeout=1800,
         )
         report = {
             "python": args.python,
