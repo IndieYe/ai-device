@@ -34,14 +34,21 @@ jobs:
         with:
           version: '0.10.9'
       - run: uv sync --python 3.13 --locked --all-packages --all-extras --group dev
+      - name: Use a short TMPDIR for socket paths
+        run: |
+          # macOS runner TMPDIR is /private/var/folders/<id>/T/... which pushes
+          # pytest tmp_path over the 104-byte AF_UNIX sun_path limit once a
+          # test appends e.g. "control.sock". /tmp is short on every runner.
+          echo "TMPDIR=/tmp" >> "$GITHUB_ENV"
+          mkdir -p /tmp/pt
       - name: Source and release tool tests
         run: |
           set -e
           for package in bash fs device-runtime; do
-            (cd packages/$package && ../../.venv/bin/python -m pytest -q)
+            (cd packages/$package && ../../.venv/bin/python -m pytest -q --basetemp=/tmp/pt/$package)
           done
-          uv run --no-sync python -m pytest tests/test_stage_c_tools.py tests/test_release_artifacts.py -q
-          uv run --no-sync --with pyyaml python -m pytest tests/test_release_workflow.py -q
+          uv run --no-sync python -m pytest tests/test_stage_c_tools.py tests/test_release_artifacts.py -q --basetemp=/tmp/pt/tools
+          uv run --no-sync --with pyyaml python -m pytest tests/test_release_workflow.py -q --basetemp=/tmp/pt/workflow
       - run: uv build --all-packages
       - run: uv run --isolated --no-project --with twine python -m twine check dist/*
       - run: uv run --no-sync python scripts/verify_artifacts.py --fs-python 3.10

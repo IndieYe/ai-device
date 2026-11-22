@@ -15,15 +15,28 @@ jobs:
         with:
           version: '0.10.9'
       - run: uv sync --python 3.13 --locked --all-packages --all-extras --group dev
+      - name: Use a short TMPDIR for socket paths
+        shell: bash
+        run: |
+          # macOS runner TMPDIR is /private/var/folders/<id>/T/... which pushes
+          # pytest tmp_path over the 104-byte AF_UNIX sun_path limit once a
+          # test appends e.g. "control.sock". /tmp is short on every runner.
+          # Windows is not in the matrix; bash is already the default shell.
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            echo "TMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          else
+            echo "TMPDIR=/tmp" >> "$GITHUB_ENV"
+            mkdir -p /tmp/pt
+          fi
       - run: uv run --no-sync ruff check scripts/verify_artifacts.py scripts/verify_delivery.py scripts/capture_evidence.py
       - name: Package tests (separate pytest configurations)
         shell: bash
         run: |
           for package in bash fs device-runtime; do
-            (cd packages/$package && ../../.venv/bin/python -m pytest -q) || exit $?
+            (cd packages/$package && ../../.venv/bin/python -m pytest -q --basetemp=/tmp/pt/$package) || exit $?
           done
-      - run: uv run --no-sync python -m pytest tests/test_stage_c_tools.py -q
-      - run: uv run --no-sync --with pyyaml python -m pytest tests/test_release_artifacts.py tests/test_release_workflow.py tests/test_recover_release.py -q
+      - run: uv run --no-sync python -m pytest tests/test_stage_c_tools.py -q --basetemp=/tmp/pt/tools
+      - run: uv run --no-sync --with pyyaml python -m pytest tests/test_release_artifacts.py tests/test_release_workflow.py tests/test_recover_release.py -q --basetemp=/tmp/pt/release
       - run: uv build --all-packages
       - run: uv run --no-sync python scripts/verify_artifacts.py --fs-python 3.10
       - name: macOS real delivery lifecycle
