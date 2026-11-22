@@ -370,6 +370,22 @@ def test_missing_persistent_data_is_not_reinitialized(instance, upgraded, tmp_pa
     assert not (tmp_path / "backup").exists()
 
 
+def test_single_file_backup_restores_a_working_single_file_entry(tmp_path, delivery, simulated_installer):
+    root, snapshot, restored = (tmp_path / n for n in ("source", "backup", "restored"))
+    create(root, delivery, roles=("center",), runtime=False)
+    backup(root, snapshot)
+    assert not {"current", "run-runner", "runtime"} & {p.name for p in snapshot.iterdir()}
+    shutil.rmtree(root)
+    release = life.restore_instance(snapshot, restored)["release"]
+    assert not (restored / "current").exists()
+    assert not (restored / "run-runner").exists()
+    assert not (restored / "releases" / release / "runtime").exists()
+    _spy_release(restored, release, "center", "restored")
+    result = _launch(restored, "center", home=tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["marker"] == "restored"
+
+
 def test_backup_and_restore_complete_data_without_original_venvs(
     instance, tmp_path, simulated_installer
 ):
@@ -521,6 +537,9 @@ def test_corrupt_sqlite_prevents_completed_backup(instance, tmp_path):
     "damage",
     [
         "missing_completion",
+        "missing_runner_body",
+        "missing_pointer",
+        "missing_runtime",
         "bad_manifest",
         "bad_hash",
         "state",
@@ -535,6 +554,12 @@ def test_restore_rejects_incomplete_or_corrupt_backup_before_target(instance, tm
     backup(instance, target)
     if damage == "missing_completion":
         (target / "complete.json").unlink()
+    elif damage == "missing_runner_body":
+        (target / "run-runner").unlink()
+    elif damage == "missing_pointer":
+        (target / "current").unlink()
+    elif damage == "missing_runtime":
+        shutil.rmtree(target / "runtime")
     elif damage == "bad_manifest":
         (target / "backup.json").write_text("{}")
     elif damage == "bad_hash":
@@ -1521,6 +1546,21 @@ def _launch(root, *args, home):
         timeout=10,
         check=False,
     )
+
+
+def test_single_file_switches_do_not_create_a_launcher_pointer(
+    tmp_path, delivery, upgraded, simulated_installer
+):
+    root = tmp_path / "legacy"
+    original = create(root, delivery, roles=("center",), runtime=False)["release"]
+    candidate = prepare(root, upgraded)
+    life.activate_release(root, candidate, stopped=True)
+    assert active(root)["release"] == candidate
+    assert not (root / "current").exists()
+
+    life.rollback_release(root, original, stopped=True)
+    assert active(root)["release"] == original
+    assert not (root / "current").exists()
 
 
 def test_launcher_follows_pointer_across_activation_without_restart(

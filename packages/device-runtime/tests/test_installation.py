@@ -497,11 +497,12 @@ def test_cli_existing_destination_returns_two(tmp_path, delivery, fake_uv):
     assert not list(root.iterdir())
 
 
-def test_runner_holds_lease_and_forwards_termination(tmp_path, delivery, fake_uv):
+@pytest.mark.parametrize("runtime", [True, False], ids=["private", "single-file"])
+def test_runner_holds_lease_and_forwards_termination(tmp_path, delivery, fake_uv, runtime):
     import time
 
     root = tmp_path / "instance with spaces"
-    installed = create(root, delivery, ("center",))
+    installed = create(root, delivery, ("center",), runtime=runtime)
     executable = root / "releases" / installed["release"] / "center/venv/bin/python"
     executable.parent.mkdir(parents=True)
     ready = tmp_path / "ready"
@@ -517,7 +518,6 @@ def test_runner_holds_lease_and_forwards_termination(tmp_path, delivery, fake_uv
         "while True: time.sleep(.02)\n"
     )
     executable.chmod(0o755)
-    add_runtime(root)
     process = subprocess.Popen(
         [str(root / "run"), "center"],
         env={**os.environ, "TEST_READY": str(ready), "TEST_DONE": str(done)},

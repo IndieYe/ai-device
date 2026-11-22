@@ -10,8 +10,7 @@ so it has to live where either side can import it without dragging in
 POINTER = "current"
 
 # Deliberately stdlib-only: rebuilding cannot depend on an intact active venv.
-RUNNER = """#!/usr/bin/env python3
-import fcntl
+_RUNNER_TEMPLATE = """import fcntl
 import json
 import os
 import platform
@@ -23,15 +22,7 @@ import re
 
 root = Path(__file__).resolve().parent
 try:
-    # The launcher already resolved the release from the single-line pointer and
-    # selected this interpreter. Re-check that the pointer still names the same
-    # release under the shared lease: a switch that landed between the launcher's
-    # read and this lock must not silently run a release the pointer abandoned.
-    if len(sys.argv) != 3:
-        raise ValueError("usage: run <release> <center|mcp|client>")
-    expected_release = sys.argv[1]
-    role = sys.argv[2]
-    with (root / ".installation.lock").open("rb") as lock:
+@ARGUMENTS@    with (root / ".installation.lock").open("rb") as lock:
         fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
         active = json.loads((root / "active.json").read_text())
         config = json.loads((root / "config" / "roles.json").read_text())
@@ -40,9 +31,7 @@ try:
         release = active["release"]
         if not isinstance(release, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.+!-]*", release):
             raise ValueError("invalid active release")
-        if release != expected_release:
-            raise ValueError("active release changed before startup")
-        env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME")}
+@RELEASE_CHECK@        env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME")}
         venv = root / "releases" / release / role / "venv"
         if role == "mcp":
             env["DEVICE_RUNTIME_API_URL"] = config[role]["server_url"]
@@ -121,5 +110,29 @@ fi
 exec "$interpreter" -I "$root/run-runner" "$release" "$1"
 """
 
-# Same body without a shebang: the launcher names the interpreter explicitly.
-RUNNER_BODY = RUNNER.split("\n", 1)[1]
+# Only the private launcher preselects a release outside the lock. Keep its
+# body stable: installed instances are validated against the exact script text.
+_LAUNCHER_ARGUMENTS = """    # The launcher already resolved the release from the single-line pointer and
+    # selected this interpreter. Re-check that the pointer still names the same
+    # release under the shared lease: a switch that landed between the launcher's
+    # read and this lock must not silently run a release the pointer abandoned.
+    if len(sys.argv) != 3:
+        raise ValueError("usage: run <release> <center|mcp|client>")
+    expected_release = sys.argv[1]
+    role = sys.argv[2]
+"""
+_RELEASE_CHECK = """        if release != expected_release:
+            raise ValueError("active release changed before startup")
+"""
+_SINGLE_FILE_ARGUMENTS = """    if len(sys.argv) != 2:
+        raise ValueError("usage: run <center|mcp|client>")
+    role = sys.argv[1]
+"""
+
+RUNNER_BODY = _RUNNER_TEMPLATE.replace("@ARGUMENTS@", _LAUNCHER_ARGUMENTS).replace(
+    "@RELEASE_CHECK@", _RELEASE_CHECK
+)
+SINGLE_FILE_BODY = _RUNNER_TEMPLATE.replace("@ARGUMENTS@", _SINGLE_FILE_ARGUMENTS).replace(
+    "@RELEASE_CHECK@", ""
+)
+RUNNER = "#!/usr/bin/env python3\n" + SINGLE_FILE_BODY

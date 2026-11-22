@@ -24,7 +24,7 @@ from urllib.parse import urlsplit
 from packaging.requirements import Requirement
 
 from .bundle import COMPONENTS, ROLES, STATE_FORMAT, inspect_bundle, with_dependencies
-from .entrypoint import LAUNCHER, POINTER, RUNNER, RUNNER_BODY
+from .entrypoint import LAUNCHER, POINTER, RUNNER, RUNNER_BODY, SINGLE_FILE_BODY
 from .management_lock import management_lease
 
 
@@ -617,7 +617,7 @@ def _install_into(
             raise InstallationError(
                 "runner Python must be an executable absolute shebang path"
             )
-        runner_content = f"#!{runner_python}\n" + RUNNER.split("\n", 1)[1]
+        runner_content = f"#!{runner_python}\n" + SINGLE_FILE_BODY
     roles = sorted(set(roles))
     if not roles or any(r not in ROLES for r in roles):
         raise InstallationError("select one or more center/mcp/client roles")
@@ -653,7 +653,7 @@ def _install_into(
                 )
                 if not private_python.is_file() or not os.access(private_python, os.X_OK):
                     raise InstallationError("private runtime has no executable interpreter")
-                runner_content = f"#!{private_python}\n" + RUNNER.split("\n", 1)[1]
+                runner_content = f"#!{private_python}\n" + SINGLE_FILE_BODY
             (root / "config").mkdir()
             for role in roles:
                 (root / "state" / role).mkdir(parents=True)
