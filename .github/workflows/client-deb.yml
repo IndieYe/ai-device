@@ -85,7 +85,13 @@ jobs:
           # Modes must survive a strict umask: a payload directory built at 0700
           # still packages and installs cleanly, and fails only at run time when
           # the service user cannot read its own tree.
-          if dpkg-deb -c "$DEB" | awk '$1 ~ /^d/ && $1 != "drwxr-xr-x"'; then
+          # Print every offending directory first: the fix depends on which
+          # paths the archive actually carries, not on guessing.
+          dpkg-deb -c "$DEB" | awk '$1 ~ /^d/ && $1 != "drwxr-xr-x"' > /tmp/bad-dirs.txt
+          if [ -s /tmp/bad-dirs.txt ]; then
+            echo "--- directories that are not 0755 ---"
+            cat /tmp/bad-dirs.txt
+            echo "--- end ---"
             echo "package contains directories that are not 0755" >&2
             exit 1
           fi
