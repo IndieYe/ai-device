@@ -396,3 +396,36 @@ def test_generated_hooks_are_shell_valid(tmp_path, monkeypatch):
     for name in ("preinst", "prerm", "postinst", "postrm"):
         path = tmp_path / "build/root/DEBIAN" / name
         subprocess.run(["sh", "-n", str(path)], check=True)
+
+
+def test_strict_umask_leaves_no_unreadable_directory(tmp_path, monkeypatch):
+    """A root build under umask 077 must not ship 0700 directories.
+
+    mkdir(mode=...) is still masked by the umask, and dpkg-deb packages payload
+    modes verbatim: it only rejects a bad control directory. Measured on a real
+    Linux host, the package contained ``drwx------ root/root ./usr/``, which
+    would have narrowed the host's own /usr after install. Asserting on every
+    directory catches the ones created implicitly by mkdir(parents=True).
+    """
+    tree = tmp_path / "tree"
+    binary = tree / "runtime/bin/python3"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("fixture")
+    monkeypatch.setattr(module.subprocess, "run", lambda argv, **kwargs: None)
+
+    previous = os.umask(0o077)
+    try:
+        module.build(tree, tmp_path / "build", "0.5.6")
+    finally:
+        os.umask(previous)
+
+    root = tmp_path / "build/root"
+    unreadable = [
+        str(path.relative_to(root))
+        for path in root.rglob("*")
+        if path.is_dir() and not path.is_symlink()
+        and path.stat().st_mode & 0o055 != 0o055
+    ]
+    assert unreadable == []
+    assert (root / "usr").stat().st_mode & 0o777 == 0o755
+    assert (root / "usr/bin").stat().st_mode & 0o777 == 0o755

@@ -84,3 +84,19 @@ def test_normalising_refuses_a_missing_directory(tmp_path):
     """A typo'd path must fail instead of silently leaving a 0700 directory."""
     with pytest.raises(ValueError, match="not a directory to normalise"):
         module.ensure_readable_directories(tmp_path / "absent")
+
+
+def test_version_file_is_readable_by_a_non_privileged_service_user(tmp_path):
+    """A root build under umask 077 must not ship a 0600 version file.
+
+    write_text() creates with 0666 & ~umask, so the file measured 0600 inside a
+    real package. The runtime reads it as the service user; measured on Linux,
+    a non-privileged user got Permission denied and the version came back None.
+    """
+    tree = _tree(tmp_path)
+    previous = os.umask(0o077)
+    try:
+        path = module.write_package_version(tree, "0.5.6")
+    finally:
+        os.umask(previous)
+    assert path.stat().st_mode & 0o777 == 0o644

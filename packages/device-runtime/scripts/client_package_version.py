@@ -51,6 +51,12 @@ def write_package_version(tree, version):
         json.dumps({"schema_version": SCHEMA_VERSION, "package_version": version}) + "\n",
         encoding="utf-8",
     )
+    # write_text() creates with 0666 & ~umask, so a root build under umask 077
+    # leaves 0600. The runtime reads this file as the service user, which may
+    # not be root: measured on a real host, a non-privileged user got
+    # Permission denied and collect_package_version() returned None. The file
+    # carries no secrets, so it is readable like the rest of the tree.
+    path.chmod(0o644)
     return path
 
 

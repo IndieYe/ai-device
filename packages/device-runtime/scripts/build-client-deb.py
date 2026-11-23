@@ -55,6 +55,11 @@ def build(tree, output, version):
     # Stable client-only entry; never route through the legacy management CLI.
     entry = root / "usr/bin/ai-device-client"
     entry.parent.mkdir(parents=True)
+    # mkdir(parents=True) also creates usr/ under the umask. Shipping that as
+    # 0700 would restrict the host's own /usr after install, so it is created
+    # explicitly and normalised with the rest below.
+    usr = root / "usr"
+    usr.mkdir(exist_ok=True)
     entry.write_text(
         '#!/bin/sh\nexec /opt/ai-device-client/runtime/bin/python3 -I -B '
         '-m device_runtime.client_cli "$@"\n'
@@ -77,7 +82,7 @@ def build(tree, output, version):
     # Copied content keeps the modes it shipped with, so only the directories
     # created here need fixing.
     PACKAGE_VERSION.ensure_readable_directories(
-        root, payload.parent, entry.parent, control
+        root, payload.parent, usr, entry.parent, control
     )
     (control / "control").write_text(f"""Package: ai-device-client
 Version: {version}
