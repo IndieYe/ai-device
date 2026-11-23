@@ -16,6 +16,7 @@ from pathlib import Path
 
 # dpkg uses POSIX record locks on these, not flock.
 DPKG_LOCKS = (Path("/var/lib/dpkg/lock-frontend"), Path("/var/lib/dpkg/lock"))
+RPM_DATABASE_DIR = Path("/var/lib/rpm")
 MANAGEMENT_LOCK = Path("/run/ai-device-client-management.lock")
 
 
@@ -29,7 +30,7 @@ def package_manager():
     """
     if any(path.exists() for path in DPKG_LOCKS):
         return "dpkg"
-    if Path("/var/lib/rpm").is_dir():
+    if RPM_DATABASE_DIR.is_dir():
         return "rpm"
     return None
 

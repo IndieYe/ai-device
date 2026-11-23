@@ -16,10 +16,15 @@ def env(monkeypatch, tmp_path):
     state = {"held": True, "order": []}
     plist = tmp_path / "local.ai-device.client.plist"
     plist.write_text("<plist/>")
+    # The owner check compares the file's real uid against layout.uid, so both
+    # must be whoever actually runs the tests. A hardcoded 501 only holds on a
+    # macOS runner; elsewhere the file is created by a different uid and the
+    # removal is correctly refused.
+    uid = os.geteuid()
     layout = SimpleNamespace(
-        uid=501,
-        domain="gui/501",
-        service="gui/501/local.ai-device.client",
+        uid=uid,
+        domain=f"gui/{uid}",
+        service=f"gui/{uid}/local.ai-device.client",
         plist=plist,
     )
     state["account"] = SimpleNamespace(layout=layout)
@@ -73,12 +78,13 @@ def test_window_unloads_before_publish_and_reloads_after(env):
     )
 
     assert [name for name, _ in order] == ["stopped", "unload", "publish", "load", "ready"]
-    assert order[1][1] == ["/bin/launchctl", "bootout", "gui/501/local.ai-device.client"]
+    layout = env["account"].layout
+    assert order[1][1] == ["/bin/launchctl", "bootout", layout.service]
     assert order[3][1] == [
         "/bin/launchctl",
         "bootstrap",
-        "gui/501",
-        str(env["account"].layout.plist),
+        layout.domain,
+        str(layout.plist),
     ]
     assert result["stages"] == ["stopped", "unloaded", "published", "loaded"]
     assert result["rolled_back"] is False

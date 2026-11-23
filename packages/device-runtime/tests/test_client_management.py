@@ -87,6 +87,9 @@ def test_a_missing_dpkg_lock_file_is_skipped_not_fatal(tmp_path, monkeypatch):
 def test_package_manager_detection_prefers_dpkg(tmp_path, monkeypatch):
     lock = tmp_path / "frontend"
     monkeypatch.setattr(module, "DPKG_LOCKS", (lock, tmp_path / "dpkg"))
+    # Without this the rpm branch answers on any host that has /var/lib/rpm,
+    # so the assertion would test the runner's distro instead of this logic.
+    monkeypatch.setattr(module, "RPM_DATABASE_DIR", tmp_path / "rpm")
     assert module.package_manager() is None
     lock.touch()
     assert module.package_manager() == "dpkg"
