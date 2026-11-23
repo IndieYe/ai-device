@@ -41,9 +41,14 @@ editable 开发目录的修改须重新启动相应进程才能得到新快照�
 旧中心忽略此头，旧客户端继续正常连接。Linux 版本优先来自系统的 `os-release` 展示名，
 macOS 使用系统版本，架构来自客户端运行环境。采集不到的字段为 null，不阻断连接。
 新中心的设备目录在在线时返回 `platform`（`darwin`/`linux`）及
-`system_info: {version, architecture} | null`；未上报、无效上报及离线时信息未知，
+`system_info: {version, architecture, package_version} | null`；未上报、无效上报及离线时信息未知，
 离线信息不保留历史。WSL 显示 Linux 环境，不推断 Windows 宿主。信息仅用于展示，
 不是设备身份或能力证明。客户端和中心均需使用包含此功能的版本，旧客户端只显示平台。
+
+`package_version` 是原生包（deb/rpm/pkg）的版本，与 Python 运行时的 `version` 相互独立：
+同一个 0.5.x 安装包可以携带不同的运行时。它由打包脚本在 payload 内写入
+`client-package-version.json`（树根，见 `scripts/client_package_version.py`），
+源码安装和较早的客户端没有此文件，此时上报 null，不回退到运行时版本猜测。
 
 ### 发布规则
 

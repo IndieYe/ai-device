@@ -53,7 +53,7 @@ def test_invalid_optional_identity_is_unknown(value):
 
 
 async def test_client_reports_identity_and_disconnect_does_not_claim_running(live_server, tmp_path, monkeypatch):
-    monkeypatch.setattr("device_runtime.client.collect_system_info", lambda: SystemInfo(version="Test OS 1", architecture="arm64"))
+    monkeypatch.setattr("device_runtime.client.collect_system_info", lambda: SystemInfo(version="Test OS 1", architecture="arm64", package_version="0.5.5"))
     url, service, http = live_server
     client = DeviceClient(
         server_url=url,
@@ -72,7 +72,11 @@ async def test_client_reports_identity_and_disconnect_does_not_claim_running(liv
         device = (await http.get("/v1/devices")).json()[0]
         assert device["runtime_version"] == runtime_version()
         assert device["platform"] == sys.platform
-        assert device["system_info"] == {"version": "Test OS 1", "architecture": "arm64"}
+        assert device["system_info"] == {
+            "version": "Test OS 1",
+            "architecture": "arm64",
+            "package_version": "0.5.5",
+        }
         async with DeviceAPI(url.replace("ws:", "http:"), ADMIN) as api:
             assert (await api.list_devices())["devices"][0]["runtime_version"] == runtime_version()
             assert await api.get_version() == {"role": "center", **runtime_version()}
@@ -128,7 +132,56 @@ def test_system_info_collection_failure_is_nonfatal(monkeypatch):
         raise OSError("unavailable")
     monkeypatch.setattr(system_info.platform, "freedesktop_os_release", fail)
     monkeypatch.setattr(system_info.platform, "machine", fail)
-    assert system_info.collect_system_info().model_dump() == {"version": None, "architecture": None}
+    assert system_info.collect_system_info().model_dump() == {
+        "version": None,
+        "architecture": None,
+        "package_version": None,
+    }
+
+
+def test_package_version_is_read_from_tree_root(tmp_path, monkeypatch):
+    """The native package version is reported beside runtime/, not from the OS."""
+    from device_runtime import system_info
+
+    root = tmp_path / "root"
+    package = root / "runtime/lib/python3.13/site-packages/device_runtime"
+    package.mkdir(parents=True)
+    (root / "client-package-version.json").write_text(
+        json.dumps({"schema_version": 1, "package_version": "0.5.5"})
+    )
+    monkeypatch.setattr(system_info, "__file__", str(package / "system_info.py"))
+    assert system_info.collect_package_version() == "0.5.5"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "not json",
+        "[]",
+        '{"package_version": "has space"}',
+        '{"package_version": 5}',
+        "{}",
+    ],
+)
+def test_malformed_package_version_reports_nothing(tmp_path, monkeypatch, payload):
+    """A bad file must not fail the connection or invent a version."""
+    from device_runtime import system_info
+
+    root = tmp_path / "root"
+    package = root / "runtime/lib/python3.13/site-packages/device_runtime"
+    package.mkdir(parents=True)
+    (root / "client-package-version.json").write_text(payload)
+    monkeypatch.setattr(system_info, "__file__", str(package / "system_info.py"))
+    assert system_info.collect_package_version() is None
+
+
+def test_absent_package_version_file_reports_nothing(tmp_path, monkeypatch):
+    from device_runtime import system_info
+
+    package = tmp_path / "root/runtime/lib/python3.13/site-packages/device_runtime"
+    package.mkdir(parents=True)
+    monkeypatch.setattr(system_info, "__file__", str(package / "system_info.py"))
+    assert system_info.collect_package_version() is None
 
 
 async def test_new_client_preserves_exact_legacy_hello(tmp_path):

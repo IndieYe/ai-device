@@ -17,6 +17,7 @@ that %post cannot be the only proof the service started.
 """
 
 import argparse
+import importlib.util
 import shutil
 import subprocess
 from pathlib import Path
@@ -29,6 +30,14 @@ MINIMUM_GLIBC = "2.17"
 # Shared with the DEB builder. Plain POSIX sh, no % characters, so it is valid
 # verbatim as an RPM scriptlet body.
 STOP = (Path(__file__).parent / "client_package_stop.sh").read_text()
+
+# Shared with the other packagers: writes the native package version the client
+# reports alongside its runtime version.
+_PACKAGE_VERSION_SPEC = importlib.util.spec_from_file_location(
+    "client_package_version", Path(__file__).with_name("client_package_version.py")
+)
+PACKAGE_VERSION = importlib.util.module_from_spec(_PACKAGE_VERSION_SPEC)
+_PACKAGE_VERSION_SPEC.loader.exec_module(PACKAGE_VERSION)
 
 # Inside %pre the tree is not unpacked yet, so the stop guard would call the
 # python3 of the *installed* package. On a first install there is none and that
@@ -173,6 +182,19 @@ def build(tree, output, version, buildarch="x86_64"):
     topdir = output / "rpmbuild"
     for sub in ("BUILD", "RPMS", "SOURCES", "SPECS", "SRPMS", "BUILDROOT"):
         (topdir / sub).mkdir(parents=True, exist_ok=True)
+    # %install copies the tree with `cp -a`, so the package version has to be
+    # present in the source the spec reads. Stage a private copy instead of
+    # writing into `tree`: that tree is the shared build input, and the DEB
+    # builder must still see it unchanged.
+    staged = topdir / "BUILD/client-tree"
+    shutil.copytree(
+        tree,
+        staged,
+        symlinks=True,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+    )
+    PACKAGE_VERSION.write_package_version(staged, version)
+    tree = staged
     # During an upgrade the old %preun still runs, but by then the new payload
     # is already unpacked and %post has started the new version. Stopping there
     # would kill what %post just started, so %preun only refuses to proceed

@@ -1,9 +1,18 @@
 """Package an already prepared Linux client tree; no target-side pip or uv."""
 
 import argparse
+import importlib.util
 import shutil
 import subprocess
 from pathlib import Path
+
+# Shared with the RPM and PKG builders so a payload cannot ship without the
+# native package version the client reports alongside its runtime version.
+_PACKAGE_VERSION_SPEC = importlib.util.spec_from_file_location(
+    "client_package_version", Path(__file__).with_name("client_package_version.py")
+)
+PACKAGE_VERSION = importlib.util.module_from_spec(_PACKAGE_VERSION_SPEC)
+_PACKAGE_VERSION_SPEC.loader.exec_module(PACKAGE_VERSION)
 
 # Minimum host glibc for the packaged runtime. The tree ships a CPython build
 # whose binaries were measured to need at most GLIBC_2.17, and every locked
@@ -39,6 +48,10 @@ def build(tree, output, version):
         symlinks=True,
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
     )
+    # The tree is a build input and carries application identity, not the
+    # package version (the tree builder runs before --version is known). Write
+    # it into the copy so the shipped payload can report it.
+    PACKAGE_VERSION.write_package_version(payload, version)
     # Stable client-only entry; never route through the legacy management CLI.
     entry = root / "usr/bin/ai-device-client"
     entry.parent.mkdir(parents=True)

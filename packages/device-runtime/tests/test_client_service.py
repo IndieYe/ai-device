@@ -15,6 +15,22 @@ def reply(active="inactive", sub="dead", pid=0, control=0):
     )
 
 
+def prop(value):
+    """Answer one `systemctl show --property=X` query as `X=value`.
+
+    `--property` without `--value` prints the key, so every stub that answers a
+    property query must name it. Callers that pass a bare string keep working
+    through this helper instead of repeating the format in each test.
+    """
+    def run(argv, **kwargs):
+        key = next(arg.split("=", 1)[1] for arg in argv if arg.startswith("--property="))
+        if isinstance(value, dict):
+            return SimpleNamespace(returncode=0, stdout=f"{key}={value[key]}\n")
+        return SimpleNamespace(returncode=0, stdout=f"{key}={value}\n")
+
+    return run
+
+
 @pytest.mark.parametrize(
     "value",
     [
@@ -48,7 +64,7 @@ def test_stop_holds_lease_until_confirmation(monkeypatch):
         if len(events) > 1:
             assert held
         if "--property=ControlGroup" in argv:
-            return SimpleNamespace(returncode=0, stdout="")
+            return SimpleNamespace(returncode=0, stdout="ControlGroup=\n")
         return next(responses)
 
     monkeypatch.setattr(client_service, "idle_lease", lease)
@@ -61,7 +77,7 @@ def test_stopped_does_not_require_socket(monkeypatch):
     monkeypatch.setattr(client_service, "idle_lease", lambda _: pytest.fail("unexpected lease"))
     client_service.SystemdClient(
         run=lambda argv, **k: (
-            SimpleNamespace(returncode=0, stdout="")
+            SimpleNamespace(returncode=0, stdout="ControlGroup=\n")
             if "--property=ControlGroup" in argv
             else reply()
         )
@@ -116,14 +132,15 @@ def test_explicit_start_clears_prior_start_limit():
         calls.append(argv[1])
         if "--property=FragmentPath" in argv:
             return SimpleNamespace(
-                returncode=0, stdout="/etc/systemd/system/ai-device-client.service\n"
+                returncode=0,
+                stdout="FragmentPath=/etc/systemd/system/ai-device-client.service\n",
             )
         if "--property=DropInPaths" in argv:
-            return SimpleNamespace(returncode=0, stdout="")
+            return SimpleNamespace(returncode=0, stdout="DropInPaths=\n")
         if "--property=SendSIGKILL" in argv:
-            return SimpleNamespace(returncode=0, stdout="no")
+            return SimpleNamespace(returncode=0, stdout="SendSIGKILL=no\n")
         if "--property=KillMode" in argv:
-            return SimpleNamespace(returncode=0, stdout="control-group")
+            return SimpleNamespace(returncode=0, stdout="KillMode=control-group\n")
         return reply("active", "running", 42)
 
     client_service.SystemdClient(run=run).start()
@@ -151,9 +168,9 @@ def test_explicit_start_clears_prior_start_limit():
 )
 def test_unexpected_registration_is_rejected(fragment, overrides):
     def run(argv, **kwargs):
-        return SimpleNamespace(
-            returncode=0, stdout=fragment if "--property=FragmentPath" in argv else overrides
-        )
+        if "--property=FragmentPath" in argv:
+            return SimpleNamespace(returncode=0, stdout=f"FragmentPath={fragment}\n")
+        return SimpleNamespace(returncode=0, stdout=f"DropInPaths={overrides}\n")
 
     with pytest.raises(client_service.ServiceError):
         client_service.SystemdClient(run=run).validate_registration()
@@ -164,7 +181,9 @@ def test_configuration_probe_runs_as_service_user():
 
     def run(argv, **kwargs):
         calls.append(argv)
-        return SimpleNamespace(returncode=0, stdout="device\n" if argv[0] == "systemctl" else "")
+        if "--property=User" in argv:
+            return SimpleNamespace(returncode=0, stdout="User=device\n")
+        return SimpleNamespace(returncode=0, stdout="")
 
     client_service.SystemdClient(run=run).validate_config()
     assert calls[1][:4] == ["runuser", "-u", "device", "--"]
@@ -204,7 +223,7 @@ def test_stop_timeout_or_unconfirmed_stop_releases_lease(monkeypatch, outcome):
 def test_configuration_probe_enforces_installed_state_path():
     def run(argv, **kwargs):
         if argv[0] == "systemctl":
-            return SimpleNamespace(returncode=0, stdout="device\n")
+            return SimpleNamespace(returncode=0, stdout="User=device\n")
         assert "assert str(a.state_dir)=='/var/lib/ai-device-client'" in argv[-1]
         return SimpleNamespace(returncode=1, stdout="")
 
@@ -225,7 +244,7 @@ def test_unsafe_shutdown_policy_is_rejected(sigkill, killmode):
 
     def run(argv, **kwargs):
         key = next(arg.split("=", 1)[1] for arg in argv if arg.startswith("--property="))
-        return SimpleNamespace(returncode=0, stdout=values[key])
+        return SimpleNamespace(returncode=0, stdout=f"{key}={values[key]}\n")
 
     with pytest.raises(client_service.ServiceError):
         client_service.SystemdClient(run=run).validate_registration()
@@ -243,7 +262,7 @@ def test_stopped_state_checks_descendant_cgroup(tmp_path, monkeypatch, populated
 
     def run(argv, **kwargs):
         if "--property=ControlGroup" in argv:
-            return SimpleNamespace(returncode=0, stdout="/system.slice/client.service")
+            return SimpleNamespace(returncode=0, stdout="ControlGroup=/system.slice/client.service\n")
         return reply("failed")
 
     service = client_service.SystemdClient(run=run)
@@ -303,7 +322,7 @@ def test_stopped_state_refuses_when_v1_group_has_processes(tmp_path, monkeypatch
 
     def run(argv, **kwargs):
         if "--property=ControlGroup" in argv:
-            return SimpleNamespace(returncode=0, stdout="/system.slice/client.service")
+            return SimpleNamespace(returncode=0, stdout="ControlGroup=/system.slice/client.service\n")
         return reply("failed")
 
     with pytest.raises(client_service.ServiceError, match="live processes"):
@@ -318,7 +337,7 @@ def test_stopped_state_allows_empty_v1_group(tmp_path, monkeypatch):
 
     def run(argv, **kwargs):
         if "--property=ControlGroup" in argv:
-            return SimpleNamespace(returncode=0, stdout="/system.slice/client.service")
+            return SimpleNamespace(returncode=0, stdout="ControlGroup=/system.slice/client.service\n")
         return reply("failed")
 
     assert client_service.SystemdClient(run=run).state() == "stopped"
@@ -337,7 +356,7 @@ def test_absent_group_directory_warns_instead_of_silently_passing(tmp_path, monk
 
     def run(argv, **kwargs):
         if "--property=ControlGroup" in argv:
-            return SimpleNamespace(returncode=0, stdout="/system.slice/client.service")
+            return SimpleNamespace(returncode=0, stdout="ControlGroup=/system.slice/client.service\n")
         return reply("failed")
 
     assert client_service.SystemdClient(run=run).state() == "stopped"
@@ -349,7 +368,7 @@ def test_unrecognisable_hierarchy_warns(tmp_path, monkeypatch, capsys):
 
     def run(argv, **kwargs):
         if "--property=ControlGroup" in argv:
-            return SimpleNamespace(returncode=0, stdout="/system.slice/client.service")
+            return SimpleNamespace(returncode=0, stdout="ControlGroup=/system.slice/client.service\n")
         return reply("failed")
 
     assert client_service.SystemdClient(run=run).state() == "stopped"

@@ -37,6 +37,14 @@ _TREE_SPEC = importlib.util.spec_from_file_location(
 TREE_BUILD = importlib.util.module_from_spec(_TREE_SPEC)
 _TREE_SPEC.loader.exec_module(TREE_BUILD)
 
+# Shared with the DEB and RPM builders: writes the native package version the
+# client reports alongside its runtime version.
+_PACKAGE_VERSION_SPEC = importlib.util.spec_from_file_location(
+    "client_package_version", Path(__file__).with_name("client_package_version.py")
+)
+PACKAGE_VERSION = importlib.util.module_from_spec(_PACKAGE_VERSION_SPEC)
+_PACKAGE_VERSION_SPEC.loader.exec_module(PACKAGE_VERSION)
+
 IDENTIFIER = "local.ai-device.client.inspection"
 # Installable builds must never share an identifier with the inspection product:
 # receipts are keyed by it, so a rehearsal install would be indistinguishable
@@ -1355,6 +1363,11 @@ def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
     shutil.copytree(
         tree, payload, symlinks=True, ignore=shutil.ignore_patterns("__pycache__", "*.pyc")
     )
+    # The package version lives in the shipped payload, not in the input tree:
+    # the tree builder runs before --version exists, and the same tree backs
+    # more than one package format. Written here, before any inventory below,
+    # because stage_upgrade_entry pins an exact entry count for the payload.
+    PACKAGE_VERSION.write_package_version(payload, version)
     # postinstall calls the same binary it just staged, so the commit entry has
     # to exist inside the payload. Reusing the shipped CLI avoids a second
     # artifact that could drift from it.

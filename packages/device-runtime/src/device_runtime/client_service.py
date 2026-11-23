@@ -103,21 +103,36 @@ class SystemdClient:
             raise ServiceError("systemd operation failed; inspect the client service")
         return result.stdout
 
+    def _property(self, name):
+        """Read one property as `Key=Value`, not `--value`.
+
+        `systemctl show --value` exists only since systemd 230 and fails with
+        "unrecognized option" on older releases (CentOS 7 ships 219). The
+        multi-property form is portable, and a missing unit still reports
+        `Key=0`/`Key=` with exit status 0, so callers keep the same semantics.
+        """
+        text = self._call("show", UNIT, "--property=" + name)
+        for line in text.splitlines():
+            key, separator, value = line.partition("=")
+            if separator and key.strip() == name:
+                return value
+        raise ServiceError("systemd property unavailable: " + name)
+
     def validate_registration(self):
-        fragment = self._call("show", UNIT, "--property=FragmentPath", "--value").strip()
+        fragment = self._property("FragmentPath").strip()
         if fragment != "/etc/systemd/system/ai-device-client.service":
             raise ServiceError("client service comes from an unexpected location")
         # Drop-ins can change execution or shutdown policy. This small installer
         # does not merge administrator overrides; reject rather than guess.
-        if self._call("show", UNIT, "--property=DropInPaths", "--value").strip():
+        if self._property("DropInPaths").strip():
             raise ServiceError("client service has unsupported overrides")
-        if self._call("show", UNIT, "--property=SendSIGKILL", "--value").strip() != "no":
+        if self._property("SendSIGKILL").strip() != "no":
             raise ServiceError("client service permits forced termination")
-        if self._call("show", UNIT, "--property=KillMode", "--value").strip() != "control-group":
+        if self._property("KillMode").strip() != "control-group":
             raise ServiceError("client service does not stop the complete process group")
 
     def validate_config(self):
-        user = self._call("show", UNIT, "--property=User", "--value").strip()
+        user = self._property("User").strip()
         if not user:
             raise ServiceError("client service user is not explicit")
         result = self.run(
@@ -172,7 +187,7 @@ class SystemdClient:
 
     def confirm_empty_group(self):
         # MainPID/ControlPID can both be zero while timed-out descendants remain.
-        group = self._call("show", UNIT, "--property=ControlGroup", "--value").strip()
+        group = self._property("ControlGroup").strip()
         if not group:
             return
         if not group.startswith("/") or ".." in Path(group).parts:
