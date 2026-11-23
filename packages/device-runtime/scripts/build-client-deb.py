@@ -70,6 +70,15 @@ def build(tree, output, version):
     register.chmod(0o755)
     control = root / "DEBIAN"
     control.mkdir()
+    # Directories this builder creates are masked by the process umask, so a
+    # root build with the common umask 077 yields 0700. dpkg-deb refuses that
+    # for DEBIAN, but for the payload it packages the modes verbatim: the .deb
+    # then installs cleanly and the service user cannot read its own tree.
+    # Copied content keeps the modes it shipped with, so only the directories
+    # created here need fixing.
+    PACKAGE_VERSION.ensure_readable_directories(
+        root, payload.parent, entry.parent, control
+    )
     (control / "control").write_text(f"""Package: ai-device-client
 Version: {version}
 Architecture: amd64

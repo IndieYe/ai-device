@@ -1,5 +1,7 @@
 import importlib.util
 import json
+import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -55,3 +57,30 @@ def test_refuses_to_overwrite(tmp_path):
 def test_refuses_a_directory_that_is_not_a_client_tree(tmp_path):
     with pytest.raises(ValueError, match="not a client tree"):
         module.write_package_version(tmp_path / "empty", "0.5.5")
+
+
+def test_directories_are_usable_under_a_077_umask(tmp_path):
+    """A root builder with umask 077 must not ship 0700 directories.
+
+    dpkg-deb rejects that only for DEBIAN; for the payload it packages the mode
+    verbatim, so the package installs and the service user cannot read it.
+    """
+    previous = os.umask(0o077)
+    try:
+        root = tmp_path / "root"
+        payload = root / "opt/ai-device-client"
+        control = root / "DEBIAN"
+        for directory in (payload, control):
+            directory.mkdir(parents=True, exist_ok=True)
+        assert stat.S_IMODE(payload.stat().st_mode) == 0o700
+        module.ensure_readable_directories(root, payload, control)
+        for directory in (root, payload, control):
+            assert stat.S_IMODE(directory.stat().st_mode) == 0o755
+    finally:
+        os.umask(previous)
+
+
+def test_normalising_refuses_a_missing_directory(tmp_path):
+    """A typo'd path must fail instead of silently leaving a 0700 directory."""
+    with pytest.raises(ValueError, match="not a directory to normalise"):
+        module.ensure_readable_directories(tmp_path / "absent")

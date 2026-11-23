@@ -52,3 +52,25 @@ def write_package_version(tree, version):
         encoding="utf-8",
     )
     return path
+
+
+def ensure_readable_directories(*directories):
+    """Widen directory modes that the process umask narrowed.
+
+    `mkdir(mode=...)` is still masked by the umask, so a builder running as
+    root with the common umask 077 creates 0700 directories. dpkg-deb only
+    rejects that for the control directory; for the payload it packages the
+    modes verbatim and yields a package that installs cleanly and then cannot
+    be read by the service user. Measured: `drwx------ root/root
+    ./opt/ai-device-client/` inside a built .deb.
+
+    Only directories are touched: `copytree` reproduces the mode of everything
+    it copies, so files and nested directories from the prepared tree already
+    carry the modes they shipped with, and rewriting 135 MB of them would
+    discard deliberate permissions.
+    """
+    for directory in directories:
+        directory = Path(directory)
+        if directory.is_symlink() or not directory.is_dir():
+            raise ValueError(f"not a directory to normalise: {directory}")
+        directory.chmod(0o755)
