@@ -76,7 +76,15 @@ def test_package_is_verified_before_it_can_be_published(workflow):
 def test_release_does_not_overwrite_a_published_version(workflow):
     steps = workflow["jobs"]["attach-release"]["steps"]
     publish = next(s for s in steps if s.get("name") == "Publish the release asset")
-    assert "gh release view" in publish["run"]
+    # The job has no checkout, so repository context must be explicit; a bare
+    # `gh release view` fails with "not a git repository", which reads the same
+    # as "release missing" unless the command is redirected properly.
+    commands = [
+        line for line in publish["run"].splitlines() if line.strip() and not line.strip().startswith("#")
+    ]
+    assert not any("gh release view" in line for line in commands)
+    assert any('gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}"' in line for line in commands)
+    assert any('--repo "$GITHUB_REPOSITORY"' in line for line in commands)
     assert "bump the version instead of overwriting" in publish["run"]
     # The digest recorded by the build job is rechecked against the download.
     verify = next(s for s in steps if s.get("name") == "Verify the artifact matches this run")

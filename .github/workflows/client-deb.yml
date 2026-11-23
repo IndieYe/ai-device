@@ -175,7 +175,11 @@ jobs:
           sha256  ${DIGEST}"
           # Re-running the same version must not silently replace a published
           # asset; the version is expected to change when the bytes change.
-          if gh release view "$TAG" >/dev/null 2>&1; then
+          # Query the API directly: this job never checks out the repository, so
+          # `gh release view` has no repository context and exits non-zero with
+          # "not a git repository", which is indistinguishable from a missing
+          # release if the result is not inspected.
+          if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" >/dev/null 2>&1; then
             echo "release $TAG already exists; bump the version instead of overwriting" >&2
             exit 1
           fi
@@ -183,6 +187,7 @@ jobs:
           # resolves to now, so the published package stays traceable to the
           # source that was actually built.
           gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
             --target "$SOURCE_COMMIT" \
             --title "ai-device-client ${PACKAGE_VERSION}" \
             --notes "$NOTES" \
