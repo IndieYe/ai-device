@@ -80,8 +80,39 @@ def test_release_does_not_overwrite_a_published_version(workflow):
     assert "bump the version instead of overwriting" in publish["run"]
     # The digest recorded by the build job is rechecked against the download.
     verify = next(s for s in steps if s.get("name") == "Verify the artifact matches this run")
-    assert "sha256sum -c release/deb.sha256" in verify["run"]
+    assert "sha256sum -c deb.sha256" in verify["run"]
+    # --ignore-missing would turn a name mismatch into a silent pass, which is
+    # exactly how this check was a no-op before. Compare against the executable
+    # line only, so the explanatory comment above it cannot satisfy the check.
+    commands = [
+        line for line in verify["run"].splitlines() if line.strip() and not line.strip().startswith("#")
+    ]
+    assert not any("--ignore-missing" in line for line in commands)
     assert steps.index(verify) < steps.index(publish)
+
+
+def test_recorded_digest_is_relative_so_the_release_job_can_check_it(workflow):
+    # The two jobs run on different machines; an absolute runner path can never
+    # be found in attach-release and silently skips the comparison.
+    verify = next(
+        s
+        for s in workflow["jobs"]["build"]["steps"]
+        if s.get("name") == "Verify the package before publishing it"
+    )
+    assert 'sha256sum "$(basename "$DEB")"' in verify["run"]
+
+
+def test_release_points_at_the_reviewed_commit(workflow):
+    publish = next(
+        s
+        for s in workflow["jobs"]["attach-release"]["steps"]
+        if s.get("name") == "Publish the release asset"
+    )
+    assert '--target "$SOURCE_COMMIT"' in publish["run"]
+    # The notes must carry a digest that is actually present, not a promise to
+    # look at something the release does not contain.
+    assert 'DIGEST="$(awk' in publish["run"]
+    assert "release/deb.sha256" in publish["run"]
 
 
 def test_all_run_blocks_have_valid_bash_syntax(workflow):

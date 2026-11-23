@@ -100,7 +100,12 @@ jobs:
           # install can be matched later against build_id rather than a guess.
           "$RUNNER_TEMP/client-tree/runtime/bin/python3" -I -B \
             -m device_runtime.client_cli --version | tee "$RUNNER_TEMP/identity.json"
-          sha256sum "$DEB" | tee "$RUNNER_TEMP/deb.sha256"
+          # Record the digest with a bare filename: the attach-release job runs on
+          # a different machine and unpacks the artifact into release/, so an
+          # absolute runner path here would describe a file that does not exist
+          # there and could only ever be skipped.
+          ( cd "$(dirname "$DEB")" && sha256sum "$(basename "$DEB")" ) \
+            | tee "$RUNNER_TEMP/deb.sha256"
           {
             echo "### ai-device-client $PACKAGE_VERSION"
             echo '```'
@@ -138,7 +143,10 @@ jobs:
           test -f "$DEB"
           # The digest recorded by the build job is the reference; recompute it
           # over what was actually downloaded instead of trusting the filename.
-          sha256sum -c release/deb.sha256 --ignore-missing
+          # Check from inside release/ because the recorded name is relative to
+          # the artifact root, and do not pass --ignore-missing: a name that does
+          # not match must fail here rather than be silently skipped.
+          ( cd release && sha256sum -c deb.sha256 )
           cat release/identity.json
       - name: Publish the release asset
         env:
@@ -148,16 +156,24 @@ jobs:
         run: |
           set -euo pipefail
           TAG="ai-device-client-v${PACKAGE_VERSION}"
+          DIGEST="$(awk '{print $1}' release/deb.sha256)"
           NOTES="Self-contained Linux client package for Ubuntu 24.04 amd64.
           Built from ${SOURCE_COMMIT}. Verify the asset against the SHA-256 below
-          before installing."
+          before installing.
+
+          sha256  ${DIGEST}"
           # Re-running the same version must not silently replace a published
           # asset; the version is expected to change when the bytes change.
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "release $TAG already exists; bump the version instead of overwriting" >&2
             exit 1
           fi
+          # Point the tag at the reviewed commit rather than at whatever main
+          # resolves to now, so the published package stays traceable to the
+          # source that was actually built.
           gh release create "$TAG" \
+            --target "$SOURCE_COMMIT" \
             --title "ai-device-client ${PACKAGE_VERSION}" \
             --notes "$NOTES" \
-            "release/ai-device-client_${PACKAGE_VERSION}_amd64.deb"
+            "release/ai-device-client_${PACKAGE_VERSION}_amd64.deb" \
+            "release/deb.sha256"
