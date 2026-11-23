@@ -120,3 +120,14 @@ def test_all_run_blocks_have_valid_bash_syntax(workflow):
         for step in job["steps"]:
             if "run" in step:
                 subprocess.run(["bash", "-n"], input=step["run"], text=True, check=True)
+
+def test_artifact_layout_is_flat_so_the_release_job_finds_the_deb(workflow):
+    # upload-artifact roots the archive at the least common ancestor of its
+    # paths. Listing paths from different directories nests the deb, so the
+    # staging step must hand it a single flat directory instead.
+    steps = workflow["jobs"]["build"]["steps"]
+    upload = next(s for s in steps if "upload-artifact" in s.get("uses", ""))
+    assert upload["with"]["path"] == "${{ runner.temp }}/package"
+    stage = next(s for s in steps if s.get("name") == "Stage the files to be uploaded")
+    assert steps.index(stage) < steps.index(upload)
+    assert "deb.sha256" in stage["run"] and "identity.json" in stage["run"]

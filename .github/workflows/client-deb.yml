@@ -113,13 +113,24 @@ jobs:
             cat "$RUNNER_TEMP/deb.sha256"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Stage the files to be uploaded
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # upload-artifact derives the artifact root from the least common
+          # ancestor of its paths, which would nest the deb under deb/ while
+          # leaving the digest file at the root. Stage a flat directory instead
+          # so the downloaded layout is exactly what attach-release expects.
+          mkdir -p "$RUNNER_TEMP/package"
+          cp "$RUNNER_TEMP/deb/ai-device-client_${PACKAGE_VERSION}_amd64.deb" \
+             "$RUNNER_TEMP/deb.sha256" "$RUNNER_TEMP/identity.json" \
+             "$RUNNER_TEMP/package/"
+          ls -l "$RUNNER_TEMP/package"
       - uses: actions/upload-artifact@v4
         with:
           name: client-deb-${{ inputs.version }}
-          path: |
-            ${{ runner.temp }}/deb/*.deb
-            ${{ runner.temp }}/deb.sha256
-            ${{ runner.temp }}/identity.json
+          path: ${{ runner.temp }}/package
           if-no-files-found: error
           retention-days: 14
   attach-release:
