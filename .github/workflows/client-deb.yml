@@ -1,0 +1,157 @@
+name: Build Linux client package
+
+# Builds the self-contained ai-device-client .deb for Ubuntu 24.04 amd64 and,
+# only when explicitly requested, attaches it to a GitHub Release so a target
+# machine can install it over plain HTTPS instead of a slow private link.
+#
+# This is a separate workflow from release.yml on purpose: that one owns the
+# PyPI wheel contract, and its tests assert the exact set of jobs it has.
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        description: 'Exact reviewed 40-character commit on main'
+        required: true
+        type: string
+      version:
+        description: 'Package version to stamp into the .deb (e.g. 0.5.7)'
+        required: true
+        type: string
+      publish_release:
+        description: 'Attach the built .deb to a GitHub Release (requires separate authorization)'
+        default: false
+        type: boolean
+permissions:
+  contents: read
+concurrency:
+  group: client-deb
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.repository == 'IndieYe/ai-device' && github.ref == 'refs/heads/main'
+    # The tree builder refuses any host other than native Linux amd64 or macOS
+    # arm64. ubuntu-latest is amd64, so the Linux layout is the one produced.
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check reviewed commit and version
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: |
+          [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          # The packager enforces the same rules; failing here keeps a bad
+          # version from being discovered only after the whole tree is built.
+          [[ "$PACKAGE_VERSION" =~ ^[0-9][0-9a-z.+~-]*$ ]]
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.10.9'
+      - name: Stage locked inputs from public sources
+        # Only the repository's own wheels are missing from this stage; step 4
+        # builds them from the checked-out source.
+        run: |
+          uv run --no-sync python packages/device-runtime/scripts/stage-client-inputs.py \
+            --locks packages/device-runtime/native \
+            --output "$RUNNER_TEMP/inputs" | tee "$RUNNER_TEMP/inputs.json"
+      - name: Build the three application wheels
+        run: |
+          uv build --all-packages --wheel --out-dir "$RUNNER_TEMP/inputs/wheels"
+          ls -l "$RUNNER_TEMP/inputs/wheels"
+      - name: Assemble the client tree
+        run: |
+          uv run --no-sync python packages/device-runtime/scripts/build-client-tree.py \
+            --inputs "$RUNNER_TEMP/inputs" \
+            --locks packages/device-runtime/native \
+            --output "$RUNNER_TEMP/client-tree"
+      - name: Package the .deb
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: |
+          uv run --no-sync python packages/device-runtime/scripts/build-client-deb.py \
+            --tree "$RUNNER_TEMP/client-tree" \
+            --output "$RUNNER_TEMP/deb" \
+            --version "$PACKAGE_VERSION"
+      - name: Verify the package before publishing it
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          DEB="$RUNNER_TEMP/deb/ai-device-client_${PACKAGE_VERSION}_amd64.deb"
+          test -f "$DEB"
+          # Modes must survive a strict umask: a payload directory built at 0700
+          # still packages and installs cleanly, and fails only at run time when
+          # the service user cannot read its own tree.
+          if dpkg-deb -c "$DEB" | awk '$1 ~ /^d/ && $1 != "drwxr-xr-x"'; then
+            echo "package contains directories that are not 0755" >&2
+            exit 1
+          fi
+          dpkg-deb -I "$DEB" | grep -Fx " Version: $PACKAGE_VERSION"
+          # Report the runtime identity the shipped tree really carries, so the
+          # install can be matched later against build_id rather than a guess.
+          "$RUNNER_TEMP/client-tree/runtime/bin/python3" -I -B \
+            -m device_runtime.client_cli --version | tee "$RUNNER_TEMP/identity.json"
+          sha256sum "$DEB" | tee "$RUNNER_TEMP/deb.sha256"
+          {
+            echo "### ai-device-client $PACKAGE_VERSION"
+            echo '```'
+            cat "$RUNNER_TEMP/identity.json"
+            cat "$RUNNER_TEMP/deb.sha256"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-deb-${{ inputs.version }}
+          path: |
+            ${{ runner.temp }}/deb/*.deb
+            ${{ runner.temp }}/deb.sha256
+            ${{ runner.temp }}/identity.json
+          if-no-files-found: error
+          retention-days: 14
+  attach-release:
+    if: inputs.publish_release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: client-deb-${{ inputs.version }}
+          path: release/
+      - name: Verify the artifact matches this run
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          DEB="release/ai-device-client_${PACKAGE_VERSION}_amd64.deb"
+          test -f "$DEB"
+          # The digest recorded by the build job is the reference; recompute it
+          # over what was actually downloaded instead of trusting the filename.
+          sha256sum -c release/deb.sha256 --ignore-missing
+          cat release/identity.json
+      - name: Publish the release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_VERSION: ${{ inputs.version }}
+          SOURCE_COMMIT: ${{ inputs.expected_commit }}
+        run: |
+          set -euo pipefail
+          TAG="ai-device-client-v${PACKAGE_VERSION}"
+          NOTES="Self-contained Linux client package for Ubuntu 24.04 amd64.
+          Built from ${SOURCE_COMMIT}. Verify the asset against the SHA-256 below
+          before installing."
+          # Re-running the same version must not silently replace a published
+          # asset; the version is expected to change when the bytes change.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists; bump the version instead of overwriting" >&2
+            exit 1
+          fi
+          gh release create "$TAG" \
+            --title "ai-device-client ${PACKAGE_VERSION}" \
+            --notes "$NOTES" \
+            "release/ai-device-client_${PACKAGE_VERSION}_amd64.deb"
