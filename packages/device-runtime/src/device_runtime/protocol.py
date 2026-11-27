@@ -4,7 +4,7 @@ import hashlib
 import json
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 VERSION = 1
 MAX_MESSAGE_BYTES = 8 * 1_048_576
@@ -96,6 +96,12 @@ class ReadArgs(Model):
     direction: Literal["forward", "backward"] = "forward"
 
 
+class _LegacyWireReadArgs(ReadArgs):
+    """Accept v1 wire requests from older centers without changing their digest."""
+
+    max_chars: int = Field(default=10000, ge=1, le=131072)
+
+
 class WriteArgs(Model):
     path: str = Field(min_length=1, max_length=4096)
     content: str = Field(max_length=262144)
@@ -177,8 +183,11 @@ class Operation(Model):
     arguments: dict
 
     @model_validator(mode="after")
-    def normalized(self):
-        args = ARGUMENTS[self.action].model_validate(self.arguments).model_dump()
+    def normalized(self, info: ValidationInfo):
+        args_model = ARGUMENTS[self.action]
+        if self.action == "fs.read_file" and (info.context or {}).get("accept_legacy_wire_read"):
+            args_model = _LegacyWireReadArgs
+        args = args_model.model_validate(self.arguments).model_dump()
         for key, default in EXTENSION_DEFAULTS.get(self.action, {}).items():
             if args[key] == default:
                 del args[key]
@@ -223,6 +232,10 @@ class Execute(Model):
     v: Literal[1]
     type: Literal["execute"]
     operation: Operation
+
+    @classmethod
+    def from_center(cls, message):
+        return cls.model_validate(message, context={"accept_legacy_wire_read": True})
 
 
 class Ack(Model):

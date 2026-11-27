@@ -405,3 +405,30 @@ async def test_live_wait_expiry_preserves_execution(live_server, tmp_path):
         executor.release.set()
         assert (await terminal(http, "op-net"))["state"] == "succeeded"
         assert executor.calls == 1
+
+
+async def test_legacy_oversized_read_fails_without_disconnect(live_server, tmp_path):
+    _, service, http = live_server
+    executor = FakeExecutor()
+    request = payload("legacy-read", "fs.read_file", {"path": "/tmp/unused", "max_chars": 32001})
+    async with running_client(live_server, tmp_path / "client", executor):
+        peer = service.peers["laptop-one"]
+        # The current HTTP admission remains strict. A legacy center already
+        # accepted this normalized request and can send it over the v1 wire.
+        assert (await http.post("/v1/operations", json=request)).status_code == 422
+        legacy = Operation.model_construct(**request)
+        await service.submit(legacy)
+        result = await terminal(http, "legacy-read")
+        assert result["state"] == "failed"
+        assert result["result"]["data"] == {
+            "success": False, "error": "max_chars_exceeds_limit", "max_chars_limit": 32000,
+        }
+        assert executor.calls == 0
+        assert service.peers["laptop-one"] is peer
+        assert (await service.submit(legacy))["state"] == "failed"
+
+        accepted = payload("read-at-limit", "fs.read_file", {"path": "/tmp/unused", "max_chars": 32000})
+        assert (await http.post("/v1/operations", json=accepted)).status_code == 200
+        assert (await terminal(http, "read-at-limit"))["state"] == "succeeded"
+        assert executor.calls == 1
+        assert service.peers["laptop-one"] is peer

@@ -13,7 +13,16 @@ from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 from .journal import Conflict, Journal
 from .limits import DEFAULT_CONCURRENCY, positive_limit
-from .protocol import MAX_MESSAGE_BYTES, Ack, Execute, Identifier, Operation, Report, canonical
+from .protocol import (
+    MAX_MESSAGE_BYTES,
+    MAX_READ_CHARS,
+    Ack,
+    Execute,
+    Identifier,
+    Operation,
+    Report,
+    canonical,
+)
 from .system_info import SYSTEM_INFO_HEADER, collect_system_info, system_info_header
 from .version import VERSION_HEADER, version_header
 
@@ -232,6 +241,18 @@ class DeviceClient:
                     "data": {"success": False, "error": "client_maintenance"},
                 }
                 report_record = await self.journal.update(operation.operation_id, "failed", result)
+            elif operation.action == "fs.read_file" and operation.arguments["max_chars"] > MAX_READ_CHARS:
+                # A legacy center can still send this valid v1 envelope. Keep
+                # the original operation identity for idempotency and reject
+                # only this read, without closing the connection.
+                result = {
+                    "location": {"namespace": "device", "device_id": self.device_id},
+                    "data": {
+                        "success": False, "error": "max_chars_exceeds_limit",
+                        "max_chars_limit": MAX_READ_CHARS,
+                    },
+                }
+                report_record = await self.journal.update(operation.operation_id, "failed", result)
             elif sum(
                 getattr(task, "_device_query", False) == (operation.action == "bash.get")
                 for task in self._tasks
@@ -348,7 +369,7 @@ class DeviceClient:
                             async for raw in socket:
                                 message = json.loads(raw)
                                 if message.get("type") == "execute":
-                                    await self._accept(Execute.model_validate(message).operation)
+                                    await self._accept(Execute.from_center(message).operation)
                                 elif message.get("type") == "ack":
                                     ack = Ack.model_validate(message)
                                     await self.journal.confirm(ack.operation_id, ack.state)
