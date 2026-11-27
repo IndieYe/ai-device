@@ -95,10 +95,10 @@ def test_overrides_rejected_before_python_or_state_probe(tmp_path, state):
 
     systemctl = tmp_path / "systemctl"
     systemctl.write_text(
-        '#!/bin/sh\ncase "$*" in\n'
-        "*FragmentPath*) echo /etc/systemd/system/ai-device-client.service ;;\n"
-        "*DropInPaths*) echo /etc/systemd/system/ai-device-client.service.d/test.conf ;;\n"
-        f"*ActiveState*) echo {state}; exit 77 ;;\n"
+        '#!/bin/sh\ncase "$*" in\n*--value*) exit 79 ;;\n'
+        "*FragmentPath*) echo FragmentPath=/etc/systemd/system/ai-device-client.service ;;\n"
+        "*DropInPaths*) echo DropInPaths=/etc/systemd/system/ai-device-client.service.d/test.conf ;;\n"
+        f"*ActiveState*) echo ActiveState={state}; exit 77 ;;\n"
         "*) exit 78 ;;\nesac\n"
     )
     systemctl.chmod(0o755)
@@ -223,23 +223,22 @@ def test_declared_glibc_floor_matches_the_runtime_requirement():
 def _run_stop(tmp_path, cgroup_root, group="/system.slice/client.service", state="failed"):
     """Execute the generated cgroup guard against a synthetic hierarchy.
 
-    Only the cgroup section runs: the rest needs systemd. The script fragment is
+    Only the property reader and cgroup section run. The script fragment is
     extracted from STOP so the test exercises the shipped text, not a copy.
     """
     start = module.STOP.index("# Check descendants too")
     fragment = module.STOP[start:]
+    reader = module.STOP.split("read_property()", 1)[1].split("\nfragment=", 1)[0]
     harness = (
         "set -eu\n"
         "unit=ai-device-client.service\n"
-        f"systemctl() {{ printf '%s\\n' '{group}'; }}\n"
-        + fragment
+        f"systemctl() {{ printf '%s\\n' 'ControlGroup={group}'; }}\n"
+        f"read_property(){reader}\n" + fragment
     )
     script = tmp_path / "guard.sh"
     script.write_text(harness)
     env = {"PATH": "/usr/bin:/bin", "AI_DEVICE_CGROUP_ROOT": str(cgroup_root)}
-    return subprocess.run(
-        ["sh", str(script)], capture_output=True, text=True, env=env, check=False
-    )
+    return subprocess.run(["sh", str(script)], capture_output=True, text=True, env=env, check=False)
 
 
 def _pseudo_file(path, content):
