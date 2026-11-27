@@ -10,6 +10,7 @@ VERSION = 1
 MAX_MESSAGE_BYTES = 8 * 1_048_576
 MAX_OPERATION_BYTES = 524288
 MAX_IMAGE_BYTES = 5 * 1_048_576
+MAX_READ_CHARS = 32000
 Action = Literal[
     "bash.execute",
     "bash.get",
@@ -88,7 +89,7 @@ class ExecutionGetArgs(Model):
 
 class ReadArgs(Model):
     path: str = Field(min_length=1, max_length=4096)
-    max_chars: int = Field(default=10000, ge=1, le=131072)
+    max_chars: int = Field(default=10000, ge=1, le=MAX_READ_CHARS)
     type: Literal["chars", "lines"] = "chars"
     offset: int = Field(default=0, ge=0)
     limit: int | None = Field(default=None, ge=0)

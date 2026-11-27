@@ -12,7 +12,7 @@ from conftest import running_client
 from pydantic import ValidationError
 
 from device_runtime.executor import LocalExecutor
-from device_runtime.protocol import Operation, canonical
+from device_runtime.protocol import MAX_READ_CHARS, Operation, canonical
 
 
 def operation(action, arguments, operation_id="phase1-one"):
@@ -58,6 +58,11 @@ def test_optional_defaults_preserve_existing_journal_digest(action, args, extens
         ("fs.read_file", {"path": "/tmp/f", "offset": True}),
         ("fs.read_file", {"path": "/tmp/f", "limit": "2"}),
         ("fs.read_file", {"path": "/tmp/f", "direction": "sideways"}),
+        ("fs.read_file", {"path": "/tmp/f", "max_chars": 0}),
+        ("fs.read_file", {"path": "/tmp/f", "max_chars": -1}),
+        ("fs.read_file", {"path": "/tmp/f", "max_chars": True}),
+        ("fs.read_file", {"path": "/tmp/f", "max_chars": "100"}),
+        ("fs.read_file", {"path": "/tmp/f", "max_chars": MAX_READ_CHARS + 1}),
         (
             "fs.edit_file",
             {"path": "/tmp/f", "edits": [{"oldText": "a", "newText": "b"}], "dry_run": "true"},
@@ -72,6 +77,12 @@ def test_optional_defaults_preserve_existing_journal_digest(action, args, extens
 def test_invalid_extension_arguments(action, args):
     with pytest.raises(ValidationError):
         operation(action, args)
+
+
+@pytest.mark.parametrize("max_chars", [1, 10000, MAX_READ_CHARS])
+def test_read_args_accepts_max_chars_inclusive_bounds(max_chars):
+    op = operation("fs.read_file", {"path": "/tmp/f", "max_chars": max_chars})
+    assert op.arguments["max_chars"] == max_chars
 
 
 @pytest.mark.parametrize("stdin", ['中文\nJSON {"a": 1}\n', ""])
@@ -326,6 +337,7 @@ async def test_real_stdio_extensions_and_deduplication(live_server, tmp_path):
             [
                 ("read_file", {"path": str(file), "offset": True}),
                 ("read_file", {"path": str(file), "limit": "1"}),
+                ("read_file", {"path": str(file), "max_chars": MAX_READ_CHARS + 1}),
                 (
                     "edit_file",
                     {

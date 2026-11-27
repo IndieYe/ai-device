@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from device_runtime import __version__
+from device_runtime.protocol import MAX_READ_CHARS
 
 mcp = pytest.importorskip("mcp")
 ClientSession = mcp.ClientSession
@@ -153,3 +154,63 @@ async def test_get_schema_has_execution_id_without_query_id():
     schema = next(tool for tool in tools if tool.name == "get").inputSchema
     assert set(schema["required"]) == {"device_id", "execution_id"}
     assert schema["properties"]["timeout"]["default"] == 0
+
+
+async def test_read_file_advertised_schema_matches_protocol():
+    from device_runtime.mcp_server import create_mcp
+
+    tools = await create_mcp("http://127.0.0.1:1", "isolated-schema-token").list_tools()
+    schema = next(t.inputSchema for t in tools if t.name == "read_file")
+    field = schema["properties"]["max_chars"]
+    assert field["type"] == "integer"
+    assert field["minimum"] == 1
+    assert field["maximum"] == MAX_READ_CHARS
+    assert field["default"] == 10000
+
+
+async def test_stdio_read_file_max_chars_contract(tmp_path):
+    with center() as (port, calls):
+        params = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "device_runtime.mcp_server"],
+            env={
+                "DEVICE_RUNTIME_API_URL": f"http://127.0.0.1:{port}/device-runtime",
+                "DEVICE_RUNTIME_ADMIN_TOKEN": "isolated-stdio-token",
+                "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
+            },
+        )
+        async with (
+            stdio_client(params) as (read, write),
+            ClientSession(read, write) as session,
+        ):
+            await session.initialize()
+            base = {
+                "device_id": "test-device",
+                "path": str(tmp_path / "sample.txt"),
+            }
+            for index, arguments in enumerate(
+                ({}, {"max_chars": 1}, {"max_chars": MAX_READ_CHARS})
+            ):
+                before = len(calls)
+                result = await session.call_tool(
+                    "read_file", {**base, "operation_id": f"read-valid-{index}", **arguments}
+                )
+                assert not result.isError, result.content
+                assert len(calls) == before + 1
+                assert calls[-1]["arguments"]["max_chars"] == arguments.get("max_chars", 10000)
+            for index, arguments in enumerate(
+                (
+                    {"max_chars": 0},
+                    {"max_chars": -1},
+                    {"max_chars": MAX_READ_CHARS + 1},
+                    {"max_chars": 1.5},
+                    {"max_chars": "100"},
+                    {"max_chars": True},
+                )
+            ):
+                before = len(calls)
+                result = await session.call_tool(
+                    "read_file", {**base, "operation_id": f"read-invalid-{index}", **arguments}
+                )
+                assert result.isError
+                assert len(calls) == before

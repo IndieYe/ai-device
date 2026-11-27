@@ -11,7 +11,15 @@ from mcp.types import CallToolResult, ImageContent, TextContent
 from pydantic import Field
 
 from .http_client import DeviceAPI
-from .protocol import MAX_IMAGE_BYTES, Edit, Identifier, ImagePayload, Operation, canonical
+from .protocol import (
+    MAX_IMAGE_BYTES,
+    MAX_READ_CHARS,
+    Edit,
+    Identifier,
+    ImagePayload,
+    Operation,
+    canonical,
+)
 from .version import runtime_version
 
 DevicePath = Annotated[
@@ -194,7 +202,7 @@ def create_mcp(url: str, token: str):
         device_id: Identifier,
         operation_id: Identifier,
         path: DevicePath,
-        max_chars: Annotated[int, Field(strict=True, ge=1, le=131072)] = 10000,
+        max_chars: Annotated[int, Field(strict=True, ge=1, le=MAX_READ_CHARS)] = 10000,
         type: Literal["chars", "lines"] = "chars",
         offset: Annotated[int, Field(strict=True, ge=0)] = 0,
         limit: Annotated[int | None, Field(strict=True, ge=0)] = None,
