@@ -1,0 +1,275 @@
+name: Build Linux client RPM package
+
+# Builds the self-contained ai-device-client RPM for RHEL-family x86_64 hosts
+# (CentOS 7 / Alibaba Cloud Linux / Rocky) from the same runtime tree as the
+# .deb, and — only when explicitly requested — attaches it to the release the
+# .deb workflow already created.
+#
+# Why this is a separate workflow: client-deb.yml owns the release tag. It
+# refuses to run when the tag already exists, so the RPM must never create one.
+# This workflow therefore only appends assets to an existing release.
+#
+# The runtime tree is platform-neutral: every wheel in native/dependency-lock.json
+# is a manylinux_2_17 (glibc 2.17) build, which is exactly the CentOS 7 floor.
+# Only the packaging step differs, so the tree steps are copied verbatim and
+# `rpmbuild` comes from Ubuntu's own `rpm` package (verified to ship it).
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        description: 'Exact reviewed 40-character commit on main'
+        required: true
+        type: string
+      version:
+        description: 'Package version to stamp into the .rpm (must match a published .deb release, e.g. 0.5.7)'
+        required: true
+        type: string
+      publish_release:
+        description: 'Attach the built .rpm to the existing GitHub Release (requires separate authorization)'
+        default: false
+        type: boolean
+permissions:
+  contents: read
+concurrency:
+  group: client-rpm
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.repository == 'IndieYe/ai-device' && github.ref == 'refs/heads/main'
+    # The tree builder refuses any host other than native Linux amd64 or macOS
+    # arm64. ubuntu-latest is amd64, so the Linux layout is the one produced.
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check reviewed commit and version
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: |
+          [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          # The packager enforces the same rules; failing here keeps a bad
+          # version from being discovered only after the whole tree is built.
+          [[ "$PACKAGE_VERSION" =~ ^[0-9][0-9a-z.+~-]*$ ]]
+      - name: Install the RPM packager
+        # Ubuntu's `rpm` binary package ships rpmbuild; no extra repository and
+        # no container is needed. Installing it is a build-host concern only:
+        # the payload is assembled by Python, never compiled here.
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends rpm
+          command -v rpmbuild
+          rpmbuild --version
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.10.9'
+      - name: Stage locked inputs from public sources
+        # Only the repository's own wheels are missing from this stage; the
+        # next step builds them from the checked-out source.
+        run: |
+          uv run --no-sync python packages/device-runtime/scripts/stage-client-inputs.py \
+            --locks packages/device-runtime/native \
+            --output "$RUNNER_TEMP/inputs" | tee "$RUNNER_TEMP/inputs.json"
+      - name: Build the three application wheels
+        run: |
+          uv build --all-packages --wheel --out-dir "$RUNNER_TEMP/inputs/wheels"
+          ls -l "$RUNNER_TEMP/inputs/wheels"
+      - name: Assemble the client tree
+        run: |
+          uv run --no-sync python packages/device-runtime/scripts/build-client-tree.py \
+            --inputs "$RUNNER_TEMP/inputs" \
+            --locks packages/device-runtime/native \
+            --output "$RUNNER_TEMP/client-tree"
+      - name: Package the .rpm
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: |
+          uv run --no-sync python packages/device-runtime/scripts/build-client-rpm.py \
+            --tree "$RUNNER_TEMP/client-tree" \
+            --output "$RUNNER_TEMP/rpm" \
+            --version "$PACKAGE_VERSION"
+      - name: Verify the package before publishing it
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          RPM="$RUNNER_TEMP/rpm/ai-device-client-${PACKAGE_VERSION}-1.x86_64.rpm"
+          test -f "$RPM"
+          # Stamp and architecture are part of the contract: a package built
+          # with the wrong version installs as a downgrade or a no-op upgrade.
+          test "$(rpm -qp --qf '%{VERSION}' "$RPM")" = "$PACKAGE_VERSION"
+          test "$(rpm -qp --qf '%{ARCH}' "$RPM")" = "x86_64"
+          # Declared dependencies must stay the four host packages the spec
+          # names. AutoReqProv is off on purpose: the tree carries its own
+          # shared objects, so discovered sonames would be unsatisfiable.
+          rpm -qp --requires "$RPM" | sort > /tmp/requires.txt
+          cat /tmp/requires.txt
+          if grep -q '^lib' /tmp/requires.txt; then
+            echo "package requires discovered sonames; AutoReqProv must stay off" >&2
+            exit 1
+          fi
+          # Modes must survive a strict umask, and unlike dpkg-deb there is no
+          # shortcut: dump every entry and inspect it. A payload directory at
+          # 0700 still installs cleanly and fails only at run time, when the
+          # service user cannot read its own tree.
+          rpm -qp --qf '[%{FILEMODES:octal} %{FILENAMES}\n]' "$RPM" > /tmp/rpm-entries.txt
+          # rpm prints modes as type+permissions, e.g. 040755 or 0100644. Strip
+          # the leading zeros and split type from the permission bits, so the
+          # check does not depend on how many padding zeros a given rpm emits.
+          awk '{
+            m = $1
+            sub(/^0+/, "", m)
+            t = substr(m, 1, 1)
+            p = substr(m, length(m) - 2)
+            if (t == "4" && p != "755") print $1 " " $2
+          }' /tmp/rpm-entries.txt > /tmp/bad-dirs.txt
+          if [ -s /tmp/bad-dirs.txt ]; then
+            echo "--- directories that are not 0755 ---"
+            cat /tmp/bad-dirs.txt
+            echo "--- end ---"
+            echo "package contains directories that are not 0755" >&2
+            exit 1
+          fi
+          # Files must be readable beyond their owner. ship-as-is applies here
+          # too, so this catches a tree that arrived at 0600 rather than a
+          # packaging step that could have repaired it.
+          awk '{
+            m = $1
+            sub(/^0+/, "", m)
+            t = substr(m, 1, 1)
+            p = substr(m, length(m) - 2)
+            if (t == "1" && (substr(p, 2, 1) !~ /[4567]/ || substr(p, 3, 1) !~ /[4567]/)) print $1 " " $2
+          }' /tmp/rpm-entries.txt > /tmp/unreadable.txt
+          if [ -s /tmp/unreadable.txt ]; then
+            echo "--- files not readable outside their owner ---"
+            cat /tmp/unreadable.txt
+            echo "--- end ---"
+            echo "package contains files the service user may not read" >&2
+            exit 1
+          fi
+          # The two entrypoints are the only files the host is expected to run.
+          awk '($2 == "/usr/bin/ai-device-client" || $2 == "/usr/bin/ai-device-client-register") {
+            m = $1
+            sub(/^0+/, "", m)
+            p = substr(m, length(m) - 2)
+            if (p != "755") print $1 " " $2
+          }' /tmp/rpm-entries.txt > /tmp/bad-entrypoints.txt
+          if [ -s /tmp/bad-entrypoints.txt ]; then
+            echo "--- entrypoints that are not 0755 ---"
+            cat /tmp/bad-entrypoints.txt
+            echo "--- end ---"
+            echo "entrypoints are not executable" >&2
+            exit 1
+          fi
+          # Report the runtime identity the shipped tree really carries, so the
+          # install can be matched later against build_id rather than a guess.
+          "$RUNNER_TEMP/client-tree/runtime/bin/python3" -I -B \
+            -m device_runtime.client_cli --version | tee "$RUNNER_TEMP/identity.json"
+          # Record the digest with a bare filename: the attach-release job runs on
+          # a different machine and unpacks the artifact into release/, so an
+          # absolute runner path here would describe a file that does not exist
+          # there and could only ever be skipped.
+          ( cd "$(dirname "$RPM")" && sha256sum "$(basename "$RPM")" ) \
+            | tee "$RUNNER_TEMP/rpm.sha256"
+          {
+            echo "### ai-device-client ${PACKAGE_VERSION} (RPM)"
+            echo '```'
+            cat "$RUNNER_TEMP/identity.json"
+            cat "$RUNNER_TEMP/rpm.sha256"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Stage the files to be uploaded
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # upload-artifact derives the artifact root from the least common
+          # ancestor of its paths, which would nest the rpm under rpm/ while
+          # leaving the digest file at the root. Stage a flat directory instead
+          # so the downloaded layout is exactly what attach-release expects.
+          mkdir -p "$RUNNER_TEMP/package"
+          cp "$RUNNER_TEMP/rpm/ai-device-client-${PACKAGE_VERSION}-1.x86_64.rpm" \
+             "$RUNNER_TEMP/rpm.sha256" "$RUNNER_TEMP/identity.json" \
+             "$RUNNER_TEMP/package/"
+          ls -l "$RUNNER_TEMP/package"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-rpm-${{ inputs.version }}
+          path: ${{ runner.temp }}/package
+          if-no-files-found: error
+          retention-days: 14
+  attach-release:
+    if: inputs.publish_release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: client-rpm-${{ inputs.version }}
+          path: release/
+      - name: Verify the artifact matches this run
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          RPM="release/ai-device-client-${PACKAGE_VERSION}-1.x86_64.rpm"
+          test -f "$RPM"
+          # The digest recorded by the build job is the reference; recompute it
+          # over what was actually downloaded instead of trusting the filename.
+          # Check from inside release/ because the recorded name is relative to
+          # the artifact root, and do not pass --ignore-missing: a name that does
+          # not match must fail here rather than be silently skipped.
+          ( cd release && sha256sum -c rpm.sha256 )
+          cat release/identity.json
+      - name: Attach the .rpm to the existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_VERSION: ${{ inputs.version }}
+          SOURCE_COMMIT: ${{ inputs.expected_commit }}
+        run: |
+          set -euo pipefail
+          TAG="ai-device-client-v${PACKAGE_VERSION}"
+          ASSET="ai-device-client-${PACKAGE_VERSION}-1.x86_64.rpm"
+          # Query the API directly: this job never checks out the repository, so
+          # `gh release view` has no repository context and exits non-zero with
+          # "not a git repository", which is indistinguishable from a missing
+          # release if the result is not inspected.
+          #
+          # This workflow owns no tag. client-deb.yml refuses to run when the tag
+          # already exists, so creating one here would block the .deb from ever
+          # being published for this version. A missing release is therefore an
+          # error that names the step to run first, not something to paper over.
+          if ! ASSETS="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" \
+              --jq '.assets[].name' 2>/dev/null)"; then
+            echo "release $TAG does not exist; run client-deb.yml with publish_release first, then re-run this workflow" >&2
+            exit 1
+          fi
+          echo "--- assets already on $TAG ---"
+          printf '%s\n' "$ASSETS"
+          echo "--- end ---"
+          # Re-running the same version must not silently replace a published
+          # asset; the version is expected to change when the bytes change.
+          # Checked before uploading, because `gh release upload` overwrites by
+          # default and an upload is not undoable.
+          if printf '%s\n' "$ASSETS" | grep -Fxq "$ASSET"; then
+            echo "$ASSET is already published on $TAG; bump the version instead of overwriting" >&2
+            exit 1
+          fi
+          # No --clobber: the guard above is the only thing standing between a
+          # rerun and a replaced asset, and it must not be silently bypassable.
+          gh release upload "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            "release/${ASSET}" \
+            "release/rpm.sha256"
+          # Report the digest that was actually attached, taken from the release
+          # itself rather than from the file we uploaded.
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" \
+            --jq ".assets[] | select(.name == \"${ASSET}\") | .digest // \"no digest reported\"" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
