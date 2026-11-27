@@ -9,10 +9,9 @@ name: Build Linux client RPM package
 # refuses to run when the tag already exists, so the RPM must never create one.
 # This workflow therefore only appends assets to an existing release.
 #
-# The runtime tree is platform-neutral: every wheel in native/dependency-lock.json
-# is a manylinux_2_17 (glibc 2.17) build, which is exactly the CentOS 7 floor.
-# Only the packaging step differs, so the tree steps are copied verbatim and
-# `rpmbuild` comes from Ubuntu's own `rpm` package (verified to ship it).
+# Assemble the locked Linux runtime on Ubuntu, but package it with CentOS 7's
+# RPM 4.11. Ubuntu's newer builder emitted LargeFiles and PayloadIsZstd
+# requirements that CentOS 7 rejected even though the package digest was valid.
 on:
   workflow_dispatch:
     inputs:
@@ -54,16 +53,11 @@ jobs:
           # The packager enforces the same rules; failing here keeps a bad
           # version from being discovered only after the whole tree is built.
           [[ "$PACKAGE_VERSION" =~ ^[0-9][0-9a-z.+~-]*$ ]]
-      - name: Install the RPM packager
-        # Ubuntu's `rpm` binary package ships rpmbuild; no extra repository and
-        # no container is needed. Installing it is a build-host concern only:
-        # the payload is assembled by Python, never compiled here.
+      - name: Install the RPM inspection tool
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends rpm
-          command -v rpmbuild
-          rpmbuild --version
       - uses: astral-sh/setup-uv@v6
         with:
           version: '0.10.9'
@@ -84,14 +78,51 @@ jobs:
             --inputs "$RUNNER_TEMP/inputs" \
             --locks packages/device-runtime/native \
             --output "$RUNNER_TEMP/client-tree"
-      - name: Package the .rpm
+      - name: Build and smoke-test the RPM on CentOS 7
         env:
           PACKAGE_VERSION: ${{ inputs.version }}
+          # Same CentOS 7-based image used by build-centos7-dependencies.sh.
+          CENTOS7_IMAGE: quay.io/pypa/manylinux2014_x86_64@sha256:f6a6f153c9cf45470507ebbc27013e5db14ce21331b62fd2c540561f25e5f0a5
         run: |
-          uv run --no-sync python packages/device-runtime/scripts/build-client-rpm.py \
-            --tree "$RUNNER_TEMP/client-tree" \
-            --output "$RUNNER_TEMP/rpm" \
-            --version "$PACKAGE_VERSION"
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/rpm"
+          docker run --rm -i --platform linux/amd64 \
+            --env PACKAGE_VERSION \
+            --mount "type=bind,source=$PWD/packages/device-runtime/scripts,target=/scripts,readonly" \
+            --mount "type=bind,source=$RUNNER_TEMP/client-tree,target=/client-tree,readonly" \
+            --mount "type=bind,source=$RUNNER_TEMP/rpm,target=/output" \
+            "$CENTOS7_IMAGE" bash -se <<'CENTOS7'
+          set -euo pipefail
+          # CentOS 7 is EOL. Use the archived, GPG-checked 7.9 repositories only.
+          cat >/tmp/c7-yum.conf <<'YUM'
+          [main]
+          reposdir=/dev/null
+          plugins=0
+          gpgcheck=1
+          [c7-base]
+          name=CentOS 7.9 Base Archive
+          baseurl=https://linuxsoft.cern.ch/centos-vault/7.9.2009/os/x86_64/
+          gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
+          [c7-updates]
+          name=CentOS 7.9 Updates Archive
+          baseurl=https://linuxsoft.cern.ch/centos-vault/7.9.2009/updates/x86_64/
+          gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
+          YUM
+          yum -c /tmp/c7-yum.conf -y install rpm-build systemd ca-certificates util-linux
+          umask 022
+          test "$(getconf GNU_LIBC_VERSION)" = 'glibc 2.17'
+          test "$(rpm --version)" = 'RPM version 4.11.3'
+          /opt/python/cp313-cp313/bin/python -B /scripts/build-client-rpm.py \
+            --tree /client-tree --output /output --version "$PACKAGE_VERSION"
+          rpm_file="/output/ai-device-client-${PACKAGE_VERSION}-1.x86_64.rpm"
+          rpm -ivh --test "$rpm_file"
+          # RPM can exit zero even when %post fails. Assert its first-install
+          # message and run the installed entrypoint; no service is configured.
+          rpm -ivh "$rpm_file" 2>&1 | tee /tmp/client-install.log
+          grep -Fx 'installed; configuration and service registration required' /tmp/client-install.log
+          test "$(rpm -q --qf '%{VERSION}-%{RELEASE}.%{ARCH}' ai-device-client)" = "${PACKAGE_VERSION}-1.x86_64"
+          /usr/bin/ai-device-client --version
+          CENTOS7
       - name: Verify the package before publishing it
         env:
           PACKAGE_VERSION: ${{ inputs.version }}

@@ -58,15 +58,31 @@ def test_builds_on_amd64_for_the_linux_layout(workflow):
     assert any("build-client-rpm.py" in r for r in runs)
 
 
-def test_the_rpm_packager_is_installed_before_it_is_used(workflow):
+def test_centos7_transaction_must_pass_before_upload(workflow):
     steps = _steps(workflow, "build")
-    install = _named(workflow, "build", "Install the RPM packager")
-    package = _named(workflow, "build", "Package the .rpm")
-    # Ubuntu's `rpm` binary package ships rpmbuild; pinning the install makes a
-    # silent "command not found" impossible to mistake for a packaging failure.
-    assert "apt-get install -y --no-install-recommends rpm" in install["run"]
-    assert "command -v rpmbuild" in install["run"]
-    assert steps.index(install) < steps.index(package)
+    package = _named(workflow, "build", "Build and smoke-test the RPM on CentOS 7")
+    verify = _named(workflow, "build", "Verify the package before publishing it")
+    assert "/manylinux2014_x86_64@sha256:" in package["env"]["CENTOS7_IMAGE"]
+    host, container = package["run"].split("<<'CENTOS7'\n", 1)
+    assert '"$CENTOS7_IMAGE" bash -se' in host
+    assert "--platform linux/amd64" in host
+    assert "build-client-rpm.py" not in host
+    script = container.rsplit("\nCENTOS7\n", 1)[0]
+    subprocess.run(["bash", "-n"], input=script, text=True, check=True)
+    required = [
+        "set -euo pipefail",
+        "install rpm-build systemd ca-certificates util-linux",
+        "RPM version 4.11.3",
+        "build-client-rpm.py",
+        'rpm -ivh --test "$rpm_file"',
+        'rpm -ivh "$rpm_file"',
+        "grep -Fx 'installed; configuration and service registration required'",
+        "/usr/bin/ai-device-client --version",
+    ]
+    positions = [script.index(command) for command in required]
+    assert positions == sorted(positions)
+    assert "--nodeps" not in script and "--noscripts" not in script
+    assert steps.index(package) < steps.index(verify)
 
 
 def test_source_gate_precedes_every_build_step(workflow):
