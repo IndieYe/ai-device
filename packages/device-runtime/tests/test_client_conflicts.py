@@ -6,6 +6,37 @@ import pytest
 from device_runtime import client_conflicts as m
 
 
+@pytest.mark.parametrize("pid", [0, 1234])
+def test_service_pid_reads_key_value_without_systemctl_value_option(monkeypatch, pid):
+    def systemctl(argv, **kwargs):
+        assert argv == ["systemctl", "show", "ai-device-client.service", "--property=MainPID"]
+        return SimpleNamespace(returncode=0, stdout=f"MainPID={pid}\n")
+
+    monkeypatch.setattr(m.subprocess, "run", systemctl)
+    assert m._service_pid() == pid
+
+
+@pytest.mark.parametrize(
+    "returncode,stdout",
+    [
+        (1, "MainPID=0\n"),
+        (0, ""),
+        (0, "0\n"),
+        (0, "MainPID=-1\n"),
+        (0, "MainPID=0\nMainPID=1234\n"),
+        (0, "ControlPID=0\n"),
+    ],
+)
+def test_service_pid_refuses_unreliable_systemctl_output(monkeypatch, returncode, stdout):
+    monkeypatch.setattr(
+        m.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=returncode, stdout=stdout),
+    )
+    with pytest.raises(m.ClientConflict, match="service identity inspection failed"):
+        m._service_pid()
+
+
 @pytest.fixture
 def discovery(tmp_path, monkeypatch):
     home = tmp_path / "home"

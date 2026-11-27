@@ -70,16 +70,18 @@ def _unit_client(text):
 
 
 def _service_pid():
+    # CentOS 7 ships systemd 219, which reports MainPID=<pid> but lacks --value.
     result = subprocess.run(
-        ["systemctl", "show", "ai-device-client.service", "--property=MainPID", "--value"],
+        ["systemctl", "show", "ai-device-client.service", "--property=MainPID"],
         capture_output=True,
         text=True,
         timeout=15,
         check=False,
     )
-    if result.returncode or not result.stdout.strip().isdigit():
+    match = re.fullmatch(r"MainPID=([0-9]+)", result.stdout.rstrip("\n"))
+    if result.returncode or match is None:
         raise ClientConflict("client service identity inspection failed")
-    return int(result.stdout.strip())
+    return int(match[1])
 
 
 def check_conflicts():
