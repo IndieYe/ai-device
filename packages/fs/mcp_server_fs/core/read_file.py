@@ -5,7 +5,7 @@ from __future__ import annotations
 import builtins
 from typing import Literal
 
-from ..defaults import DEFAULT_MAX_CHARS
+from ..defaults import DEFAULT_MAX_CHARS, HARD_MAX_CHARS
 from ..formatting import format_size
 from ..path_utils import validate_path
 from ..responses import build_action_summary
@@ -29,7 +29,7 @@ def read_file(
         offset: 起始位置，默认 0；单位随 type 变化（字符/行号，从0开始）
         limit: 读取数量，默认 None 表示读取到末尾；单位随 type 变化（字符数/行数）
         direction: 读取方向，默认 "forward"；可选 "forward"(从前往后), "backward"(从后往前)
-        max_chars: 返回内容的最大字符数限制（默认 10000）
+        max_chars: 返回内容的最大字符数限制（默认 10000，范围 1-32000）
 
     Returns:
         JSON格式的结果，包含文件内容和元数据
@@ -50,6 +50,10 @@ def read_file(
     try:
         if offset < 0 or (limit is not None and limit < 0):
             raise ValueError("offset and limit must be non-negative")
+        if isinstance(max_chars, bool) or not isinstance(max_chars, int):
+            raise ValueError("max_chars must be an integer")
+        if max_chars < 1 or max_chars > HARD_MAX_CHARS:
+            raise ValueError(f"max_chars must be between 1 and {HARD_MAX_CHARS}")
         file_path = validate_path(path)
         if not file_path.exists():
             return FileResult(

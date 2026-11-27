@@ -3,6 +3,7 @@
 import pytest
 
 from mcp_server_fs.core import read_file
+from mcp_server_fs.defaults import HARD_MAX_CHARS
 
 
 @pytest.mark.parametrize("type", ["chars", "lines"])
@@ -46,3 +47,29 @@ def test_negative_ranges_fail(tmp_path, args):
     file = tmp_path / "range.txt"
     file.write_text("abc")
     assert read_file(str(file), **args).data["error"] == "ValueError"
+
+
+@pytest.mark.parametrize(
+    "max_chars",
+    [0, -1, True, False, 1.5, "100", HARD_MAX_CHARS + 1],
+)
+def test_invalid_max_chars_fails_before_reading(tmp_path, max_chars):
+    missing = tmp_path / "does-not-exist.txt"
+    result = read_file(str(missing), max_chars=max_chars).data
+    assert result["error"] == "ValueError"
+    assert "max_chars" in result["message"]
+
+
+def test_max_chars_accepts_inclusive_bounds(tmp_path):
+    file = tmp_path / "bounds.txt"
+    file.write_text("a" * (HARD_MAX_CHARS + 10), encoding="utf-8")
+
+    one_char = read_file(str(file), max_chars=1).data
+    assert one_char["content"] == "a"
+    assert one_char["truncated"] is True
+    assert one_char["returned_chars"] == 1
+
+    at_limit = read_file(str(file), max_chars=HARD_MAX_CHARS).data
+    assert len(at_limit["content"]) == HARD_MAX_CHARS
+    assert at_limit["truncated"] is True
+    assert at_limit["returned_chars"] == HARD_MAX_CHARS

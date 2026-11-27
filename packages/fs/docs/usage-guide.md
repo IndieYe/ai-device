@@ -34,7 +34,7 @@ description: 指导如何高效、安全地使用 Filesystem MCP 的 fs 工具�
 
 ### 额外说明
 
-- `read_file.type` 可选：`chars` / `lines`
+- `read_file.type` 可选：`chars` / `lines`；`max_chars` 默认 10000，硬上限 32000（范围 1-32000）
 - `insert_file` 的 `line` / `before` / `after` / `at_end` 必须四选一
 - `insert_file.after` 是“插在匹配字符串之后”，不会自动跨过原有换行；如果想插到下一行，把换行包含进 `after`，或改用 `line` / `before`
 - `edit_file` 按 `oldText -> newText` 顺序逐条替换，每条只应用一次；`oldText` 应覆盖足以唯一确定目标的完整局部片段

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 
 from fastmcp import FastMCP
 from fastmcp.tools.tool import ToolResult
+from pydantic import Field
 
 from .. import core
-from ..defaults import DEFAULT_MAX_CHARS
+from ..defaults import DEFAULT_MAX_CHARS, HARD_MAX_CHARS
 from .cancellable import register_cancellable_tool
 from .results import to_tool_result
 
@@ -19,7 +20,9 @@ def read_file(
     offset: int = 0,
     limit: Optional[int] = None,
     direction: Literal["forward", "backward"] = "forward",
-    max_chars: int = DEFAULT_MAX_CHARS,
+    max_chars: Annotated[
+        int, Field(strict=True, ge=1, le=HARD_MAX_CHARS)
+    ] = DEFAULT_MAX_CHARS,
 ) -> ToolResult:
     """
     读取文本文件内容
@@ -30,7 +33,7 @@ def read_file(
         offset: 起始位置，默认 0；单位随 type 变化（字符/行号，从0开始）
         limit: 读取数量，默认 None 表示读取到末尾；单位随 type 变化（字符数/行数）
         direction: 读取方向，默认 "forward"；可选 "forward"(从前往后), "backward"(从后往前)
-        max_chars: 返回内容的最大字符数限制（默认 10000）
+        max_chars: 返回内容的最大字符数限制（默认 10000，范围 1-32000）
 
     Returns:
         JSON格式的结果，包含文件内容和元数据
