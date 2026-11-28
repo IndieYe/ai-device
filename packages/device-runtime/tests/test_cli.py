@@ -5,9 +5,7 @@ import sys
 import pytest
 
 
-@pytest.mark.parametrize(
-    "mode", [[], ["client"], ["server"], ["bundle"], ["bundle", "build"], ["bundle", "inspect"]]
-)
+@pytest.mark.parametrize("mode", [[], ["client"], ["server"], ["ops"]])
 def test_cli_help(mode):
     result = subprocess.run(
         [sys.executable, "-m", "device_runtime.cli", *mode, "--help"],

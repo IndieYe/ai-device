@@ -99,52 +99,6 @@ def no_wildcard(version):
     return "*" not in version
 
 
-def test_declared_state_format_is_audited():
-    """Persistent-state compatibility is audited per format, not per version.
-
-    Bumping ``__version__`` says nothing about whether the bytes on disk still
-    parse, so auditing version numbers made this check meaningless in both
-    directions: it demanded a fresh human review for releases that changed
-    nothing persistent, and it went stale the moment nobody remembered to add
-    an entry. The thing that actually breaks an upgrade is a change of data
-    format, so that is what requires an entry here.
-
-    This test does not register anything; it fails when a new format was
-    introduced without being confirmed.
-    """
-    from device_runtime.bundle import STATE_FORMAT
-    from device_runtime.lifecycle import AUDITED_STATE_FORMATS
-
-    assert STATE_FORMAT in AUDITED_STATE_FORMATS, (
-        f"state format {STATE_FORMAT} has no AUDITED_STATE_FORMATS entry; "
-        "validate its persistent data contract and add it explicitly"
-    )
-
-
-def test_state_format_is_not_hardcoded_outside_its_definition():
-    """One definition, so a format bump cannot half-apply.
-
-    ``state_format`` is written into release manifests, instance bindings and
-    backup files, and compared when reading them back. Literal copies of the
-    number compile fine and would let a bump update some sites and not others,
-    producing artifacts that disagree about the format they record.
-    """
-    package = ROOT / "packages/device-runtime/src/device_runtime"
-    owners = {"bundle.py"}
-    offenders = []
-    pattern = re.compile(r'"state_format":\s*\d+|\["state_format"\]\s*!=\s*\d+')
-    for path in sorted(package.glob("*.py")):
-        if path.name in owners:
-            continue
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if pattern.search(line):
-                offenders.append(f"{path.name}:{number}: {line.strip()}")
-    assert not offenders, (
-        "state_format must reference STATE_FORMAT from bundle.py, not a literal: "
-        f"{offenders}"
-    )
-
-
 def test_release_scripts_do_not_hardcode_the_device_version():
     """Guards the fix that removes duplicate version literals from tooling.
 

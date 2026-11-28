@@ -63,15 +63,9 @@ def validate_candidate(root):
         set(delivery["minimal_roles"]) != {"client", "center", "mcp", "ops"}
         or set(delivery["lifecycle"])
         != {
-            "install_and_inspect",
-            "stable_runner_center_http",
-            "stable_runner_client_and_mcp",
-            "running_lease_rejected",
-            "prepare_activate_rebuild",
-            "rollback_backup_restore",
-            "invalid_release_keeps_active",
-            "linux_target_role_rejected",
-            "tampered_wheel_keeps_active",
+            "center_http",
+            "client_connected",
+            "mcp_list_devices",
         }
         or not all(v is True for v in delivery["lifecycle"].values())
     ):

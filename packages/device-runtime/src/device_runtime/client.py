@@ -87,16 +87,12 @@ class DeviceClient:
         self._initialized = False
         self._failure = None
         self._loaded_release = None
-        active_path = self.state_dir.parent.parent / "active.json"
-        if active_path.is_file():
-            self._loaded_release = json.loads(active_path.read_text()).get("release")
+        self._loaded_release = None
         self._maintenance_id = None
         self._maintenance_exit_callback = None
         self._maintenance_exit_committed = False
         self._maintenance_server = None
-        self._maintenance_enabled = (
-            maintenance or (self.state_dir.parent.parent / "upgrade-profile.json").is_file()
-        )
+        self._maintenance_enabled = bool(maintenance)
 
     async def _send(self, message):
         async with self._send_lock:

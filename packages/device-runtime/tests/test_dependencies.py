@@ -5,9 +5,7 @@ import json
 from zipfile import ZipFile
 
 import pytest
-from test_bundle import artifacts as artifacts  # noqa: PLC0414
 
-from device_runtime.bundle import BundleError, build_bundle, inspect_bundle
 from device_runtime.dependencies import (
     DARWIN_TARGET,
     TARGET,
@@ -72,21 +70,6 @@ def test_reject_incomplete_or_wrong_set(tmp_path, change):
     (directory / "manifest.json").write_text(json.dumps(manifest))
     with pytest.raises(ValueError):
         inspect_dependencies(directory, pins)
-
-
-def test_v3_bundle_snapshot_and_legacy(tmp_path, artifacts):
-    dependencies = tmp_path / "dependencies"
-    dependency_set(dependencies, {"pydantic": "2.13.5", "websockets": "17.2"})
-    output = tmp_path / "v3"
-    manifest = build_bundle(output, **artifacts, target_system="linux", dependency_dir=dependencies)
-    assert manifest["format_version"] == 3
-    assert inspect_bundle(output) == manifest
-    (output / "dependencies" / "manifest.json").write_text("{}")
-    with pytest.raises(BundleError):
-        inspect_bundle(output)
-    legacy = build_bundle(tmp_path / "v2", **artifacts, target_system="linux")
-    assert legacy["format_version"] == 2
-    assert inspect_bundle(tmp_path / "v2") == legacy
 
 
 @pytest.mark.parametrize(
@@ -271,36 +254,3 @@ def test_darwin_accepts_abi3_wheel(tmp_path):
     old.rename(directory / entry["path"])
     (directory / "manifest.json").write_text(json.dumps(manifest))
     assert inspect_dependencies(directory, pins) == manifest
-
-
-def test_darwin_bundle_accepts_local_dependency_set(tmp_path, artifacts):
-    dependencies = tmp_path / "dependencies"
-    manifest = dependency_set(dependencies, {"pydantic": "2.13.5", "websockets": "17.2"})
-    manifest["target"] = DARWIN_TARGET
-    (dependencies / "manifest.json").write_text(json.dumps(manifest))
-    library = build_bundle(
-        tmp_path / "darwin-v3", **artifacts, target_system="darwin", dependency_dir=dependencies
-    )
-    assert library["format_version"] == 3
-    assert library["target"]["system"] == "darwin"
-    assert inspect_bundle(tmp_path / "darwin-v3") == library
-
-
-def test_darwin_bundle_rejects_linux_dependency_set(tmp_path, artifacts):
-    dependencies = tmp_path / "dependencies"
-    dependency_set(dependencies, {"pydantic": "2.13.5", "websockets": "17.2"})
-    with pytest.raises(BundleError, match="must match the bundle target system"):
-        build_bundle(
-            tmp_path / "mixed", **artifacts, target_system="darwin", dependency_dir=dependencies
-        )
-
-
-def test_linux_bundle_rejects_darwin_dependency_set(tmp_path, artifacts):
-    dependencies = tmp_path / "dependencies"
-    manifest = dependency_set(dependencies, {"pydantic": "2.13.5", "websockets": "17.2"})
-    manifest["target"] = DARWIN_TARGET
-    (dependencies / "manifest.json").write_text(json.dumps(manifest))
-    with pytest.raises(BundleError, match="must match the bundle target system"):
-        build_bundle(
-            tmp_path / "mixed", **artifacts, target_system="linux", dependency_dir=dependencies
-        )

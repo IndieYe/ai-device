@@ -36,15 +36,9 @@ def candidate(tmp_path):
         "minimal_roles": {key: {} for key in ["client", "center", "mcp", "ops"]},
         "lifecycle": dict.fromkeys(
             [
-                "install_and_inspect",
-                "stable_runner_center_http",
-                "stable_runner_client_and_mcp",
-                "running_lease_rejected",
-                "prepare_activate_rebuild",
-                "rollback_backup_restore",
-                "invalid_release_keeps_active",
-                "linux_target_role_rejected",
-                "tampered_wheel_keeps_active",
+                "center_http",
+                "client_connected",
+                "mcp_list_devices",
             ],
             True,
         ),

@@ -15,9 +15,6 @@ def main():
 
         return client_main(sys.argv[2:])
 
-    from .bundle import BundleError, add_bundle_parser, run_bundle
-    from .installation import InstallationError, add_instance_parser, run_instance
-
     if sys.argv[1:2] == ["ops"]:
         from .operations_cli import main as operations_main
 
@@ -38,21 +35,9 @@ def main():
     server.add_argument("--admin-token-env", default="DEVICE_RUNTIME_ADMIN_TOKEN")
     server.add_argument("--device-tokens-env", default="DEVICE_RUNTIME_DEVICE_TOKENS")
     modes.add_parser("ops", help="Device operations (device-runtime ops --help)")
-    add_bundle_parser(modes)
-    from . import upgrader
-
-    upgrader.add_parser(modes)
-    add_instance_parser(modes)
     args = parser.parse_args()
     try:
-        if args.mode == "upgrade":
-            upgrader.run(args)
-            return
-        if args.mode == "bundle":
-            run_bundle(args)
-        elif args.mode == "instance":
-            run_instance(args)
-        elif args.mode == "client":
+        if args.mode == "client":
             from .client_cli import run
 
             run(args)
@@ -76,10 +61,6 @@ def main():
             uvicorn.run(
                 app, host=args.host, port=args.port, ws_max_size=MAX_MESSAGE_BYTES, access_log=False
             )
-    except InstallationError as exc:
-        parser.exit(2, f"device-runtime instance: {exc}\n")
-    except BundleError as exc:
-        parser.exit(2, f"device-runtime bundle: {exc}\n")
     except KeyboardInterrupt:
         pass
     except (ValueError, RuntimeError, ImportError, OSError) as exc:
@@ -87,7 +68,7 @@ def main():
         parser.exit(
             2,
             f"device-runtime: {type(exc).__name__}: configuration or runtime unavailable; "
-            "see installation and state-directory requirements\n",
+            "see configuration and state-directory requirements\n",
         )
 
 
