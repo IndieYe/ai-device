@@ -1,0 +1,433 @@
+name: Build macOS client PKG package
+# Builds a self-contained ai-device-client .pkg for macOS Apple Silicon (arm64),
+# optionally signs and notarises it using repository secrets, and — only when
+# explicitly requested — attaches the signed, notarised package to the GitHub
+# Release created by client-deb.yml.
+#
+# Like client-rpm.yml, this workflow never creates a release tag. An unsigned
+# package is permitted only for non-publishing dry runs (`publish_release=false`
+# and `sign_and_notarize=false`) and is refused both at build time and in the
+# release job if `publish_release=true`.
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        description: 'Exact reviewed 40-character commit on main'
+        required: true
+        type: string
+      version:
+        description: 'Package version to stamp into the .pkg (1-4 numeric components matching the published .deb release, e.g. 0.5.9)'
+        required: true
+        type: string
+      sign_and_notarize:
+        description: 'Sign with Developer ID Application/Installer certificates and notarize with Apple (required when publish_release is true)'
+        default: true
+        type: boolean
+      publish_release:
+        description: 'Attach the signed, notarized .pkg to the existing GitHub Release (requires separate authorization)'
+        default: false
+        type: boolean
+permissions:
+  contents: read
+concurrency:
+  group: client-pkg
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.repository == 'IndieYe/ai-device' && github.ref == 'refs/heads/main'
+    # The PKG builder refuses any host other than native macOS arm64.
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check reviewed commit, architecture, version and release gates
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          PACKAGE_VERSION: ${{ inputs.version }}
+          SIGN_AND_NOTARIZE: ${{ inputs.sign_and_notarize }}
+          PUBLISH_RELEASE: ${{ inputs.publish_release }}
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = "Darwin"
+          test "$(uname -m)" = "arm64"
+          [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          # build-client-pkg.py enforces 1-4 numeric dot-separated components.
+          [[ "$PACKAGE_VERSION" =~ ^[0-9]+(\.[0-9]+){0,3}$ ]]
+          if [ "$PUBLISH_RELEASE" = "true" ] && [ "$SIGN_AND_NOTARIZE" != "true" ]; then
+            echo "publish_release=true requires sign_and_notarize=true; refusing to publish an unsigned .pkg" >&2
+            exit 1
+          fi
+      - name: Import Apple signing certificates and notary credentials
+        if: inputs.sign_and_notarize
+        env:
+          MACOS_SIGNING_P12_BASE64: ${{ secrets.MACOS_SIGNING_P12_BASE64 }}
+          MACOS_SIGNING_P12_PASSWORD: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
+          MACOS_NOTARY_KEY_P8_BASE64: ${{ secrets.MACOS_NOTARY_KEY_P8_BASE64 }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          missing=""
+          for name in \
+            MACOS_SIGNING_P12_BASE64 \
+            MACOS_SIGNING_P12_PASSWORD \
+            MACOS_NOTARY_KEY_P8_BASE64 \
+            MACOS_NOTARY_KEY_ID \
+            MACOS_NOTARY_ISSUER_ID
+          do
+            if [ -z "${!name:-}" ]; then
+              missing="${missing:+$missing }$name"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            printf 'missing required signing/notary secrets: %s\n' "$missing" >&2
+            exit 1
+          fi
+
+          SIGN_DIR="$RUNNER_TEMP/signing"
+          rm -rf "$SIGN_DIR"
+          mkdir -p "$SIGN_DIR"
+          chmod 700 "$SIGN_DIR"
+
+          KEYCHAIN="$SIGN_DIR/signing.keychain-db"
+          P12_FILE="$SIGN_DIR/certs.p12"
+          P8_FILE="$SIGN_DIR/notary.p8"
+          NOTARY_PROFILE="ai-device-ci-notary"
+          KC_PASS="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+
+          python3 - "$P12_FILE" "$P8_FILE" <<'PY'
+          import base64
+          import os
+          import sys
+          from pathlib import Path
+
+          def decode_env(var_name: str, dest: Path) -> None:
+              raw = base64.b64decode("".join(os.environ[var_name].split()), validate=True)
+              dest.write_bytes(raw)
+              os.chmod(dest, 0o600)
+
+          decode_env("MACOS_SIGNING_P12_BASE64", Path(sys.argv[1]))
+          decode_env("MACOS_NOTARY_KEY_P8_BASE64", Path(sys.argv[2]))
+          PY
+
+          security create-keychain -p "$KC_PASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KC_PASS" "$KEYCHAIN"
+          security import "$P12_FILE" \
+            -k "$KEYCHAIN" \
+            -P "$MACOS_SIGNING_P12_PASSWORD" \
+            -f pkcs12 \
+            -T /usr/bin/codesign \
+            -T /usr/bin/productsign \
+            -T /usr/bin/security
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KC_PASS" "$KEYCHAIN" >/dev/null
+
+          # Prepend the ephemeral keychain to the user search list and make it
+          # default so codesign, security, and productsign all resolve from it.
+          python3 - "$KEYCHAIN" <<'PY'
+          import subprocess
+          import sys
+
+          keychain = sys.argv[1]
+          listed = subprocess.run(
+              ["/usr/bin/security", "list-keychains", "-d", "user"],
+              check=True,
+              capture_output=True,
+              text=True,
+          ).stdout
+          existing = [
+              line.strip().strip('"')
+              for line in listed.splitlines()
+              if line.strip().strip('"') and line.strip().strip('"') != keychain
+          ]
+          subprocess.run(
+              ["/usr/bin/security", "list-keychains", "-d", "user", "-s", keychain, *existing],
+              check=True,
+          )
+          subprocess.run(
+              ["/usr/bin/security", "default-keychain", "-d", "user", "-s", keychain],
+              check=True,
+          )
+          PY
+
+          # Resolve the exact Application and Installer identities from the
+          # ephemeral keychain rather than asking operators to hand-copy strings.
+          python3 - "$KEYCHAIN" "$GITHUB_ENV" <<'PY'
+          import re
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          keychain = sys.argv[1]
+          env_file = Path(sys.argv[2])
+
+          def find_unique(policy: str, prefix: str) -> str:
+              proc = subprocess.run(
+                  ["/usr/bin/security", "find-identity", "-v", "-p", policy, keychain],
+                  check=False,
+                  capture_output=True,
+                  text=True,
+              )
+              names = sorted({
+                  match.group(1)
+                  for match in re.finditer(r'"([^"]+)"', proc.stdout or "")
+                  if match.group(1).startswith(prefix)
+              })
+              if len(names) != 1:
+                  raise SystemExit(
+                      f"expected exactly 1 valid {prefix!r} identity in ephemeral keychain, "
+                      f"found {len(names)}: {names!r}\n"
+                      f"security find-identity output:\n{proc.stdout}{proc.stderr}"
+                  )
+              return names[0]
+
+          app_id = find_unique("codesigning", "Developer ID Application:")
+          inst_id = find_unique("basic", "Developer ID Installer:")
+          with env_file.open("a", encoding="utf-8") as handle:
+              handle.write(f"SIGN_IDENTITY={app_id}\n")
+              handle.write(f"INSTALLER_IDENTITY={inst_id}\n")
+          print(f"Resolved Application identity: {app_id}")
+          print(f"Resolved Installer identity:   {inst_id}")
+          PY
+
+          # Store and immediately validate the App Store Connect API Key so a
+          # bad key or issuer fails before the build runs.
+          xcrun notarytool store-credentials "$NOTARY_PROFILE" \
+            --key "$P8_FILE" \
+            --key-id "$MACOS_NOTARY_KEY_ID" \
+            --issuer "$MACOS_NOTARY_ISSUER_ID" \
+            --keychain "$KEYCHAIN"
+
+          rm -f "$P12_FILE" "$P8_FILE"
+          {
+            echo "NOTARY_PROFILE=$NOTARY_PROFILE"
+            echo "SIGNING_KEYCHAIN=$KEYCHAIN"
+          } >> "$GITHUB_ENV"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.10.9'
+      - name: Stage locked inputs from public sources
+        run: |
+          set -euo pipefail
+          uv run --no-sync python packages/device-runtime/scripts/stage-client-inputs.py \
+            --locks packages/device-runtime/native \
+            --output "$RUNNER_TEMP/inputs" | tee "$RUNNER_TEMP/inputs.json"
+      - name: Build the three application wheels
+        run: |
+          set -euo pipefail
+          uv build --all-packages --wheel --out-dir "$RUNNER_TEMP/inputs/wheels"
+          ls -l "$RUNNER_TEMP/inputs/wheels"
+      - name: Assemble the client tree
+        run: |
+          set -euo pipefail
+          uv run --no-sync python packages/device-runtime/scripts/build-client-tree.py \
+            --inputs "$RUNNER_TEMP/inputs" \
+            --locks packages/device-runtime/native \
+            --output "$RUNNER_TEMP/client-tree"
+      - name: Package the .pkg
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+          SIGN_AND_NOTARIZE: ${{ inputs.sign_and_notarize }}
+        run: |
+          set -euo pipefail
+          cmd=(
+            uv run --no-sync python packages/device-runtime/scripts/build-client-pkg.py
+            --tree "$RUNNER_TEMP/client-tree"
+            --output "$RUNNER_TEMP/pkg"
+            --version "$PACKAGE_VERSION"
+            --mode shipping
+          )
+          if [ "$SIGN_AND_NOTARIZE" = "true" ]; then
+            cmd+=(
+              --sign-identity "$SIGN_IDENTITY"
+              --installer-identity "$INSTALLER_IDENTITY"
+              --notary-profile "$NOTARY_PROFILE"
+              --notary-keychain "$SIGNING_KEYCHAIN"
+            )
+          fi
+          "${cmd[@]}"
+      - name: Verify the package before publishing it
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+          SIGN_AND_NOTARIZE: ${{ inputs.sign_and_notarize }}
+        run: |
+          set -euo pipefail
+          PKG="$RUNNER_TEMP/pkg/ai-device-client-${PACKAGE_VERSION}-arm64.pkg"
+          test -f "$PKG"
+
+          # Inspect the product archive without installing or executing scripts.
+          EXPANDED="$RUNNER_TEMP/pkg-audit"
+          rm -rf "$EXPANDED"
+          pkgutil --expand "$PKG" "$EXPANDED"
+          python3 - "$EXPANDED/Distribution" "$PACKAGE_VERSION" "$SIGN_AND_NOTARIZE" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          dist_path, expected_version, signed_flag = sys.argv[1], sys.argv[2], sys.argv[3]
+          root = ET.fromstring(Path(dist_path).read_text(encoding="utf-8"))
+          versions = [
+              elem.attrib.get("version")
+              for elem in root.findall("pkg-ref")
+              if "version" in elem.attrib
+          ]
+          if expected_version not in versions:
+              raise SystemExit(
+                  f"expected version {expected_version!r} in Distribution pkg-ref, found {versions!r}"
+              )
+          title = (root.findtext("title") or "").strip()
+          if signed_flag == "true":
+              if "UNSIGNED" in title:
+                  raise SystemExit(f"signed package unexpectedly carries unsigned title: {title!r}")
+          else:
+              if "UNSIGNED" not in title:
+                  raise SystemExit(f"unsigned package must carry UNSIGNED title, got: {title!r}")
+          PY
+
+          if [ "$SIGN_AND_NOTARIZE" = "true" ]; then
+            test ! -e "${PKG}.UNSIGNED.txt"
+            pkgutil --check-signature "$PKG"
+            xcrun stapler validate "$PKG"
+            spctl -a -vvv -t install "$PKG"
+          else
+            test -f "${PKG}.UNSIGNED.txt"
+          fi
+
+          # Record the runtime identity from the staged payload that actually
+          # went into the .pkg (post-signing when signed), not the unsigned
+          # input client-tree.
+          STAGED="$(python3 - "$RUNNER_TEMP/pkg/root/opt" <<'PY'
+          import sys
+          from pathlib import Path
+
+          matches = sorted(
+              p for p in Path(sys.argv[1]).iterdir()
+              if p.is_dir() and p.name.startswith("ai-device-client-stage-")
+          )
+          if len(matches) != 1:
+              raise SystemExit(f"expected exactly 1 staged payload directory, found {len(matches)}: {matches!r}")
+          print(matches[0])
+          PY
+          )"
+          "$STAGED/runtime/bin/python3" -I -B \
+            -m device_runtime.client_cli --version | tee "$RUNNER_TEMP/identity.json"
+
+          if [ "$SIGN_AND_NOTARIZE" = "true" ]; then
+            python3 - "$RUNNER_TEMP/identity.json" "$RUNNER_TEMP/pkg/signing-identity.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          runtime_id = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["build_id"]
+          signing_id = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))["build_id"]
+          if runtime_id != signing_id:
+              raise SystemExit(
+                  f"signed runtime build_id ({runtime_id}) != signing-identity.json ({signing_id})"
+              )
+          PY
+          fi
+
+          # Record the digest with a bare filename in GNU sha256sum-compatible
+          # format so attach-release can verify it on ubuntu-latest.
+          ( cd "$(dirname "$PKG")" && shasum -a 256 "$(basename "$PKG")" ) \
+            | tee "$RUNNER_TEMP/pkg.sha256"
+          {
+            echo "### ai-device-client ${PACKAGE_VERSION} (macOS arm64 PKG)"
+            echo "- signed_and_notarized: ${SIGN_AND_NOTARIZE}"
+            echo '```'
+            cat "$RUNNER_TEMP/identity.json"
+            cat "$RUNNER_TEMP/pkg.sha256"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Stage the files to be uploaded
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+          SIGN_AND_NOTARIZE: ${{ inputs.sign_and_notarize }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/package"
+          PKG="$RUNNER_TEMP/pkg/ai-device-client-${PACKAGE_VERSION}-arm64.pkg"
+          cp "$PKG" "$RUNNER_TEMP/pkg.sha256" "$RUNNER_TEMP/identity.json" "$RUNNER_TEMP/package/"
+          if [ "$SIGN_AND_NOTARIZE" != "true" ] && [ -f "${PKG}.UNSIGNED.txt" ]; then
+            cp "${PKG}.UNSIGNED.txt" "$RUNNER_TEMP/package/"
+          fi
+          ls -l "$RUNNER_TEMP/package"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-pkg-${{ inputs.version }}
+          path: ${{ runner.temp }}/package
+          if-no-files-found: error
+          retention-days: 14
+      - name: Clean up temporary signing keychain and credentials
+        if: always()
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/signing/signing.keychain-db"
+          if [ -f "$KEYCHAIN" ]; then
+            security delete-keychain "$KEYCHAIN" || true
+          fi
+          rm -rf "$RUNNER_TEMP/signing"
+  attach-release:
+    if: inputs.publish_release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: client-pkg-${{ inputs.version }}
+          path: release/
+      - name: Verify the artifact matches this run
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          PKG="release/ai-device-client-${PACKAGE_VERSION}-arm64.pkg"
+          test -f "$PKG"
+          # Defense in depth: never attach an unsigned package to a GitHub Release.
+          if compgen -G 'release/*.UNSIGNED.txt' >/dev/null; then
+            echo "refusing to publish an unsigned macOS .pkg to GitHub Release" >&2
+            exit 1
+          fi
+          ( cd release && sha256sum -c pkg.sha256 )
+          cat release/identity.json
+      - name: Attach the .pkg to the existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_VERSION: ${{ inputs.version }}
+          SOURCE_COMMIT: ${{ inputs.expected_commit }}
+        run: |
+          set -euo pipefail
+          TAG="ai-device-client-v${PACKAGE_VERSION}"
+          ASSET="ai-device-client-${PACKAGE_VERSION}-arm64.pkg"
+          # This workflow owns no tag. client-deb.yml refuses to run when the tag
+          # already exists, so creating one here would block the .deb from ever
+          # being published for this version.
+          if ! ASSETS="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" \
+              --jq '.assets[].name' 2>/dev/null)"; then
+            echo "release $TAG does not exist; run client-deb.yml with publish_release first, then re-run this workflow" >&2
+            exit 1
+          fi
+          echo "--- assets already on $TAG ---"
+          printf '%s\n' "$ASSETS"
+          echo "--- end ---"
+          for name in "$ASSET" "pkg.sha256"; do
+            if printf '%s\n' "$ASSETS" | grep -Fxq "$name"; then
+              echo "$name is already published on $TAG; bump the version instead of overwriting" >&2
+              exit 1
+            fi
+          done
+          gh release upload "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            "release/${ASSET}" \
+            "release/pkg.sha256"
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" \
+            --jq ".assets[] | select(.name == \"${ASSET}\") | .digest // \"no digest reported\"" \
+            | tee -a "$GITHUB_STEP_SUMMARY"

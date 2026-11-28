@@ -844,7 +844,7 @@ def sign_package(package, identity, *, run=None):
     return package
 
 
-def notarize(package, profile, *, run=None):
+def notarize(package, profile, *, keychain=None, run=None):
     """Submit, wait, staple, and re-check.
 
     stapler runs on the local package, not on the submission: Apple returns a
@@ -855,9 +855,15 @@ def notarize(package, profile, *, run=None):
     """
     execute = run or subprocess.run
     package = Path(package)
+    command = [
+        "/usr/bin/xcrun", "notarytool", "submit", str(package),
+        "--keychain-profile", profile,
+    ]
+    if keychain:
+        command.extend(["--keychain", str(keychain)])
+    command.extend(["--wait", "--output-format", "json"])
     submitted = execute(
-        ["/usr/bin/xcrun", "notarytool", "submit", str(package),
-         "--keychain-profile", profile, "--wait", "--output-format", "json"],
+        command,
         check=False, capture_output=True, text=True,
     )
     if submitted.returncode != 0:
@@ -1294,7 +1300,7 @@ def build_upgrade_payload(tree, output, *, run=None):
 
 def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
           stage=None, mode="inspection", sign_identity=None,
-          installer_identity=None, notary_profile=None):
+          installer_identity=None, notary_profile=None, notary_keychain=None):
     if mode not in MODES:
         raise ValueError(f"unknown package mode: {mode!r}")
     # Each of these three implies the ones before it. Refusing the combination
@@ -1311,7 +1317,12 @@ def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
             "--notary-profile requires --installer-identity: notarisation only "
             "applies to a signed package"
         )
-    if (sign_identity or installer_identity or notary_profile) and mode == "inspection":
+    if notary_keychain and not notary_profile:
+        raise ValueError(
+            "--notary-keychain requires --notary-profile: a keychain path "
+            "only selects where the notarytool profile is read from"
+        )
+    if (sign_identity or installer_identity or notary_profile or notary_keychain) and mode == "inspection":
         raise ValueError(
             "inspection builds refuse installation; signing one would suggest "
             "it is installable"
@@ -1567,7 +1578,7 @@ def build(tree, output, version, *, run=None, program="/opt/ai-device-client",
         check_installer_identity(installer_identity, run=run)
         sign_package(result, installer_identity, run=run)
     if notary_profile:
-        notarize(result, notary_profile, run=run)
+        notarize(result, notary_profile, keychain=notary_keychain, run=run)
     if mode == "shipping" and not delivered:
         # The artifact travels outside this directory, so the marker goes with
         # it: whoever picks up the .pkg must not have to open the installer or
@@ -1616,11 +1627,17 @@ if __name__ == "__main__":
         "store-credentials'. Credentials stay in the keychain; only this name "
         "is passed on the command line.",
     )
+    parser.add_argument(
+        "--notary-keychain",
+        type=Path,
+        help="Optional keychain file path passed to 'xcrun notarytool submit "
+        "--keychain', useful in ephemeral CI keychains.",
+    )
     args = parser.parse_args()
     if args.upgrade_entry:
         if args.mode != "inspection":
             parser.error("--upgrade-entry is a separate product; it takes no --mode")
-        if args.sign_identity or args.installer_identity or args.notary_profile:
+        if args.sign_identity or args.installer_identity or args.notary_profile or args.notary_keychain:
             parser.error(
                 "--upgrade-entry emits a bare entry, not an installable package; "
                 "there is nothing to sign"
@@ -1636,5 +1653,6 @@ if __name__ == "__main__":
             sign_identity=args.sign_identity,
             installer_identity=args.installer_identity,
             notary_profile=args.notary_profile,
+            notary_keychain=args.notary_keychain,
         )
     )

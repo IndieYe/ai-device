@@ -1816,3 +1816,27 @@ def test_signing_rewrites_the_identity_to_match_the_signed_tree(builder, tree, t
 def test_identity_rewrite_refuses_a_missing_identity_file(builder, tmp_path):
     with pytest.raises(ValueError, match="not a regular file"):
         builder.TREE_BUILD.rewrite_client_identity(tmp_path)
+
+
+def test_notary_keychain_is_forwarded_to_notarytool(builder, tmp_path):
+    package = tmp_path / "x.pkg"
+    package.write_bytes(b"pkg")
+    keychain = tmp_path / "ci.keychain-db"
+    recorded = []
+    builder.notarize(
+        package, "profile", keychain=keychain, run=_record(recorded)
+    )
+    submit = next(cmd for cmd in recorded if "notarytool" in cmd)
+    assert "--keychain" in submit
+    assert submit[submit.index("--keychain") + 1] == str(keychain)
+
+
+def test_notary_keychain_requires_notary_profile(builder, tree, tmp_path):
+    with pytest.raises(ValueError, match="requires --notary-profile"):
+        builder.build(
+            tree,
+            tmp_path / "out",
+            "0.3.4.1",
+            mode="shipping",
+            notary_keychain=tmp_path / "ci.keychain-db",
+        )
