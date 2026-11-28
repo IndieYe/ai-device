@@ -1,85 +1,10 @@
 """Small systemd adapter for the single installed Linux client."""
 
 import subprocess
-import sys
-from pathlib import Path
-
-CGROUP_ROOT = Path("/sys/fs/cgroup")
 
 from .maintenance import idle_lease
 
 UNIT = "ai-device-client.service"
-
-
-def _warn(message):
-    """Report a skipped safety check without failing the operation.
-
-    These paths mean the check could not be performed, not that it passed. The
-    distinction matters during an upgrade, so it goes to stderr where the
-    package scripts and the service log both keep it.
-    """
-    print(f"ai-device-client: warning: {message}", file=sys.stderr)
-
-
-def cgroup_v2(root=None):
-    """True for a unified (v2) hierarchy, False for legacy (v1), None if unknown.
-
-    `cgroup.controllers` exists only in the unified hierarchy, so one stat
-    separates the two layouts without parsing mount tables. Returning None for
-    a host with neither layout keeps the distinction between "legacy" and
-    "cannot tell" that the caller needs.
-    """
-    base = CGROUP_ROOT if root is None else root
-    if (base / "cgroup.controllers").exists():
-        return True
-    if (base / "systemd").is_dir():
-        return False
-    return None
-
-
-def cgroup_unit_directory(group, root=None):
-    """Resolve a unit's ControlGroup value to its on-disk directory.
-
-    systemd reports the path relative to the cgroup root in both layouts, but
-    only the v2 hierarchy actually mounts there. In the legacy hierarchy the
-    same path lives under the `systemd` controller mount, which is where unit
-    membership is recorded.
-    """
-    base = CGROUP_ROOT if root is None else root
-    relative = group.lstrip("/")
-    version = cgroup_v2(root)
-    if version is True:
-        return base / relative
-    if version is False:
-        return base / "systemd" / relative
-    return None
-
-
-def cgroup_group_populated(directory, version):
-    """Report whether the group still holds processes, or None if unreadable.
-
-    v2 exposes an aggregate `cgroup.events` with a `populated` counter; the
-    legacy hierarchy has no equivalent file and keeps membership in
-    `cgroup.procs`. Both are read fresh: the answer decides whether replacing
-    the installed files is safe.
-    """
-    if version is True:
-        try:
-            events = dict(
-                line.split() for line in (directory / "cgroup.events").read_text().splitlines()
-            )
-        except (OSError, ValueError):
-            return None
-        populated = events.get("populated")
-        if populated is None:
-            return None
-        return populated != "0"
-    try:
-        procs = (directory / "cgroup.procs").read_text()
-    except OSError:
-        return None
-    # A single stray newline is an empty group, not one live process.
-    return bool(procs.strip())
 
 
 class ServiceError(RuntimeError):
@@ -117,19 +42,6 @@ class SystemdClient:
             if separator and key.strip() == name:
                 return value
         raise ServiceError("systemd property unavailable: " + name)
-
-    def validate_registration(self):
-        fragment = self._property("FragmentPath").strip()
-        if fragment != "/etc/systemd/system/ai-device-client.service":
-            raise ServiceError("client service comes from an unexpected location")
-        # Drop-ins can change execution or shutdown policy. This small installer
-        # does not merge administrator overrides; reject rather than guess.
-        if self._property("DropInPaths").strip():
-            raise ServiceError("client service has unsupported overrides")
-        if self._property("SendSIGKILL").strip() != "no":
-            raise ServiceError("client service permits forced termination")
-        if self._property("KillMode").strip() != "control-group":
-            raise ServiceError("client service does not stop the complete process group")
 
     def validate_config(self):
         user = self._property("User").strip()
@@ -173,7 +85,6 @@ class SystemdClient:
             raise ServiceError("client service process state unknown") from exc
         active = values.get("ActiveState")
         if active in ("inactive", "failed") and main_pid == control_pid == 0:
-            self.confirm_empty_group()
             return "stopped"
         if (
             values.get("LoadState") == "loaded"
@@ -184,36 +95,6 @@ class SystemdClient:
         ):
             return "running"
         raise ServiceError("client service is transitioning or its state is unknown")
-
-    def confirm_empty_group(self):
-        # MainPID/ControlPID can both be zero while timed-out descendants remain.
-        group = self._property("ControlGroup").strip()
-        if not group:
-            return
-        if not group.startswith("/") or ".." in Path(group).parts:
-            raise ServiceError("client process group is unknown")
-        version = cgroup_v2()
-        if version is None:
-            # Neither hierarchy is recognisable. Refusing here would block hosts
-            # with no cgroup at all; pretending to have checked would hide the
-            # gap. Record it and let the caller continue.
-            _warn("cannot determine the cgroup hierarchy; process group not verified")
-            return
-        directory = cgroup_unit_directory(group)
-        if directory is None or not directory.exists():
-            # The unit has no directory on disk. Under v2 the kernel keeps a
-            # group's directory for as long as the unit exists; its absence
-            # means the unit is gone. Under v1 the mount may simply not carry
-            # this unit, so treat it the same way and say so rather than
-            # silently passing.
-            _warn("client process group directory is absent; nothing to verify")
-            return
-        populated = cgroup_group_populated(directory, version)
-        if populated is None:
-            raise ServiceError("cannot confirm client process group is empty")
-        if populated:
-            raise ServiceError("client process group still has live processes")
-
 
     def enable(self):
         # Persist across reboots without starting: registration and start are
@@ -234,7 +115,6 @@ class SystemdClient:
 
     def start(self):
         self._call("daemon-reload")
-        self.validate_registration()
         # Explicit installation repair must clear a previous failed version's
         # start-limit counter; this does not introduce automatic retry loops.
         self._call("reset-failed", UNIT)

@@ -39,10 +39,6 @@ def environment(tmp_path, monkeypatch):
     monkeypatch.setattr(registration, "UNIT_PATH", unit)
     monkeypatch.setattr(registration, "STATE_DIR", state)
     monkeypatch.setattr(registration, "LOG_DIR", log)
-    # Conflict scanning inspects the live host; its own tests cover that.
-    import device_runtime.client_conflicts as conflicts
-
-    monkeypatch.setattr(conflicts, "check_conflicts", lambda: None)
     # The package lock coordinates with real dpkg files; its own tests cover it.
     from contextlib import contextmanager
 

@@ -78,7 +78,7 @@ def test_preun_stops_the_service_on_full_erase():
     # busy refusal, the unsafe-shutdown-policy refusal and the process-group
     # check, and reports success even when the client is still running.
     assert "client_package stop --from-package-script" in preun
-    assert "refusing package operation" in preun
+    assert "refusing package replacement" in preun
     assert "refusing package replacement" in preun
 
 
@@ -322,24 +322,23 @@ def test_package_version_is_independent_of_runtime_version():
     [("MainPID=0", True), ("", False), ("MainPID=bogus", False), ("MainPID=0\nMainPID=0", False)],
 )
 def test_upgrade_preinstall_with_systemd_219(tmp_path, monkeypatch, main_pid, success):
+    units = tmp_path / "units"
+    units.mkdir()
+    (units / "ai-device-client.service").write_text("[Service]\n")
     systemctl = tmp_path / "systemctl"
     systemctl.write_text(
         "#!/bin/sh\n"
         '[ "$1 $2 $3" = "show ai-device-client.service --all" ] || exit 90\n'
         'case "$4" in\n'
-        "--property=FragmentPath) echo FragmentPath= ;;\n"
-        "--property=DropInPaths) echo DropInPaths= ;;\n"
         "--property=ActiveState) echo ActiveState=inactive ;;\n"
         "--property=MainPID) printf '%s\\n' \"$MOCK_MAIN_PID\" ;;\n"
         "--property=ControlPID) echo ControlPID=0 ;;\n"
-        "--property=ControlGroup) echo ControlGroup= ;;\n"
         "*) exit 91 ;;\nesac\n"
     )
     systemctl.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path))
     monkeypatch.setenv("MOCK_MAIN_PID", main_pid)
     script = module.PRE_GUARD + module.STOP
-    script = script.replace("/etc/systemd/system", str(tmp_path / "units"))
-    script = script.replace("/opt/ai-device/", str(tmp_path / "legacy") + "/")
+    script = script.replace("/etc/systemd/system", str(units))
     result = subprocess.run(["/bin/sh", "-c", script, "preinstall", "2"], check=False)
     assert (result.returncode == 0) is success

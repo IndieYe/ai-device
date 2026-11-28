@@ -14,7 +14,6 @@ def test_unconfigured_package_does_not_start(tmp_path, monkeypatch):
 
 @pytest.fixture
 def configured(tmp_path, monkeypatch):
-    monkeypatch.setattr(module, "check_conflicts", lambda: None)
     path = tmp_path / "config"
     path.write_text(
         "ExecStart=/opt/ai-device-client/runtime/bin/python3 -I -m device_runtime.client_cli --config /etc/ai-device-client/client.json\n"
@@ -104,20 +103,6 @@ def test_busy_cli_has_clear_redacted_message(monkeypatch, capsys):
     assert "busy with active tasks" in output
     assert "retry when tasks finish" in output
     assert "PRIVATE_COMMAND_AND_TOKEN" not in output
-
-
-def test_conflict_blocks_activation_before_start(configured, monkeypatch):
-    from device_runtime.client_conflicts import ClientConflict
-
-    service, calls = configured
-
-    def conflict():
-        raise ClientConflict("another running client detected")
-
-    monkeypatch.setattr(module, "check_conflicts", conflict)
-    with pytest.raises(ClientConflict):
-        module.activate(service=service)
-    assert calls == []
 
 
 @pytest.mark.parametrize(

@@ -165,10 +165,8 @@ def register(user):
     unit = render_unit(account.pw_name)
 
     with management_lock(package_script=False):
-        from .client_conflicts import check_conflicts
         from .client_service import SystemdClient
 
-        check_conflicts()
         previous = _previous_user()
         _refuse_running_user_change(account, previous)
         allowed = _allowed_owners(account, previous)

@@ -354,7 +354,7 @@ def build(inputs, locks, output):
                 (
                     "from device_runtime.executor import LocalExecutor; "
                     "from device_runtime.client_cli import main; "
-                    "import device_runtime.client_package, device_runtime.client_register; "
+                    "import device_runtime.client_package, device_runtime.client_register_cli; "
                     "import mcp_server_bash.core, mcp_server_fs.core"
                 ),
             ],
