@@ -42,9 +42,13 @@ class DeviceService:
     async def detach(self, device_id, peer):
         async with self._lock:
             if self.peers.get(device_id) is peer:
-                del self.peers[device_id]
-                await self.journal.disconnect(device_id)
-                self._notify_waiters()
+                # Commit unknown transitions before marking the device offline so
+                # concurrent observers never see offline with a still-running op.
+                try:
+                    await self.journal.disconnect(device_id)
+                finally:
+                    del self.peers[device_id]
+                    self._notify_waiters()
 
     async def submit(self, operation: Operation, *, wait_timeout_ms: int = 0):
         if type(wait_timeout_ms) is not int or not 0 <= wait_timeout_ms <= 5000:

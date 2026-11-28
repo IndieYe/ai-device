@@ -95,6 +95,47 @@ async def test_stale_disconnect_does_not_detach_current_peer(setup_service):
     assert (await service.journal.get("op-one"))["state"] == "unknown"
 
 
+async def test_detach_persists_unknown_before_marking_device_offline(setup_service, monkeypatch):
+    service = setup_service
+    current = peer()
+    await service.attach("laptop-one", current)
+    await service.submit(operation())
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original_disconnect = service.journal.disconnect
+
+    async def slow_disconnect(device_id):
+        entered.set()
+        await release.wait()
+        await original_disconnect(device_id)
+
+    monkeypatch.setattr(service.journal, "disconnect", slow_disconnect)
+    detach_task = asyncio.create_task(service.detach("laptop-one", current))
+    await asyncio.wait_for(entered.wait(), 5)
+    # While disconnect has not committed yet, the device is not reported offline.
+    assert "laptop-one" in service.peers
+    assert (await service.journal.get("op-one"))["state"] == "sent"
+    release.set()
+    await detach_task
+    assert "laptop-one" not in service.peers
+    assert (await service.journal.get("op-one"))["state"] == "unknown"
+
+
+async def test_detach_removes_peer_even_if_journal_disconnect_fails(setup_service, monkeypatch):
+    service = setup_service
+    current = peer()
+    await service.attach("laptop-one", current)
+
+    async def broken_disconnect(device_id):
+        raise RuntimeError("disk io error")
+
+    monkeypatch.setattr(service.journal, "disconnect", broken_disconnect)
+    with pytest.raises(RuntimeError, match="disk io error"):
+        await service.detach("laptop-one", current)
+    assert "laptop-one" not in service.peers
+
+
 async def test_cancelled_http_request_retains_owned_submission(setup_service):
     service = setup_service
     socket = Socket(paused=True)
